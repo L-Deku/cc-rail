@@ -1,0 +1,3 @@
+﻿using System;
+using dnlib.DotNet;
+class P{static void Main(string[] a){var m=ModuleDefMD.Load(a[0]); var ep=m.EntryPoint; Console.WriteLine(ep.FullName+" HasBody="+ep.HasBody+" Count="+(ep.HasBody?ep.Body.Instructions.Count:0)); if(ep.HasBody){int i=0; foreach(var ins in ep.Body.Instructions){Console.WriteLine((i++)+": "+ins); if(i>80)break;}} var t=m.Find("RecoNet.RecoMainForm",false); foreach(var md in t.Methods){if(md.Name==".ctor"){Console.WriteLine("CTOR "+md.FullName+" body="+md.HasBody+" count="+(md.HasBody?md.Body.Instructions.Count:0)); if(md.HasBody){int i=0; foreach(var ins in md.Body.Instructions){Console.WriteLine((i++)+": "+ins); if(i>80)break;}}}}}}

@@ -1,0 +1,60 @@
+<?xml version="1.0" standalone="yes"?>
+<ServerSetting>
+  <xs:schema id="ServerSetting" xmlns="" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xs:element name="ServerSetting" msdata:IsDataSet="true" msdata:UseCurrentLocale="true">
+      <xs:complexType>
+        <xs:choice minOccurs="0" maxOccurs="unbounded">
+          <xs:element name="ServerSetting">
+            <xs:complexType>
+              <xs:sequence>
+                <xs:element name="Server" type="xs:string" minOccurs="0" />
+                <xs:element name="User" type="xs:string" minOccurs="0" />
+                <xs:element name="Id" type="xs:string" minOccurs="0" />
+                <xs:element name="ServerIP" type="xs:string" minOccurs="0" />
+                <xs:element name="FtpPort" type="xs:string" minOccurs="0" />
+                <xs:element name="SqlPort" type="xs:string" minOccurs="0" />
+                <xs:element name="ReportSavePath" type="xs:string" minOccurs="0" />
+                <xs:element name="StartDeHelp" type="xs:string" minOccurs="0" />
+                <xs:element name="OpenDeHelp" type="xs:string" minOccurs="0" />
+              </xs:sequence>
+            </xs:complexType>
+          </xs:element>
+          <xs:element name="项目打开记录">
+            <xs:complexType>
+              <xs:sequence>
+                <xs:element name="序号" type="xs:int" minOccurs="0" />
+                <xs:element name="内容" type="xs:string" minOccurs="0" />
+              </xs:sequence>
+            </xs:complexType>
+          </xs:element>
+        </xs:choice>
+      </xs:complexType>
+    </xs:element>
+  </xs:schema>
+  <ServerSetting>
+    <Server>192.168.2.13</Server>
+    <User>谢刚</User>
+    <Id>工经</Id>
+    <ServerIP>192.168.2.13</ServerIP>
+    <FtpPort>21</FtpPort>
+    <SqlPort>1433</SqlPort>
+    <ReportSavePath>C:\Users\谢刚\Desktop</ReportSavePath>
+    <OpenDeHelp>1</OpenDeHelp>
+  </ServerSetting>
+  <项目打开记录>
+    <序号>1</序号>
+    <内容>萧</内容>
+  </项目打开记录>
+  <项目打开记录>
+    <序号>2</序号>
+    <内容>无锡站</内容>
+  </项目打开记录>
+  <项目打开记录>
+    <序号>3</序号>
+    <内容>六</内容>
+  </项目打开记录>
+  <项目打开记录>
+    <序号>4</序号>
+    <内容>六庆</内容>
+  </项目打开记录>
+</ServerSetting>

@@ -1,0 +1,181 @@
+<?xml version="1.0"?>
+<ExcelLinkStore xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Links>
+    <ExcelQuotaLink>
+      <ProjectId>192.168.2.13,1433|Reco20260519144824240</ProjectId>
+      <QuotaSequence>4166</QuotaSequence>
+      <TotalNo>1</TotalNo>
+      <ChapterSeq>4318</ChapterSeq>
+      <OrderNo>1</OrderNo>
+      <QuotaCode>DY-390</QuotaCode>
+      <QuotaName>人力挖填普通土电缆沟 深≤0.8m</QuotaName>
+      <ExcelPath>C:\Users\谢刚\Desktop\项目\2026编制项目\阜阳北机务折返段新增股道工程\提资\2026.5\电力-工程数量表（2026-05-06）.xlsx</ExcelPath>
+      <WorksheetName>Sheet1</WorksheetName>
+      <CellAddress>E9</CellAddress>
+      <Expression>E9</Expression>
+      <LastSyncValue>555555</LastSyncValue>
+      <LastStatus>已同步</LastStatus>
+      <UpdatedAt>2026-05-21 18:49:46</UpdatedAt>
+    </ExcelQuotaLink>
+    <ExcelQuotaLink>
+      <ProjectId>192.168.2.13,1433|Reco20260519144824240</ProjectId>
+      <QuotaSequence>3861</QuotaSequence>
+      <TotalNo>1</TotalNo>
+      <ChapterSeq>4319</ChapterSeq>
+      <OrderNo>7</OrderNo>
+      <QuotaCode>DY-963</QuotaCode>
+      <QuotaName>砖、混凝土结构明配镀锌钢管 公称口径≤150</QuotaName>
+      <ExcelPath>C:\Users\谢刚\Desktop\项目\2026编制项目\阜阳北机务折返段新增股道工程\提资\2026.5\电力-工程数量表（2026-05-06）.xlsx</ExcelPath>
+      <WorksheetName>Sheet1</WorksheetName>
+      <CellAddress>E10</CellAddress>
+      <Expression>E10</Expression>
+      <LastSyncValue>5</LastSyncValue>
+      <LastStatus>已同步</LastStatus>
+      <UpdatedAt>2026-05-21 18:49:46</UpdatedAt>
+    </ExcelQuotaLink>
+    <ExcelQuotaLink>
+      <ProjectId>192.168.2.13,1433|Reco20260519144824240</ProjectId>
+      <QuotaSequence>4080</QuotaSequence>
+      <TotalNo>1</TotalNo>
+      <ChapterSeq>4319</ChapterSeq>
+      <OrderNo>8</OrderNo>
+      <QuotaCode>DY-474</QuotaCode>
+      <QuotaName>混凝土电缆槽敷设 单孔</QuotaName>
+      <ExcelPath>C:\Users\谢刚\Desktop\项目\2026编制项目\阜阳北机务折返段新增股道工程\提资\2026.5\电力-工程数量表（2026-05-06）.xlsx</ExcelPath>
+      <WorksheetName>Sheet1</WorksheetName>
+      <CellAddress>E11</CellAddress>
+      <Expression>E11</Expression>
+      <LastSyncValue>5</LastSyncValue>
+      <LastStatus>已同步</LastStatus>
+      <UpdatedAt>2026-05-21 18:49:46</UpdatedAt>
+    </ExcelQuotaLink>
+    <ExcelQuotaLink>
+      <ProjectId>192.168.2.13,1433|Reco20260519144824240</ProjectId>
+      <QuotaSequence>3862</QuotaSequence>
+      <TotalNo>1</TotalNo>
+      <ChapterSeq>4319</ChapterSeq>
+      <OrderNo>9</OrderNo>
+      <QuotaCode>DY-468</QuotaCode>
+      <QuotaName>混凝土电缆排管 双孔 基础</QuotaName>
+      <ExcelPath>C:\Users\谢刚\Desktop\项目\2026编制项目\阜阳北机务折返段新增股道工程\提资\2026.5\电力-工程数量表（2026-05-06）.xlsx</ExcelPath>
+      <WorksheetName>Sheet1</WorksheetName>
+      <CellAddress>E12</CellAddress>
+      <Expression>E12</Expression>
+      <LastSyncValue>2</LastSyncValue>
+      <LastStatus>已同步</LastStatus>
+      <UpdatedAt>2026-05-21 18:49:46</UpdatedAt>
+    </ExcelQuotaLink>
+    <ExcelQuotaLink>
+      <ProjectId>192.168.2.13,1433|Reco20260519144824240</ProjectId>
+      <QuotaSequence>3863</QuotaSequence>
+      <TotalNo>1</TotalNo>
+      <ChapterSeq>4319</ChapterSeq>
+      <OrderNo>10</OrderNo>
+      <QuotaCode>DY-469</QuotaCode>
+      <QuotaName>混凝土电缆排管 双孔 铺管</QuotaName>
+      <ExcelPath>C:\Users\谢刚\Desktop\项目\2026编制项目\阜阳北机务折返段新增股道工程\提资\2026.5\电力-工程数量表（2026-05-06）.xlsx</ExcelPath>
+      <WorksheetName>Sheet1</WorksheetName>
+      <CellAddress>E13</CellAddress>
+      <Expression>E13</Expression>
+      <LastSyncValue>55</LastSyncValue>
+      <LastStatus>已同步</LastStatus>
+      <UpdatedAt>2026-05-21 18:49:46</UpdatedAt>
+    </ExcelQuotaLink>
+    <ExcelQuotaLink>
+      <ProjectId>192.168.2.13,1433|Reco20260519144824240</ProjectId>
+      <QuotaSequence>3860</QuotaSequence>
+      <TotalNo>1</TotalNo>
+      <ChapterSeq>4319</ChapterSeq>
+      <OrderNo>6</OrderNo>
+      <QuotaCode>4731012*1.01</QuotaCode>
+      <QuotaName>电力电缆 YJV22 10KV 3芯 50MM2</QuotaName>
+      <ExcelPath>C:\Users\谢刚\Desktop\项目\2026编制项目\阜阳北机务折返段新增股道工程\提资\2026.5\电力-工程数量表（2026-05-06）.xlsx</ExcelPath>
+      <WorksheetName>Sheet1</WorksheetName>
+      <CellAddress>E9</CellAddress>
+      <Expression>E9</Expression>
+      <LastSyncValue>555555</LastSyncValue>
+      <LastStatus>已同步</LastStatus>
+      <UpdatedAt>2026-05-21 18:49:46</UpdatedAt>
+    </ExcelQuotaLink>
+    <ExcelQuotaLink>
+      <ProjectId>192.168.2.13,1433|Reco20260519144824240</ProjectId>
+      <QuotaSequence>3855</QuotaSequence>
+      <TotalNo>1</TotalNo>
+      <ChapterSeq>4319</ChapterSeq>
+      <OrderNo>1</OrderNo>
+      <QuotaCode>DY-390</QuotaCode>
+      <QuotaName>人力挖填普通土电缆沟 深≤0.8m</QuotaName>
+      <ExcelPath>C:\Users\谢刚\Desktop\项目\2026编制项目\阜阳北机务折返段新增股道工程\提资\2026.5\电力-工程数量表（2026-05-06）.xlsx</ExcelPath>
+      <WorksheetName>Sheet1</WorksheetName>
+      <CellAddress>E4</CellAddress>
+      <Expression>E4</Expression>
+      <LastSyncValue>1</LastSyncValue>
+      <LastStatus>快速绑定，等待同步</LastStatus>
+      <UpdatedAt>2026-05-21 19:22:46</UpdatedAt>
+    </ExcelQuotaLink>
+    <ExcelQuotaLink>
+      <ProjectId>192.168.2.13,1433|Reco20260519144824240</ProjectId>
+      <QuotaSequence>3859</QuotaSequence>
+      <TotalNo>1</TotalNo>
+      <ChapterSeq>4319</ChapterSeq>
+      <OrderNo>5</OrderNo>
+      <QuotaCode>4731015*1.01</QuotaCode>
+      <QuotaName>电力电缆 YJV22 10KV 3芯 120MM2</QuotaName>
+      <ExcelPath>C:\Users\谢刚\Desktop\项目\2026编制项目\阜阳北机务折返段新增股道工程\提资\2026.5\电力-工程数量表（2026-05-06）.xlsx</ExcelPath>
+      <WorksheetName>Sheet1</WorksheetName>
+      <CellAddress>E11</CellAddress>
+      <Expression>E11</Expression>
+      <LastSyncValue>5</LastSyncValue>
+      <LastStatus>快速绑定，等待同步</LastStatus>
+      <UpdatedAt>2026-05-21 19:23:12</UpdatedAt>
+    </ExcelQuotaLink>
+    <ExcelQuotaLink>
+      <ProjectId>192.168.2.13,1433|Reco20260519144824240</ProjectId>
+      <QuotaSequence>3856</QuotaSequence>
+      <TotalNo>1</TotalNo>
+      <ChapterSeq>4319</ChapterSeq>
+      <OrderNo>2</OrderNo>
+      <QuotaCode>DY-405</QuotaCode>
+      <QuotaName>铺砂盖砖 1～2根</QuotaName>
+      <ExcelPath>C:\Users\谢刚\Desktop\项目\2026编制项目\阜阳北机务折返段新增股道工程\提资\2026.5\电力-工程数量表（2026-05-06）.xlsx</ExcelPath>
+      <WorksheetName>Sheet1</WorksheetName>
+      <CellAddress>E9</CellAddress>
+      <Expression>E9</Expression>
+      <LastSyncValue>555555</LastSyncValue>
+      <LastStatus>快速绑定，等待同步</LastStatus>
+      <UpdatedAt>2026-05-21 19:23:57</UpdatedAt>
+    </ExcelQuotaLink>
+    <ExcelQuotaLink>
+      <ProjectId>192.168.2.13,1433|Reco20260519144824240</ProjectId>
+      <QuotaSequence>3858</QuotaSequence>
+      <TotalNo>1</TotalNo>
+      <ChapterSeq>4319</ChapterSeq>
+      <OrderNo>4</OrderNo>
+      <QuotaCode>DY-524</QuotaCode>
+      <QuotaName>电力电缆敷设2～(4+1)芯 50mm2以内</QuotaName>
+      <ExcelPath>C:\Users\谢刚\Desktop\项目\2026编制项目\阜阳北机务折返段新增股道工程\提资\2026.5\电力-工程数量表（2026-05-06）.xlsx</ExcelPath>
+      <WorksheetName>Sheet1</WorksheetName>
+      <CellAddress>E10</CellAddress>
+      <Expression>E10</Expression>
+      <LastSyncValue>5</LastSyncValue>
+      <LastStatus>快速绑定，等待同步</LastStatus>
+      <UpdatedAt>2026-05-21 19:24:15</UpdatedAt>
+    </ExcelQuotaLink>
+    <ExcelQuotaLink>
+      <ProjectId>192.168.2.13,1433|Reco20260519144824240</ProjectId>
+      <QuotaSequence>3857</QuotaSequence>
+      <TotalNo>1</TotalNo>
+      <ChapterSeq>4319</ChapterSeq>
+      <OrderNo>3</OrderNo>
+      <QuotaCode>DY-527</QuotaCode>
+      <QuotaName>电力电缆敷设2～(4+1)芯 120mm2以内</QuotaName>
+      <ExcelPath>C:\Users\谢刚\Desktop\项目\2026编制项目\阜阳北机务折返段新增股道工程\提资\2026.5\电力-工程数量表（2026-05-06）.xlsx</ExcelPath>
+      <WorksheetName>Sheet1</WorksheetName>
+      <CellAddress>E10</CellAddress>
+      <Expression>E10</Expression>
+      <LastSyncValue>5</LastSyncValue>
+      <LastStatus>快速绑定，等待同步</LastStatus>
+      <UpdatedAt>2026-05-21 19:25:02</UpdatedAt>
+    </ExcelQuotaLink>
+  </Links>
+</ExcelLinkStore>
