@@ -232,7 +232,7 @@ namespace RecoQuotaRecommend
             string importedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
             List<string> jsonLines = new List<string>();
             List<string> csvLines = new List<string>();
-            csvLines.Add("project_name,budget_file,budget_sheet,budget_row,budget_group,raw_quota_code,quota_code,is_material,quota_name,quota_unit,quota_quantity,quantity_file,quantity_sheet,quantity_row,quantity_section,quantity_name,quantity_unit,quantity_expression,match_score,match_reason,imported_at");
+            csvLines.Add("project_name,budget_file,budget_sheet,budget_row,budget_group,quota_code,quota_name,quota_unit,quantity_file,quantity_sheet,quantity_row,quantity_section,quantity_name,quantity_unit,quantity_expression,match_score,match_reason,imported_at");
 
             foreach (BudgetQuota quota in quotas)
             {
@@ -244,12 +244,9 @@ namespace RecoQuotaRecommend
                 record["budget_sheet"] = quota.SheetName;
                 record["budget_row"] = quota.RowNumber.ToString(CultureInfo.InvariantCulture);
                 record["budget_group"] = quota.GroupName;
-                record["raw_quota_code"] = quota.RawCode;
                 record["quota_code"] = quota.NormalizedCode;
-                record["is_material"] = quota.IsMaterial ? "true" : "false";
                 record["quota_name"] = quota.Name;
                 record["quota_unit"] = quota.Unit;
-                record["quota_quantity"] = quota.Quantity;
                 record["quantity_file"] = item == null ? "" : Path.GetFileName(item.FilePath);
                 record["quantity_sheet"] = item == null ? "" : item.SheetName;
                 record["quantity_row"] = item == null ? "" : item.RowNumber.ToString(CultureInfo.InvariantCulture);

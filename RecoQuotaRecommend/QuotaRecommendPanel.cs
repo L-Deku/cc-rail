@@ -280,6 +280,7 @@ namespace RecoQuotaRecommend
         private readonly Label statusLabel;
         private readonly List<LearningRecord> records;
         private readonly List<RecommendationRow> recommendations = new List<RecommendationRow>();
+        private ExcelSelection currentSelection;
 
         public RecommendDialog(Form owner, string initialQuery)
         {
@@ -339,6 +340,8 @@ namespace RecoQuotaRecommend
             resultGrid.MultiSelect = true;
             resultGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
             resultGrid.RowHeadersVisible = false;
+            resultGrid.CellContentClick += ResultGridCellContentClick;
+            resultGrid.CellEndEdit += ResultGridCellEndEdit;
             AddColumns();
 
             statusLabel = new Label();
@@ -366,6 +369,13 @@ namespace RecoQuotaRecommend
             check.HeaderText = "\u5199\u5165";
             check.Width = 45;
             resultGrid.Columns.Add(check);
+            DataGridViewButtonColumn correct = new DataGridViewButtonColumn();
+            correct.Name = "Correct";
+            correct.HeaderText = "\u6276\u6b63";
+            correct.Text = "\u6276\u6b63";
+            correct.UseColumnTextForButtonValue = true;
+            correct.Width = 55;
+            resultGrid.Columns.Add(correct);
             resultGrid.Columns.Add("QuantityName", "\u5de5\u7a0b\u91cf\u540d\u79f0");
             resultGrid.Columns.Add("QuantityUnit", "\u5355\u4f4d");
             resultGrid.Columns.Add("QuantityValue", "Excel\u5de5\u7a0b\u91cf");
@@ -383,7 +393,7 @@ namespace RecoQuotaRecommend
 
             foreach (DataGridViewColumn column in resultGrid.Columns)
             {
-                if (column.Name != "Checked")
+                if (column.Name != "Checked" && column.Name != "QuantityName")
                 {
                     column.ReadOnly = true;
                 }
@@ -431,22 +441,26 @@ namespace RecoQuotaRecommend
 
         private void FillRecommendations(ExcelSelection selection)
         {
+            currentSelection = selection;
             recommendations.Clear();
             resultGrid.Rows.Clear();
 
             foreach (ExcelQuantityItem item in selection.Items)
             {
-                RecommendationRow recommendation = BuildRecommendation(item);
-                recommendations.Add(recommendation);
-                resultGrid.Rows.Add(
-                    recommendation.Score >= 60,
-                    item.Name,
-                    item.Unit,
-                    item.ValueText,
-                    recommendation.ConvertedValueText,
-                    recommendation.QuotaCode,
-                    recommendation.QuotaName,
-                    recommendation.QuotaUnit);
+                foreach (RecommendationRow recommendation in BuildRecommendations(item))
+                {
+                    recommendations.Add(recommendation);
+                    resultGrid.Rows.Add(
+                        recommendation.Score >= 60,
+                        "\u6276\u6b63",
+                        item.Name,
+                        item.Unit,
+                        item.ValueText,
+                        recommendation.ConvertedValueText,
+                        recommendation.QuotaCode,
+                        recommendation.QuotaName,
+                        recommendation.QuotaUnit);
+                }
             }
 
             statusLabel.Text = String.Format(
@@ -454,6 +468,24 @@ namespace RecoQuotaRecommend
                 "\u5df2\u8bfb\u53d6 {0} \u884cExcel\u5de5\u7a0b\u91cf\uff0c\u5b66\u4e60\u5e93 {1} \u6761\u3002\u9ed8\u8ba4\u52fe\u9009\u8f83\u53ef\u9760\u7684\u63a8\u8350\u3002",
                 selection.Items.Count,
                 records.Count);
+        }
+
+        private List<RecommendationRow> BuildRecommendations(ExcelQuantityItem item)
+        {
+            List<LearningRecord> corrected = records
+                .Where(r => r.IsCorrection && String.Equals(r.QuantitySignature, LearningStore.BuildQuantitySignature(item), StringComparison.OrdinalIgnoreCase))
+                .Where(r => !String.IsNullOrWhiteSpace(r.QuotaCode))
+                .GroupBy(r => r.QuotaCode, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .ToList();
+
+            if (corrected.Count > 0)
+            {
+                return corrected.Select(r => BuildRecommendationFromRecord(item, r, 1000)).ToList();
+            }
+
+            RecommendationRow best = BuildRecommendation(item);
+            return new List<RecommendationRow> { best };
         }
 
         private RecommendationRow BuildRecommendation(ExcelQuantityItem item)
@@ -481,6 +513,20 @@ namespace RecoQuotaRecommend
             row.ConvertedValueText = ConvertQuantityForQuotaUnit(item.ValueText, item.Unit, row.QuotaUnit);
             row.Score = best.Score;
             row.Reason = BuildReason(best.Record, item);
+            return row;
+        }
+
+        private static RecommendationRow BuildRecommendationFromRecord(ExcelQuantityItem item, LearningRecord record, int score)
+        {
+            RecommendationRow row = new RecommendationRow();
+            row.Item = item;
+            row.Record = record;
+            row.QuotaCode = record.QuotaCode;
+            row.QuotaName = record.QuotaName;
+            row.QuotaUnit = record.QuotaUnit;
+            row.ConvertedValueText = ConvertQuantityForQuotaUnit(item.ValueText, item.Unit, row.QuotaUnit);
+            row.Score = score;
+            row.Reason = "\u4eba\u5de5\u6276\u6b63";
             return row;
         }
 
@@ -559,6 +605,190 @@ namespace RecoQuotaRecommend
             {
                 row.Cells["Checked"].Value = value;
             }
+        }
+
+        private void ResultGridCellContentClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0)
+            {
+                return;
+            }
+
+            if (resultGrid.Columns[e.ColumnIndex].Name == "Correct")
+            {
+                CorrectRecommendation(e.RowIndex);
+            }
+        }
+
+        private void ResultGridCellEndEdit(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.RowIndex >= recommendations.Count || e.ColumnIndex < 0)
+            {
+                return;
+            }
+
+            if (resultGrid.Columns[e.ColumnIndex].Name != "QuantityName")
+            {
+                return;
+            }
+
+            object value = resultGrid.Rows[e.RowIndex].Cells[e.ColumnIndex].Value;
+            string newName = Convert.ToString(value, CultureInfo.CurrentCulture).Trim();
+            if (String.IsNullOrWhiteSpace(newName))
+            {
+                resultGrid.Rows[e.RowIndex].Cells[e.ColumnIndex].Value = recommendations[e.RowIndex].Item.Name;
+                return;
+            }
+
+            ExcelQuantityItem oldItem = recommendations[e.RowIndex].Item;
+            string oldName = oldItem.Name;
+            foreach (RecommendationRow row in recommendations.Where(r => Object.ReferenceEquals(r.Item, oldItem)))
+            {
+                row.Item.Name = newName;
+                row.Item.SectionName = newName;
+                row.Item.ContextText = ReplaceContextName(row.Item.ContextText, oldName, newName);
+            }
+        }
+
+        private void CorrectRecommendation(int rowIndex)
+        {
+            if (rowIndex < 0 || rowIndex >= recommendations.Count)
+            {
+                return;
+            }
+
+            RecommendationRow recommendation = recommendations[rowIndex];
+            List<QuotaEntry> quotas = GetSelectedQuotaEntries(mainForm);
+            if (quotas.Count == 0)
+            {
+                MessageBox.Show(this, "\u8bf7\u5148\u5728\u5b9a\u989d\u8f93\u5165\u8868\u4e2d\u9009\u4e2d\u4e00\u6761\u6216\u591a\u6761\u6b63\u786e\u7684\u5b9a\u989d\uff0c\u518d\u70b9\u51fb\u6276\u6b63\u3002", "\u6276\u6b63\u5b9a\u989d", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                LearningStore.ReplaceCorrections(recommendation.Item, quotas);
+                records.Clear();
+                records.AddRange(LearningStore.Load());
+                if (currentSelection != null)
+                {
+                    FillRecommendations(currentSelection);
+                }
+
+                statusLabel.Text = "\u5df2\u6276\u6b63\uff1a" + recommendation.Item.Name + " -> " + String.Join("\uff0c", quotas.Select(q => q.QuotaCode).ToArray()) + "\u3002\u4e0b\u6b21\u63a8\u8350\u5c06\u4f18\u5148\u4f7f\u7528\u8be5\u5bf9\u5e94\u5173\u7cfb\u3002";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "\u6276\u6b63\u5931\u8d25\uff1a" + ex.Message, "\u6276\u6b63\u5b9a\u989d", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private static string ReplaceContextName(string context, string oldName, string newName)
+        {
+            if (String.IsNullOrWhiteSpace(context))
+            {
+                return newName;
+            }
+
+            if (!String.IsNullOrWhiteSpace(oldName) && context.IndexOf(oldName, StringComparison.Ordinal) >= 0)
+            {
+                return context.Replace(oldName, newName);
+            }
+
+            return newName + " " + context;
+        }
+
+        private static List<QuotaEntry> GetSelectedQuotaEntries(Form mainForm)
+        {
+            List<QuotaEntry> result = new List<QuotaEntry>();
+            DataGridView grid = GetField<DataGridView>(mainForm, "dataGridViewDE");
+            if (grid == null)
+            {
+                return result;
+            }
+
+            SortedDictionary<int, DataGridViewRow> rows = new SortedDictionary<int, DataGridViewRow>();
+            foreach (DataGridViewRow row in grid.SelectedRows)
+            {
+                if (row != null && !row.IsNewRow)
+                {
+                    rows[row.Index] = row;
+                }
+            }
+
+            foreach (DataGridViewCell cell in grid.SelectedCells)
+            {
+                if (cell.RowIndex >= 0 && cell.RowIndex < grid.Rows.Count)
+                {
+                    DataGridViewRow row = grid.Rows[cell.RowIndex];
+                    if (row != null && !row.IsNewRow)
+                    {
+                        rows[row.Index] = row;
+                    }
+                }
+            }
+
+            if (rows.Count == 0 && grid.CurrentRow != null && !grid.CurrentRow.IsNewRow)
+            {
+                rows[grid.CurrentRow.Index] = grid.CurrentRow;
+            }
+
+            foreach (DataGridViewRow row in rows.Values)
+            {
+                QuotaEntry entry = new QuotaEntry();
+                entry.QuotaCode = GetRowValue(row, "\u5b9a\u989d\u7f16\u53f7", "\u5b9a\u989d\u7f16\u53f7DE", "\u7f16\u53f7");
+                entry.QuotaName = GetRowValue(row, "\u5de5\u7a0b\u6216\u8d39\u7528\u9879\u76ee\u540d\u79f0", "\u540d\u79f0", "\u9879\u76ee\u540d\u79f0");
+                entry.QuotaUnit = GetRowValue(row, "\u5355\u4f4d");
+                if (!String.IsNullOrWhiteSpace(entry.QuotaCode))
+                {
+                    result.Add(entry);
+                }
+            }
+
+            return result
+                .GroupBy(q => q.QuotaCode, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .ToList();
+        }
+
+        private static string GetRowValue(DataGridViewRow row, params string[] names)
+        {
+            DataRowView rowView = row.DataBoundItem as DataRowView;
+            if (rowView != null)
+            {
+                foreach (string name in names)
+                {
+                    if (rowView.DataView.Table.Columns.Contains(name))
+                    {
+                        object value = rowView[name];
+                        if (value != null && value != DBNull.Value)
+                        {
+                            return Convert.ToString(value, CultureInfo.CurrentCulture).Trim();
+                        }
+                    }
+                }
+            }
+
+            if (row.DataGridView != null)
+            {
+                foreach (DataGridViewColumn column in row.DataGridView.Columns)
+                {
+                    foreach (string name in names)
+                    {
+                        if (String.Equals(column.Name, name, StringComparison.OrdinalIgnoreCase) ||
+                            String.Equals(column.HeaderText, name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            object value = row.Cells[column.Index].Value;
+                            if (value != null)
+                            {
+                                return Convert.ToString(value, CultureInfo.CurrentCulture).Trim();
+                            }
+                        }
+                    }
+                }
+            }
+
+            return "";
         }
 
         private void CopyCheckedForManualPaste()
@@ -1268,6 +1498,13 @@ namespace RecoQuotaRecommend
         public string Reason;
     }
 
+    internal sealed class QuotaEntry
+    {
+        public string QuotaCode;
+        public string QuotaName;
+        public string QuotaUnit;
+    }
+
     internal struct UnitScale
     {
         public string BaseUnit;
@@ -1276,6 +1513,8 @@ namespace RecoQuotaRecommend
 
     internal sealed class LearningRecord
     {
+        public bool IsCorrection;
+        public string QuantitySignature;
         public string ProjectName;
         public string BudgetFile;
         public string BudgetGroup;
@@ -1309,6 +1548,8 @@ namespace RecoQuotaRecommend
 
                 Dictionary<string, string> item = ParseFlatJson(line);
                 LearningRecord record = new LearningRecord();
+                record.IsCorrection = String.Equals(Get(item, "record_type"), "correction", StringComparison.OrdinalIgnoreCase)
+                    || String.Equals(Get(item, "user_action"), "correction", StringComparison.OrdinalIgnoreCase);
                 record.ProjectName = Get(item, "project_name");
                 record.BudgetFile = Get(item, "budget_file");
                 record.BudgetGroup = Get(item, "budget_group");
@@ -1318,6 +1559,11 @@ namespace RecoQuotaRecommend
                 record.QuantitySection = Get(item, "quantity_section");
                 record.QuantityName = Get(item, "quantity_name");
                 record.QuantityUnit = Get(item, "quantity_unit");
+                record.QuantitySignature = Get(item, "quantity_signature");
+                if (String.IsNullOrWhiteSpace(record.QuantitySignature))
+                {
+                    record.QuantitySignature = BuildQuantitySignature(record.QuantityName, record.QuantityUnit);
+                }
                 record.MatchReason = Get(item, "match_reason");
                 int parsed;
                 record.MatchScore = Int32.TryParse(Get(item, "match_score"), NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed) ? parsed : 0;
@@ -1330,8 +1576,89 @@ namespace RecoQuotaRecommend
             return records;
         }
 
+        public static void ReplaceCorrections(ExcelQuantityItem item, List<QuotaEntry> quotas)
+        {
+            string signature = BuildQuantitySignature(item);
+            List<string> paths = FindLearningPaths();
+            if (paths.Count == 0)
+            {
+                string baseDir = Path.GetDirectoryName(typeof(QuotaRecommendPanel).Assembly.Location);
+                paths.Add(Path.Combine(baseDir, "RecoQuotaData", "learning.jsonl"));
+            }
+
+            foreach (string path in paths)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                List<string> existing = File.Exists(path)
+                    ? File.ReadAllLines(path, Encoding.UTF8).ToList()
+                    : new List<string>();
+
+                List<string> kept = new List<string>();
+                foreach (string line in existing)
+                {
+                    if (String.IsNullOrWhiteSpace(line))
+                    {
+                        continue;
+                    }
+
+                    Dictionary<string, string> values = ParseFlatJson(line);
+                    bool isCorrection = String.Equals(Get(values, "record_type"), "correction", StringComparison.OrdinalIgnoreCase)
+                        || String.Equals(Get(values, "user_action"), "correction", StringComparison.OrdinalIgnoreCase);
+                    string lineSignature = Get(values, "quantity_signature");
+                    if (String.IsNullOrWhiteSpace(lineSignature))
+                    {
+                        lineSignature = BuildQuantitySignature(Get(values, "quantity_name"), Get(values, "quantity_unit"));
+                    }
+
+                    if (isCorrection && String.Equals(lineSignature, signature, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    kept.Add(line);
+                }
+
+                foreach (QuotaEntry quota in quotas)
+                {
+                    Dictionary<string, string> record = new Dictionary<string, string>();
+                    record["record_type"] = "correction";
+                    record["user_action"] = "correction";
+                    record["quantity_signature"] = signature;
+                    record["quantity_name"] = item.Name;
+                    record["quantity_unit"] = item.Unit;
+                    record["quantity_section"] = item.SectionName;
+                    record["quota_code"] = quota.QuotaCode;
+                    record["quota_name"] = quota.QuotaName;
+                    record["quota_unit"] = quota.QuotaUnit;
+                    record["match_score"] = "1000";
+                    record["match_reason"] = "\u4eba\u5de5\u6276\u6b63";
+                    record["updated_at"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+                    kept.Add(ToJson(record));
+                }
+
+                File.WriteAllLines(path, kept.ToArray(), Encoding.UTF8);
+            }
+        }
+
+        public static string BuildQuantitySignature(ExcelQuantityItem item)
+        {
+            return BuildQuantitySignature(item == null ? "" : item.Name, item == null ? "" : item.Unit);
+        }
+
+        public static string BuildQuantitySignature(string name, string unit)
+        {
+            return NormalizeForSignature(name) + "|" + NormalizeForSignature(unit);
+        }
+
         private static string FindLearningPath()
         {
+            List<string> paths = FindLearningPaths();
+            return paths.Count == 0 ? "" : paths[0];
+        }
+
+        private static List<string> FindLearningPaths()
+        {
+            List<string> paths = new List<string>();
             string baseDir = Path.GetDirectoryName(typeof(QuotaRecommendPanel).Assembly.Location);
             string[] candidates = new string[]
             {
@@ -1343,11 +1670,68 @@ namespace RecoQuotaRecommend
             {
                 if (File.Exists(candidate))
                 {
-                    return candidate;
+                    paths.Add(candidate);
                 }
             }
 
-            return "";
+            return paths;
+        }
+
+        private static string ToJson(Dictionary<string, string> values)
+        {
+            StringBuilder builder = new StringBuilder();
+            builder.Append('{');
+            bool first = true;
+            foreach (KeyValuePair<string, string> pair in values)
+            {
+                if (!first)
+                {
+                    builder.Append(',');
+                }
+
+                first = false;
+                builder.Append('"').Append(EscapeJson(pair.Key)).Append('"').Append(':')
+                    .Append('"').Append(EscapeJson(pair.Value)).Append('"');
+            }
+
+            builder.Append('}');
+            return builder.ToString();
+        }
+
+        private static string EscapeJson(string value)
+        {
+            StringBuilder builder = new StringBuilder();
+            foreach (char ch in value ?? "")
+            {
+                switch (ch)
+                {
+                    case '\\':
+                        builder.Append("\\\\");
+                        break;
+                    case '"':
+                        builder.Append("\\\"");
+                        break;
+                    case '\r':
+                        builder.Append("\\r");
+                        break;
+                    case '\n':
+                        builder.Append("\\n");
+                        break;
+                    case '\t':
+                        builder.Append("\\t");
+                        break;
+                    default:
+                        builder.Append(ch);
+                        break;
+                }
+            }
+
+            return builder.ToString();
+        }
+
+        private static string NormalizeForSignature(string text)
+        {
+            return (text ?? "").Replace("\r", "").Replace("\n", "").Replace(" ", "").Trim().ToLowerInvariant();
         }
 
         private static string Get(Dictionary<string, string> values, string key)
