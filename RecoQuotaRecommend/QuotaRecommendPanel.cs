@@ -279,6 +279,8 @@ namespace RecoQuotaRecommend
         private readonly DataGridView resultGrid;
         private readonly Label statusLabel;
         private readonly List<LearningRecord> records;
+        private readonly SearchIndexStore searchIndex;
+        private readonly MappingStore mappingStore;
         private readonly List<RecommendationRow> recommendations = new List<RecommendationRow>();
         private ExcelSelection currentSelection;
 
@@ -292,6 +294,8 @@ namespace RecoQuotaRecommend
             MinimizeBox = false;
 
             records = LearningStore.Load();
+            searchIndex = SearchIndexStore.LoadOrBuild();
+            mappingStore = MappingStore.Load(records);
 
             Button readButton = new Button();
             readButton.Text = "\u91cd\u65b0\u8bfb\u53d6Excel\u6846\u9009";
@@ -373,7 +377,7 @@ namespace RecoQuotaRecommend
             correct.Name = "Correct";
             correct.HeaderText = "\u6276\u6b63";
             correct.Text = "\u6276\u6b63";
-            correct.UseColumnTextForButtonValue = true;
+            correct.UseColumnTextForButtonValue = false;
             correct.Width = 55;
             resultGrid.Columns.Add(correct);
             resultGrid.Columns.Add("QuantityName", "\u5de5\u7a0b\u91cf\u540d\u79f0");
@@ -447,51 +451,78 @@ namespace RecoQuotaRecommend
 
             foreach (ExcelQuantityItem item in selection.Items)
             {
+                int itemRowIndex = 0;
                 foreach (RecommendationRow recommendation in BuildRecommendations(item))
                 {
+                    bool isContinuation = itemRowIndex > 0 && String.Equals(recommendation.Source, "mapping", StringComparison.OrdinalIgnoreCase);
                     recommendations.Add(recommendation);
-                    resultGrid.Rows.Add(
+                    int gridRowIndex = resultGrid.Rows.Add(
                         recommendation.Score >= 60,
-                        "\u6276\u6b63",
-                        item.Name,
+                        isContinuation ? "" : "\u6276\u6b63",
+                        isContinuation ? "" : item.Name,
                         item.Unit,
                         item.ValueText,
                         recommendation.ConvertedValueText,
                         recommendation.QuotaCode,
                         recommendation.QuotaName,
                         recommendation.QuotaUnit);
+                    if (isContinuation)
+                    {
+                        DataGridViewRow gridRow = resultGrid.Rows[gridRowIndex];
+                        gridRow.Cells["Correct"] = new DataGridViewTextBoxCell();
+                        gridRow.Cells["Correct"].Value = "";
+                        gridRow.Cells["Correct"].ReadOnly = true;
+                    }
+                    itemRowIndex++;
                 }
             }
 
             statusLabel.Text = String.Format(
                 CultureInfo.CurrentCulture,
-                "\u5df2\u8bfb\u53d6 {0} \u884cExcel\u5de5\u7a0b\u91cf\uff0c\u5b66\u4e60\u5e93 {1} \u6761\u3002\u9ed8\u8ba4\u52fe\u9009\u8f83\u53ef\u9760\u7684\u63a8\u8350\u3002",
+                "\u5df2\u8bfb\u53d6 {0} \u884cExcel\u5de5\u7a0b\u91cf\uff0c\u5b66\u4e60\u5e93 {1} \u6761\uff0c\u5b9a\u989d\u7d22\u5f15 {2} \u6761\uff0c\u6750\u6599\u7d22\u5f15 {3} \u6761\u3002\u9ed8\u8ba4\u52fe\u9009\u8f83\u53ef\u9760\u7684\u63a8\u8350\u3002",
                 selection.Items.Count,
-                records.Count);
+                records.Count,
+                searchIndex.QuotaCount,
+                searchIndex.MaterialCount);
         }
 
         private List<RecommendationRow> BuildRecommendations(ExcelQuantityItem item)
         {
-            List<LearningRecord> corrected = records
-                .Where(r => r.IsCorrection && String.Equals(r.QuantitySignature, LearningStore.BuildQuantitySignature(item), StringComparison.OrdinalIgnoreCase))
-                .Where(r => !String.IsNullOrWhiteSpace(r.QuotaCode))
-                .GroupBy(r => r.QuotaCode, StringComparer.OrdinalIgnoreCase)
-                .Select(g => g.First())
-                .ToList();
-
-            if (corrected.Count > 0)
+            List<RecommendationRow> mapped = mappingStore.Find(item);
+            if (mapped.Count > 0)
             {
-                return corrected.Select(r => BuildRecommendationFromRecord(item, r, 1000)).ToList();
+                return mapped;
+            }
+
+            List<RecommendationRow> indexed = searchIndex.Search(item);
+            if (indexed.Count > 0)
+            {
+                return indexed;
             }
 
             RecommendationRow best = BuildRecommendation(item);
-            return new List<RecommendationRow> { best };
+            if (!String.IsNullOrWhiteSpace(best.QuotaCode))
+            {
+                return new List<RecommendationRow> { best };
+            }
+
+            RecommendationRow empty = new RecommendationRow();
+            empty.Item = item;
+            empty.ConvertedValueText = item.ValueText;
+            empty.Score = 0;
+            empty.Reason = "\u672a\u5339\u914d\u5230\u5b9a\u989d\uff0c\u8bf7\u4eba\u5de5\u6276\u6b63";
+            empty.Source = "empty";
+            empty.TargetKind = "quota";
+            return new List<RecommendationRow> { empty };
         }
 
         private RecommendationRow BuildRecommendation(ExcelQuantityItem item)
         {
             ScoredRecord best = records
+                .Where(r => !r.IsCorrection)
+                .Where(r => String.Equals(QuotaEntry.GuessKind(r.QuotaCode), "quota", StringComparison.OrdinalIgnoreCase))
                 .Select(r => new ScoredRecord { Record = r, Score = ScoreRecord(r, item) })
+                .Where(r => r.Score > 0)
                 .OrderByDescending(r => r.Score)
                 .ThenByDescending(r => r.Record.MatchScore)
                 .FirstOrDefault();
@@ -513,6 +544,8 @@ namespace RecoQuotaRecommend
             row.ConvertedValueText = ConvertQuantityForQuotaUnit(item.ValueText, item.Unit, row.QuotaUnit);
             row.Score = best.Score;
             row.Reason = BuildReason(best.Record, item);
+            row.Source = "learning";
+            row.TargetKind = QuotaEntry.GuessKind(row.QuotaCode);
             return row;
         }
 
@@ -527,6 +560,8 @@ namespace RecoQuotaRecommend
             row.ConvertedValueText = ConvertQuantityForQuotaUnit(item.ValueText, item.Unit, row.QuotaUnit);
             row.Score = score;
             row.Reason = "\u4eba\u5de5\u6276\u6b63";
+            row.Source = "learning";
+            row.TargetKind = QuotaEntry.GuessKind(row.QuotaCode);
             return row;
         }
 
@@ -550,14 +585,17 @@ namespace RecoQuotaRecommend
             string recordQuantityName = Normalize(record.QuantityName);
             string recordSection = Normalize(record.QuantitySection);
             string recordBudgetGroup = Normalize(record.BudgetGroup);
+            bool textMatched = false;
 
             if (!String.IsNullOrEmpty(queryName) && recordQuantityName == queryName)
             {
                 score += 95;
+                textMatched = true;
             }
             else if (!String.IsNullOrEmpty(queryName) && (recordQuantityName.Contains(queryName) || queryName.Contains(recordQuantityName)))
             {
                 score += 70;
+                textMatched = true;
             }
 
             if (!String.IsNullOrEmpty(item.SectionName) && (recordSection.Contains(Normalize(item.SectionName)) || recordBudgetGroup.Contains(Normalize(item.SectionName))))
@@ -575,10 +613,11 @@ namespace RecoQuotaRecommend
                 if (token.Length >= 2 && searchable.Contains(token))
                 {
                     score += 12;
+                    textMatched = true;
                 }
             }
 
-            return score;
+            return textMatched ? score : 0;
         }
 
         private static string BuildReason(LearningRecord record, ExcelQuantityItem item)
@@ -616,6 +655,10 @@ namespace RecoQuotaRecommend
 
             if (resultGrid.Columns[e.ColumnIndex].Name == "Correct")
             {
+                if (!(resultGrid.Rows[e.RowIndex].Cells[e.ColumnIndex] is DataGridViewButtonCell))
+                {
+                    return;
+                }
                 CorrectRecommendation(e.RowIndex);
             }
         }
@@ -667,6 +710,7 @@ namespace RecoQuotaRecommend
 
             try
             {
+                mappingStore.Correct(recommendation.Item, recommendation, quotas);
                 LearningStore.ReplaceCorrections(recommendation.Item, quotas);
                 records.Clear();
                 records.AddRange(LearningStore.Load());
@@ -741,6 +785,7 @@ namespace RecoQuotaRecommend
                 entry.QuotaUnit = GetRowValue(row, "\u5355\u4f4d");
                 if (!String.IsNullOrWhiteSpace(entry.QuotaCode))
                 {
+                    entry.TargetKind = QuotaEntry.GuessKind(entry.QuotaCode);
                     result.Add(entry);
                 }
             }
@@ -801,6 +846,7 @@ namespace RecoQuotaRecommend
             }
 
             Clipboard.SetText(BuildTabSeparated(rows));
+            mappingStore.Accept(rows);
             statusLabel.Text = "\u5df2\u590d\u5236 " + rows.Count.ToString(CultureInfo.InvariantCulture) + " \u6761\u7c98\u8d34\u7528\u5185\u5bb9\uff1a\u7b2c1\u5217\u5b9a\u989d\u7f16\u53f7\uff0c\u7b2c4\u5217\u5de5\u7a0b\u6570\u91cf\u3002\u8bf7\u5728\u5b9a\u989d\u8868\u7b2c1\u5217\u76ee\u6807\u4f4d\u7f6e Ctrl+V\u3002";
         }
 
@@ -867,6 +913,11 @@ namespace RecoQuotaRecommend
 
             decimal converted = quantity * excel.Scale / quota.Scale;
             return FormatDecimal(converted);
+        }
+
+        internal static string ConvertQuantityForIndex(string quantityText, string excelUnit, string quotaUnit)
+        {
+            return ConvertQuantityForQuotaUnit(quantityText, excelUnit, quotaUnit);
         }
 
         private static bool TryEvaluateQuantity(string text, out decimal value)
@@ -1365,6 +1416,11 @@ namespace RecoQuotaRecommend
             return !String.IsNullOrEmpty(l) && !String.IsNullOrEmpty(r) && (l == r || l.EndsWith(r, StringComparison.Ordinal) || r.EndsWith(l, StringComparison.Ordinal));
         }
 
+        internal static bool UnitCompatibleForIndex(string left, string right)
+        {
+            return UnitCompatible(left, right);
+        }
+
         private static string NormalizeUnit(string unit)
         {
             return Normalize(unit)
@@ -1496,13 +1552,28 @@ namespace RecoQuotaRecommend
         public string ConvertedValueText;
         public int Score;
         public string Reason;
+        public string Source;
+        public string BoxId;
+        public string TargetKind;
     }
 
     internal sealed class QuotaEntry
     {
+        public string TargetKind;
         public string QuotaCode;
         public string QuotaName;
         public string QuotaUnit;
+
+        public static string GuessKind(string code)
+        {
+            string value = (code ?? "").Trim();
+            return value.Length > 0 && value.All(Char.IsDigit) ? "material" : "quota";
+        }
+
+        public string TargetKey
+        {
+            get { return (String.IsNullOrWhiteSpace(TargetKind) ? GuessKind(QuotaCode) : TargetKind) + ":" + (QuotaCode ?? "").Trim().ToUpperInvariant(); }
+        }
     }
 
     internal struct UnitScale
@@ -1526,6 +1597,1045 @@ namespace RecoQuotaRecommend
         public string QuantityUnit;
         public string MatchReason;
         public int MatchScore;
+    }
+
+    internal sealed class SearchIndexStore
+    {
+        private readonly List<IndexQuota> quotas = new List<IndexQuota>();
+        private readonly List<IndexMaterial> materials = new List<IndexMaterial>();
+
+        public int QuotaCount { get { return quotas.Count; } }
+        public int MaterialCount { get { return materials.Count; } }
+
+        public static SearchIndexStore LoadOrBuild()
+        {
+            SearchIndexStore store = new SearchIndexStore();
+            string dataDir = LearningStore.FindDataDir();
+            string quotaPath = Path.Combine(dataDir, "quota-index.jsonl");
+            string materialPath = Path.Combine(dataDir, "material-index.jsonl");
+
+            if (!File.Exists(quotaPath) || !File.Exists(materialPath))
+            {
+                try
+                {
+                    ExportFromSql(dataDir, quotaPath, materialPath);
+                }
+                catch (Exception ex)
+                {
+                    QuotaRecommendPanel.Log("Build search index failed: " + ex.Message);
+                }
+            }
+
+            store.LoadFiles(quotaPath, materialPath);
+            return store;
+        }
+
+        public List<RecommendationRow> Search(ExcelQuantityItem item)
+        {
+            List<ScoredQuota> quotaHits = quotas
+                .Select(q => new ScoredQuota { Quota = q, Score = ScoreQuota(item, q) })
+                .Where(q => q.Score >= 55)
+                .OrderByDescending(q => q.Score)
+                .ThenBy(q => q.Quota.SortOrder)
+                .Take(1)
+                .ToList();
+
+            List<RecommendationRow> rows = new List<RecommendationRow>();
+            foreach (ScoredQuota hit in quotaHits)
+            {
+                rows.Add(hit.Quota.ToRecommendation(item, hit.Score));
+            }
+
+            return rows
+                .GroupBy(r => (r.TargetKind ?? "") + ":" + (r.QuotaCode ?? ""), StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .OrderByDescending(r => r.Score)
+                .Take(4)
+                .ToList();
+        }
+
+        private void LoadFiles(string quotaPath, string materialPath)
+        {
+            if (File.Exists(quotaPath))
+            {
+                foreach (string line in File.ReadAllLines(quotaPath, Encoding.UTF8))
+                {
+                    if (String.IsNullOrWhiteSpace(line))
+                    {
+                        continue;
+                    }
+
+                    Dictionary<string, string> values = LearningStore.ParseFlatJson(line);
+                    IndexQuota quota = new IndexQuota();
+                    quota.QuotaCode = LearningStore.Get(values, "quota_code");
+                    quota.QuotaName = LearningStore.Get(values, "quota_name");
+                    quota.QuotaUnit = LearningStore.Get(values, "quota_unit");
+                    quota.BookCode = LearningStore.Get(values, "book_code");
+                    quota.BookCategory = LearningStore.Get(values, "book_category");
+                    quota.Specialty = LearningStore.Get(values, "specialty");
+                    quota.SectionNo = LearningStore.Get(values, "section_no");
+                    quota.SectionName = LearningStore.Get(values, "section_name");
+                    quota.WorkContent = LearningStore.Get(values, "work_content");
+                    quota.SearchText = LearningStore.Get(values, "search_text");
+                    int sortOrder;
+                    quota.SortOrder = Int32.TryParse(LearningStore.Get(values, "sort_order"), NumberStyles.Integer, CultureInfo.InvariantCulture, out sortOrder) ? sortOrder : Int32.MaxValue;
+                    if (!String.IsNullOrWhiteSpace(quota.QuotaCode))
+                    {
+                        quotas.Add(quota);
+                    }
+                }
+            }
+
+            if (File.Exists(materialPath))
+            {
+                foreach (string line in File.ReadAllLines(materialPath, Encoding.UTF8))
+                {
+                    if (String.IsNullOrWhiteSpace(line))
+                    {
+                        continue;
+                    }
+
+                    Dictionary<string, string> values = LearningStore.ParseFlatJson(line);
+                    IndexMaterial material = new IndexMaterial();
+                    material.MaterialCode = LearningStore.Get(values, "material_code");
+                    material.MaterialName = LearningStore.Get(values, "material_name");
+                    material.MaterialUnit = LearningStore.Get(values, "material_unit");
+                    material.DocNo = LearningStore.Get(values, "doc_no");
+                    material.IsMainMaterial = LearningStore.Get(values, "is_main_material") == "1";
+                    material.TransportCategory = LearningStore.Get(values, "transport_category");
+                    material.SearchText = LearningStore.Get(values, "search_text");
+                    if (!String.IsNullOrWhiteSpace(material.MaterialCode))
+                    {
+                        materials.Add(material);
+                    }
+                }
+            }
+        }
+
+        private static int ScoreQuota(ExcelQuantityItem item, IndexQuota quota)
+        {
+            string query = TextMatcher.Normalize(item.Name);
+            string nameText = TextMatcher.Normalize(quota.QuotaName);
+            string workText = TextMatcher.Normalize(quota.WorkContent);
+            string sectionText = TextMatcher.Normalize(quota.SectionName);
+            string specialtyText = TextMatcher.Normalize(quota.Specialty);
+            string searchable = TextMatcher.Normalize(quota.SearchText);
+            if (String.IsNullOrWhiteSpace(query) || String.IsNullOrWhiteSpace(searchable))
+            {
+                return 0;
+            }
+
+            int score = 0;
+            int primaryMatches = 0;
+            int coreMatches = 0;
+            if (nameText.Contains(query))
+            {
+                score += 90;
+                primaryMatches++;
+            }
+            else if (workText.Contains(query))
+            {
+                score += 65;
+                primaryMatches++;
+            }
+
+            List<string> tokens = TextMatcher.Keywords(item.Name).Distinct().ToList();
+            int matched = 0;
+            foreach (string token in tokens)
+            {
+                if (token.Length < 2 || !searchable.Contains(token))
+                {
+                    continue;
+                }
+
+                matched++;
+                bool coreToken = TextMatcher.IsPureChinese(token);
+                if (coreToken)
+                {
+                    coreMatches++;
+                }
+
+                bool primaryHit = nameText.Contains(token) || workText.Contains(token);
+                if (primaryHit)
+                {
+                    primaryMatches++;
+                }
+
+                if (nameText.Contains(token))
+                {
+                    score += TokenScore(token, 55, 42, 28);
+                }
+                else if (workText.Contains(token))
+                {
+                    score += TokenScore(token, 36, 28, 18);
+                }
+                else if (sectionText.Contains(token))
+                {
+                    score += TokenScore(token, 18, 14, 9);
+                }
+                else if (specialtyText.Contains(token))
+                {
+                    score += TokenScore(token, 10, 8, 5);
+                }
+            }
+
+            if (IsSteelQuantity(query))
+            {
+                score += SteelPreferenceScore(query, nameText, workText, quota.QuotaUnit);
+            }
+
+            if (primaryMatches == 0 && coreMatches < 2)
+            {
+                return 0;
+            }
+
+            if (tokens.Count > 0)
+            {
+                score += (int)Math.Round(20.0 * matched / tokens.Count);
+            }
+
+            if (RecommendDialog.UnitCompatibleForIndex(quota.QuotaUnit, item.Unit))
+            {
+                score += 12;
+            }
+
+            return score;
+        }
+
+        private static int TokenScore(string token, int shortChinese, int longChinese, int mixed)
+        {
+            if (TextMatcher.HasAsciiOrDigit(token))
+            {
+                return mixed;
+            }
+
+            return token.Length == 2 ? shortChinese : longChinese;
+        }
+
+        private static bool IsSteelQuantity(string normalizedQuery)
+        {
+            return normalizedQuery.Contains("钢筋") || normalizedQuery.Contains("hpb") || normalizedQuery.Contains("hrb");
+        }
+
+        private static int SteelPreferenceScore(string query, string nameText, string workText, string quotaUnit)
+        {
+            int score = 0;
+            bool steelOperation = nameText.Contains("构件钢筋") ||
+                nameText.Contains("钢筋制作") ||
+                nameText.Contains("钢筋制安") ||
+                nameText.Contains("钢筋绑扎") ||
+                workText.Contains("钢筋制作") ||
+                workText.Contains("钢筋制安") ||
+                (workText.Contains("钢筋") && (workText.Contains("制作") || workText.Contains("绑扎") || workText.Contains("安装")));
+
+            if (steelOperation)
+            {
+                score += 55;
+            }
+
+            if ((query.Contains("hpb") || query.Contains("光圆") || query.Contains("圆钢")) && nameText.Contains("圆钢筋"))
+            {
+                score += 80;
+            }
+
+            if ((query.Contains("hrb") || query.Contains("螺纹")) && (nameText.Contains("hrb") || nameText.Contains("螺纹钢筋")))
+            {
+                score += 80;
+            }
+
+            if (nameText.Contains("钢筋混凝土") && !steelOperation)
+            {
+                score -= 70;
+            }
+
+            if (!RecommendDialog.UnitCompatibleForIndex(quotaUnit, "kg") && !RecommendDialog.UnitCompatibleForIndex(quotaUnit, "t"))
+            {
+                score -= 30;
+            }
+
+            return score;
+        }
+
+        private static void ExportFromSql(string dataDir, string quotaPath, string materialPath)
+        {
+            Directory.CreateDirectory(dataDir);
+            string server = ReadServer();
+            if (String.IsNullOrWhiteSpace(server))
+            {
+                server = "127.0.0.1";
+            }
+
+            string connectionString = "Data Source=" + server + ",1433;Initial Catalog=RecoData2020;User ID=reco;Password=" + BuildSqlPassword() + ";Connect Timeout=8;Encrypt=False;TrustServerCertificate=True";
+            using (System.Data.SqlClient.SqlConnection connection = new System.Data.SqlClient.SqlConnection(connectionString))
+            {
+                connection.Open();
+                WriteQuotaIndex(connection, quotaPath);
+                WriteMaterialIndex(connection, materialPath);
+            }
+        }
+
+        private static string ReadServer()
+        {
+            try
+            {
+                string baseDir = Path.GetDirectoryName(typeof(QuotaRecommendPanel).Assembly.Location);
+                string path = Path.Combine(baseDir, "ServerSetting.xml");
+                if (!File.Exists(path))
+                {
+                    return "";
+                }
+
+                string text = File.ReadAllText(path, Encoding.UTF8);
+                int start = text.IndexOf("<ServerIP>", StringComparison.OrdinalIgnoreCase);
+                int end = text.IndexOf("</ServerIP>", StringComparison.OrdinalIgnoreCase);
+                if (start >= 0 && end > start)
+                {
+                    return text.Substring(start + 10, end - start - 10).Trim();
+                }
+
+                start = text.IndexOf("<Server>", StringComparison.OrdinalIgnoreCase);
+                end = text.IndexOf("</Server>", StringComparison.OrdinalIgnoreCase);
+                return start >= 0 && end > start ? text.Substring(start + 8, end - start - 8).Trim() : "";
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private static string BuildSqlPassword()
+        {
+            return String.Join("_", new string[] { "Des", "Reco", "2006" });
+        }
+
+        private static void WriteQuotaIndex(System.Data.SqlClient.SqlConnection connection, string path)
+        {
+            string temp = path + ".tmp";
+            using (StreamWriter writer = new StreamWriter(temp, false, Encoding.UTF8))
+            using (System.Data.SqlClient.SqlCommand command = connection.CreateCommand())
+            {
+                command.CommandTimeout = 60;
+                command.CommandText =
+                    "SELECT a.定额编号,a.定额名称,a.单位,a.书号,ISNULL(b.分类,''),ISNULL(b.专业名称,''),ISNULL(a.节号,''),ISNULL(c.节名称,''),ISNULL(CAST(a.工作内容 AS nvarchar(max)),''),ISNULL(a.基价,0),ISNULL(b.现行定额,0),ISNULL(a.流水号,2147483647) " +
+                    "FROM dbo.定额库 a LEFT JOIN dbo.定额库索引 b ON a.书号=b.书号 LEFT JOIN dbo.定额节索引 c ON a.书号=c.书号 AND a.节号=c.节号 " +
+                    "WHERE ISNULL(a.定额编号,'')<>'' AND ISNULL(a.定额名称,'')<>''";
+                using (System.Data.SqlClient.SqlDataReader reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        Dictionary<string, string> row = new Dictionary<string, string>();
+                        row["quota_code"] = ReadString(reader, 0);
+                        row["quota_name"] = ReadString(reader, 1);
+                        row["quota_unit"] = ReadString(reader, 2);
+                        row["book_code"] = ReadString(reader, 3);
+                        row["book_category"] = ReadString(reader, 4);
+                        row["specialty"] = ReadString(reader, 5);
+                        row["section_no"] = ReadString(reader, 6);
+                        row["section_name"] = ReadString(reader, 7);
+                        row["work_content"] = ReadString(reader, 8);
+                        row["base_price"] = Convert.ToString(reader.GetDouble(9), CultureInfo.InvariantCulture);
+                        row["is_current"] = reader.GetBoolean(10) ? "1" : "0";
+                        row["sort_order"] = Convert.ToString(reader.GetInt32(11), CultureInfo.InvariantCulture);
+                        row["search_text"] = TextMatcher.Normalize(String.Join(" ", new string[] { row["quota_code"], row["quota_name"], row["quota_unit"], row["book_category"], row["specialty"], row["section_name"], row["work_content"] }));
+                        writer.WriteLine(LearningStore.ToJson(row));
+                    }
+                }
+            }
+
+            ReplaceFile(temp, path);
+        }
+
+        private static void WriteMaterialIndex(System.Data.SqlClient.SqlConnection connection, string path)
+        {
+            string temp = path + ".tmp";
+            using (StreamWriter writer = new StreamWriter(temp, false, Encoding.UTF8))
+            using (System.Data.SqlClient.SqlCommand command = connection.CreateCommand())
+            {
+                command.CommandTimeout = 60;
+                command.CommandText =
+                    "SELECT 电算代号,材料名称,单位,文号,ISNULL(主材标志,''),ISNULL(材料运输类别,''),ISNULL(基期单价,0),ISNULL(编制期价,0) " +
+                    "FROM dbo.材料单价库 WHERE ISNULL(材料名称,'')<>''";
+                using (System.Data.SqlClient.SqlDataReader reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        Dictionary<string, string> row = new Dictionary<string, string>();
+                        row["material_code"] = Convert.ToString(reader.GetInt32(0), CultureInfo.InvariantCulture);
+                        row["material_name"] = ReadString(reader, 1);
+                        row["material_unit"] = ReadString(reader, 2);
+                        row["doc_no"] = ReadString(reader, 3);
+                        row["is_main_material"] = ReadString(reader, 4) == "1" ? "1" : "0";
+                        row["transport_category"] = ReadString(reader, 5);
+                        row["base_price"] = Convert.ToString(reader.GetDouble(6), CultureInfo.InvariantCulture);
+                        row["current_price"] = Convert.ToString(reader.GetDouble(7), CultureInfo.InvariantCulture);
+                        row["search_text"] = TextMatcher.Normalize(String.Join(" ", new string[] { row["material_code"], row["material_name"], row["material_unit"], row["doc_no"], row["transport_category"] }));
+                        writer.WriteLine(LearningStore.ToJson(row));
+                    }
+                }
+            }
+
+            ReplaceFile(temp, path);
+        }
+
+        private static string ReadString(System.Data.SqlClient.SqlDataReader reader, int index)
+        {
+            return reader.IsDBNull(index) ? "" : Convert.ToString(reader.GetValue(index), CultureInfo.CurrentCulture).Trim();
+        }
+
+        private static void ReplaceFile(string temp, string path)
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+            File.Move(temp, path);
+        }
+
+        private sealed class ScoredQuota
+        {
+            public IndexQuota Quota;
+            public int Score;
+        }
+
+    }
+
+    internal sealed class IndexQuota
+    {
+        public string QuotaCode;
+        public string QuotaName;
+        public string QuotaUnit;
+        public string BookCode;
+        public string BookCategory;
+        public string Specialty;
+        public string SectionNo;
+        public string SectionName;
+        public string WorkContent;
+        public string SearchText;
+        public int SortOrder;
+
+        public RecommendationRow ToRecommendation(ExcelQuantityItem item, int score)
+        {
+            RecommendationRow row = new RecommendationRow();
+            row.Item = item;
+            row.QuotaCode = QuotaCode;
+            row.QuotaName = QuotaName;
+            row.QuotaUnit = QuotaUnit;
+            row.ConvertedValueText = RecommendDialog.ConvertQuantityForIndex(item.ValueText, item.Unit, QuotaUnit);
+            row.Score = score;
+            row.Reason = "\u5168\u91cf\u5b9a\u989d\u7d22\u5f15\u5173\u952e\u8bcd\u5339\u914d";
+            row.Source = "index";
+            row.TargetKind = "quota";
+            return row;
+        }
+    }
+
+    internal sealed class IndexMaterial
+    {
+        public string MaterialCode;
+        public string MaterialName;
+        public string MaterialUnit;
+        public string DocNo;
+        public bool IsMainMaterial;
+        public string TransportCategory;
+        public string SearchText;
+
+        public RecommendationRow ToRecommendation(ExcelQuantityItem item, int score)
+        {
+            RecommendationRow row = new RecommendationRow();
+            row.Item = item;
+            row.QuotaCode = MaterialCode;
+            row.QuotaName = MaterialName;
+            row.QuotaUnit = MaterialUnit;
+            row.ConvertedValueText = RecommendDialog.ConvertQuantityForIndex(item.ValueText, item.Unit, MaterialUnit);
+            row.Score = score;
+            row.Reason = IsMainMaterial ? "\u4e3b\u8981\u6750\u6599\u7d22\u5f15\u5173\u952e\u8bcd\u5339\u914d" : "\u6750\u6599\u7d22\u5f15\u5173\u952e\u8bcd\u5339\u914d";
+            row.Source = "index";
+            row.TargetKind = "material";
+            return row;
+        }
+    }
+
+    internal sealed class MappingStore
+    {
+        private const int MaxSamplesPerBox = 30;
+        private readonly string path;
+        private readonly List<MappingBox> boxes = new List<MappingBox>();
+
+        private MappingStore(string filePath)
+        {
+            path = filePath;
+        }
+
+        public static MappingStore Load(List<LearningRecord> records)
+        {
+            string filePath = Path.Combine(LearningStore.FindDataDir(), "mapping-boxes.jsonl");
+            MappingStore store = new MappingStore(filePath);
+            store.LoadFile();
+            if (store.boxes.Count == 0)
+            {
+                store.ImportCorrections(records);
+                if (store.boxes.Count > 0)
+                {
+                    store.Save();
+                }
+            }
+            return store;
+        }
+
+        public List<RecommendationRow> Find(ExcelQuantityItem item)
+        {
+            ScoredBox best = null;
+            foreach (MappingBox box in boxes)
+            {
+                int score = box.Score(item);
+                if (score >= 70 && (best == null || score > best.Score))
+                {
+                    best = new ScoredBox { Box = box, Score = score };
+                }
+            }
+
+            if (best == null)
+            {
+                return new List<RecommendationRow>();
+            }
+
+            return best.Box.Targets
+                .Select(t => t.ToRecommendation(item, best.Score, best.Box.BoxId))
+                .ToList();
+        }
+
+        public void Accept(List<RecommendationRow> rows)
+        {
+            bool changed = false;
+            foreach (IGrouping<string, RecommendationRow> group in rows
+                .Where(r => r != null && r.Item != null && !String.IsNullOrWhiteSpace(r.QuotaCode))
+                .GroupBy(r => LearningStore.BuildQuantitySignature(r.Item), StringComparer.OrdinalIgnoreCase))
+            {
+                RecommendationRow first = group.First();
+                MappingBox box = null;
+                string boxId = group.Select(r => r.BoxId).FirstOrDefault(id => !String.IsNullOrWhiteSpace(id));
+                if (!String.IsNullOrWhiteSpace(boxId))
+                {
+                    box = boxes.FirstOrDefault(b => String.Equals(b.BoxId, boxId, StringComparison.OrdinalIgnoreCase));
+                }
+
+                if (box == null)
+                {
+                    box = FindOrCreateBox(group.Select(row => new QuotaEntry
+                    {
+                        TargetKind = String.IsNullOrWhiteSpace(row.TargetKind) ? QuotaEntry.GuessKind(row.QuotaCode) : row.TargetKind,
+                        QuotaCode = row.QuotaCode,
+                        QuotaName = row.QuotaName,
+                        QuotaUnit = row.QuotaUnit
+                    }).ToList());
+                }
+
+                MappingSample sample = box.FindOrCreateSample(first.Item.Name, first.Item.Unit);
+                sample.Weight += 5;
+                sample.AcceptedCount += 1;
+                sample.LastUsedAt = Now();
+                box.TrimSamples(MaxSamplesPerBox);
+                changed = true;
+            }
+
+            if (changed)
+            {
+                Save();
+            }
+        }
+
+        public void Correct(ExcelQuantityItem item, RecommendationRow oldRecommendation, List<QuotaEntry> selectedTargets)
+        {
+            if (item == null || selectedTargets == null || selectedTargets.Count == 0)
+            {
+                return;
+            }
+
+            Penalize(item, oldRecommendation, selectedTargets);
+            MappingBox box = FindOrCreateBox(selectedTargets);
+            MappingSample sample = box.FindOrCreateSample(item.Name, item.Unit);
+            sample.Weight += 20;
+            sample.CorrectedCount += 1;
+            sample.LastUsedAt = Now();
+            box.TrimSamples(MaxSamplesPerBox);
+            Save();
+        }
+
+        private void Penalize(ExcelQuantityItem item, RecommendationRow oldRecommendation, List<QuotaEntry> selectedTargets)
+        {
+            if (oldRecommendation == null || String.IsNullOrWhiteSpace(oldRecommendation.QuotaCode))
+            {
+                return;
+            }
+
+            string oldKey = (String.IsNullOrWhiteSpace(oldRecommendation.TargetKind) ? QuotaEntry.GuessKind(oldRecommendation.QuotaCode) : oldRecommendation.TargetKind) + ":" + oldRecommendation.QuotaCode.ToUpperInvariant();
+            if (selectedTargets.Any(t => String.Equals(t.TargetKey, oldKey, StringComparison.OrdinalIgnoreCase)))
+            {
+                return;
+            }
+
+            foreach (MappingBox box in boxes)
+            {
+                if (!box.Targets.Any(t => String.Equals(t.TargetKey, oldKey, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                MappingSample sample = box.FindSample(item.Name, item.Unit);
+                if (sample != null)
+                {
+                    sample.Weight = Math.Max(0, sample.Weight - 10);
+                    sample.RejectedCount += 1;
+                    sample.LastUsedAt = Now();
+                }
+            }
+        }
+
+        private MappingBox FindOrCreateBox(List<QuotaEntry> targets)
+        {
+            List<MappingTarget> normalized = targets
+                .Where(t => !String.IsNullOrWhiteSpace(t.QuotaCode))
+                .Select(t => new MappingTarget
+                {
+                    TargetKind = String.IsNullOrWhiteSpace(t.TargetKind) ? QuotaEntry.GuessKind(t.QuotaCode) : t.TargetKind,
+                    Code = t.QuotaCode.Trim(),
+                    Name = t.QuotaName ?? "",
+                    Unit = t.QuotaUnit ?? ""
+                })
+                .GroupBy(t => t.TargetKey, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .OrderBy(t => t.TargetKey, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            string boxId = BuildBoxId(normalized);
+            MappingBox box = boxes.FirstOrDefault(b => String.Equals(b.BoxId, boxId, StringComparison.OrdinalIgnoreCase));
+            if (box == null)
+            {
+                box = new MappingBox { BoxId = boxId };
+                box.Targets.AddRange(normalized);
+                boxes.Add(box);
+            }
+            else
+            {
+                foreach (MappingTarget target in normalized)
+                {
+                    if (!box.Targets.Any(t => String.Equals(t.TargetKey, target.TargetKey, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        box.Targets.Add(target);
+                    }
+                }
+            }
+
+            return box;
+        }
+
+        private void ImportCorrections(List<LearningRecord> records)
+        {
+            foreach (IGrouping<string, LearningRecord> group in records
+                .Where(r => r.IsCorrection && !String.IsNullOrWhiteSpace(r.QuotaCode))
+                .GroupBy(r => r.QuantitySignature, StringComparer.OrdinalIgnoreCase))
+            {
+                List<QuotaEntry> targets = group.Select(r => new QuotaEntry
+                {
+                    TargetKind = QuotaEntry.GuessKind(r.QuotaCode),
+                    QuotaCode = r.QuotaCode,
+                    QuotaName = r.QuotaName,
+                    QuotaUnit = r.QuotaUnit
+                }).ToList();
+                MappingBox box = FindOrCreateBox(targets);
+                LearningRecord first = group.First();
+                MappingSample sample = box.FindOrCreateSample(first.QuantityName, first.QuantityUnit);
+                sample.Weight = Math.Max(sample.Weight, 30);
+                sample.CorrectedCount += 1;
+                sample.LastUsedAt = Now();
+            }
+        }
+
+        private void LoadFile()
+        {
+            if (!File.Exists(path))
+            {
+                return;
+            }
+
+            Dictionary<string, MappingBox> byId = new Dictionary<string, MappingBox>(StringComparer.OrdinalIgnoreCase);
+            foreach (string line in File.ReadAllLines(path, Encoding.UTF8))
+            {
+                if (String.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                Dictionary<string, string> values = LearningStore.ParseFlatJson(line);
+                string boxId = LearningStore.Get(values, "box_id");
+                if (String.IsNullOrWhiteSpace(boxId))
+                {
+                    continue;
+                }
+
+                MappingBox box;
+                if (!byId.TryGetValue(boxId, out box))
+                {
+                    box = new MappingBox { BoxId = boxId };
+                    byId[boxId] = box;
+                    boxes.Add(box);
+                }
+
+                MappingTarget target = new MappingTarget
+                {
+                    TargetKind = LearningStore.Get(values, "target_kind"),
+                    Code = LearningStore.Get(values, "target_code"),
+                    Name = LearningStore.Get(values, "target_name"),
+                    Unit = LearningStore.Get(values, "target_unit")
+                };
+                if (!String.IsNullOrWhiteSpace(target.Code) && !box.Targets.Any(t => String.Equals(t.TargetKey, target.TargetKey, StringComparison.OrdinalIgnoreCase)))
+                {
+                    box.Targets.Add(target);
+                }
+
+                MappingSample sample = new MappingSample();
+                sample.QuantityName = LearningStore.Get(values, "quantity_name");
+                sample.QuantityUnit = LearningStore.Get(values, "quantity_unit");
+                sample.Weight = ParseInt(LearningStore.Get(values, "weight"), 0);
+                sample.AcceptedCount = ParseInt(LearningStore.Get(values, "accepted_count"), 0);
+                sample.CorrectedCount = ParseInt(LearningStore.Get(values, "corrected_count"), 0);
+                sample.RejectedCount = ParseInt(LearningStore.Get(values, "rejected_count"), 0);
+                sample.LastUsedAt = LearningStore.Get(values, "last_used_at");
+                if (!String.IsNullOrWhiteSpace(sample.QuantityName) && box.FindSample(sample.QuantityName, sample.QuantityUnit) == null)
+                {
+                    box.Samples.Add(sample);
+                }
+            }
+        }
+
+        private void Save()
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            string temp = path + ".tmp";
+            using (StreamWriter writer = new StreamWriter(temp, false, Encoding.UTF8))
+            {
+                foreach (MappingBox box in boxes)
+                {
+                    box.TrimSamples(MaxSamplesPerBox);
+                    foreach (MappingTarget target in box.Targets)
+                    {
+                        foreach (MappingSample sample in box.Samples)
+                        {
+                            Dictionary<string, string> row = new Dictionary<string, string>();
+                            row["record_type"] = "mapping_box";
+                            row["box_id"] = box.BoxId;
+                            row["target_kind"] = String.IsNullOrWhiteSpace(target.TargetKind) ? QuotaEntry.GuessKind(target.Code) : target.TargetKind;
+                            row["target_code"] = target.Code;
+                            row["target_name"] = target.Name;
+                            row["target_unit"] = target.Unit;
+                            row["quantity_name"] = sample.QuantityName;
+                            row["quantity_unit"] = sample.QuantityUnit;
+                            row["weight"] = sample.Weight.ToString(CultureInfo.InvariantCulture);
+                            row["accepted_count"] = sample.AcceptedCount.ToString(CultureInfo.InvariantCulture);
+                            row["corrected_count"] = sample.CorrectedCount.ToString(CultureInfo.InvariantCulture);
+                            row["rejected_count"] = sample.RejectedCount.ToString(CultureInfo.InvariantCulture);
+                            row["last_used_at"] = sample.LastUsedAt;
+                            writer.WriteLine(LearningStore.ToJson(row));
+                        }
+                    }
+                }
+            }
+
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+            File.Move(temp, path);
+        }
+
+        private static string BuildBoxId(List<MappingTarget> targets)
+        {
+            string raw = String.Join("|", targets.Select(t => t.TargetKey).ToArray());
+            return "box-" + Math.Abs(raw.ToLowerInvariant().GetHashCode()).ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static int ParseInt(string text, int fallback)
+        {
+            int value;
+            return Int32.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value) ? value : fallback;
+        }
+
+        private static string Now()
+        {
+            return DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        }
+
+        private sealed class ScoredBox
+        {
+            public MappingBox Box;
+            public int Score;
+        }
+    }
+
+    internal sealed class MappingBox
+    {
+        public string BoxId;
+        public readonly List<MappingTarget> Targets = new List<MappingTarget>();
+        public readonly List<MappingSample> Samples = new List<MappingSample>();
+
+        public int Score(ExcelQuantityItem item)
+        {
+            int best = 0;
+            foreach (MappingSample sample in Samples)
+            {
+                int similarity = TextMatcher.Similarity(item.Name, sample.QuantityName);
+                if (similarity <= 0)
+                {
+                    continue;
+                }
+
+                int score = similarity + Math.Min(40, sample.Weight);
+                if (RecommendDialog.UnitCompatibleForIndex(sample.QuantityUnit, item.Unit))
+                {
+                    score += 12;
+                }
+                best = Math.Max(best, score);
+            }
+
+            return best;
+        }
+
+        public MappingSample FindOrCreateSample(string name, string unit)
+        {
+            MappingSample sample = FindSample(name, unit);
+            if (sample != null)
+            {
+                return sample;
+            }
+
+            sample = new MappingSample { QuantityName = name ?? "", QuantityUnit = unit ?? "", Weight = 10, LastUsedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) };
+            Samples.Add(sample);
+            return sample;
+        }
+
+        public MappingSample FindSample(string name, string unit)
+        {
+            string signature = LearningStore.BuildQuantitySignature(name, unit);
+            return Samples.FirstOrDefault(s => String.Equals(LearningStore.BuildQuantitySignature(s.QuantityName, s.QuantityUnit), signature, StringComparison.OrdinalIgnoreCase));
+        }
+
+        public void TrimSamples(int maxSamples)
+        {
+            while (Samples.Count > maxSamples)
+            {
+                MappingSample remove = Samples
+                    .OrderBy(s => s.Weight)
+                    .ThenBy(s => s.LastUsedAt ?? "")
+                    .First();
+                Samples.Remove(remove);
+            }
+        }
+    }
+
+    internal sealed class MappingTarget
+    {
+        public string TargetKind;
+        public string Code;
+        public string Name;
+        public string Unit;
+
+        public string TargetKey
+        {
+            get { return (String.IsNullOrWhiteSpace(TargetKind) ? QuotaEntry.GuessKind(Code) : TargetKind) + ":" + (Code ?? "").Trim().ToUpperInvariant(); }
+        }
+
+        public RecommendationRow ToRecommendation(ExcelQuantityItem item, int score, string boxId)
+        {
+            RecommendationRow row = new RecommendationRow();
+            row.Item = item;
+            row.QuotaCode = Code;
+            row.QuotaName = Name;
+            row.QuotaUnit = Unit;
+            row.ConvertedValueText = RecommendDialog.ConvertQuantityForIndex(item.ValueText, item.Unit, Unit);
+            row.Score = score;
+            row.Reason = "\u5b9a\u989d\u5bf9\u5e94\u6846\u6743\u91cd\u5339\u914d";
+            row.Source = "mapping";
+            row.BoxId = boxId;
+            row.TargetKind = String.IsNullOrWhiteSpace(TargetKind) ? QuotaEntry.GuessKind(Code) : TargetKind;
+            return row;
+        }
+    }
+
+    internal sealed class MappingSample
+    {
+        public string QuantityName;
+        public string QuantityUnit;
+        public int Weight;
+        public int AcceptedCount;
+        public int CorrectedCount;
+        public int RejectedCount;
+        public string LastUsedAt;
+    }
+
+    internal static class TextMatcher
+    {
+        public static string Normalize(string text)
+        {
+            return (text ?? "")
+                .Replace("\r", " ")
+                .Replace("\n", " ")
+                .Replace("（", "(")
+                .Replace("）", ")")
+                .Replace("，", ",")
+                .Replace("、", " ")
+                .Trim()
+                .ToLowerInvariant();
+        }
+
+        public static int Similarity(string left, string right)
+        {
+            string l = Normalize(left).Replace(" ", "");
+            string r = Normalize(right).Replace(" ", "");
+            if (String.IsNullOrEmpty(l) || String.IsNullOrEmpty(r))
+            {
+                return 0;
+            }
+
+            if (l == r)
+            {
+                return 100;
+            }
+            if (l.Contains(r) || r.Contains(l))
+            {
+                return 78;
+            }
+
+            HashSet<string> leftTokens = new HashSet<string>(Keywords(l));
+            List<string> rightTokens = Keywords(r).ToList();
+            if (leftTokens.Count == 0 || rightTokens.Count == 0)
+            {
+                return 0;
+            }
+
+            int hits = rightTokens.Count(t => leftTokens.Contains(t));
+            return hits == 0 ? 0 : (int)Math.Round(70.0 * hits / Math.Max(leftTokens.Count, rightTokens.Count));
+        }
+
+        public static IEnumerable<string> Keywords(string text)
+        {
+            string normalized = Normalize(text);
+            foreach (string part in normalized.Split(new char[] { ' ', '/', ',', ';', '\t', '(', ')', '[', ']', '+', '-', '*', '=' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string token = part.Trim();
+                if (token.Length < 2 || IsNumberLike(token))
+                {
+                    continue;
+                }
+
+                yield return token;
+                foreach (string segment in SplitAlphaNumericAndChinese(token))
+                {
+                    if (segment.Length >= 2 && !IsNumberLike(segment))
+                    {
+                        yield return segment;
+                    }
+                }
+                if (ContainsChinese(token))
+                {
+                    for (int i = 0; i + 2 <= token.Length; i++)
+                    {
+                        string gram = token.Substring(i, 2);
+                        if (!IsNumberLike(gram))
+                        {
+                            yield return gram;
+                        }
+                    }
+                    for (int i = 0; i + 3 <= token.Length; i++)
+                    {
+                        string gram = token.Substring(i, 3);
+                        if (!IsNumberLike(gram))
+                        {
+                            yield return gram;
+                        }
+                    }
+                }
+            }
+        }
+
+        public static bool HasAsciiOrDigit(string text)
+        {
+            foreach (char ch in text ?? "")
+            {
+                if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || Char.IsDigit(ch))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public static bool IsPureChinese(string text)
+        {
+            bool hasChinese = false;
+            foreach (char ch in text ?? "")
+            {
+                if (ch >= 0x4e00 && ch <= 0x9fff)
+                {
+                    hasChinese = true;
+                    continue;
+                }
+
+                return false;
+            }
+            return hasChinese;
+        }
+
+        private static IEnumerable<string> SplitAlphaNumericAndChinese(string token)
+        {
+            StringBuilder builder = new StringBuilder();
+            int lastKind = 0;
+            foreach (char ch in token ?? "")
+            {
+                int kind = Char.IsLetterOrDigit(ch) && !(ch >= 0x4e00 && ch <= 0x9fff) ? 1 : ((ch >= 0x4e00 && ch <= 0x9fff) ? 2 : 0);
+                if (kind == 0)
+                {
+                    if (builder.Length > 0)
+                    {
+                        yield return builder.ToString();
+                        builder.Length = 0;
+                    }
+                    lastKind = 0;
+                    continue;
+                }
+
+                if (builder.Length > 0 && kind != lastKind)
+                {
+                    yield return builder.ToString();
+                    builder.Length = 0;
+                }
+
+                builder.Append(ch);
+                lastKind = kind;
+            }
+
+            if (builder.Length > 0)
+            {
+                yield return builder.ToString();
+            }
+        }
+
+        private static bool ContainsChinese(string text)
+        {
+            foreach (char ch in text ?? "")
+            {
+                if (ch >= 0x4e00 && ch <= 0x9fff)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool IsNumberLike(string text)
+        {
+            decimal value;
+            return Decimal.TryParse((text ?? "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+        }
     }
 
     internal static class LearningStore
@@ -1656,6 +2766,12 @@ namespace RecoQuotaRecommend
             return paths.Count == 0 ? "" : paths[0];
         }
 
+        internal static string FindDataDir()
+        {
+            string baseDir = Path.GetDirectoryName(typeof(QuotaRecommendPanel).Assembly.Location);
+            return Path.Combine(baseDir, "RecoQuotaData");
+        }
+
         private static List<string> FindLearningPaths()
         {
             List<string> paths = new List<string>();
@@ -1677,7 +2793,7 @@ namespace RecoQuotaRecommend
             return paths;
         }
 
-        private static string ToJson(Dictionary<string, string> values)
+        internal static string ToJson(Dictionary<string, string> values)
         {
             StringBuilder builder = new StringBuilder();
             builder.Append('{');
@@ -1734,13 +2850,13 @@ namespace RecoQuotaRecommend
             return (text ?? "").Replace("\r", "").Replace("\n", "").Replace(" ", "").Trim().ToLowerInvariant();
         }
 
-        private static string Get(Dictionary<string, string> values, string key)
+        internal static string Get(Dictionary<string, string> values, string key)
         {
             string value;
             return values.TryGetValue(key, out value) ? value : "";
         }
 
-        private static Dictionary<string, string> ParseFlatJson(string line)
+        internal static Dictionary<string, string> ParseFlatJson(string line)
         {
             Dictionary<string, string> result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             int index = 0;
