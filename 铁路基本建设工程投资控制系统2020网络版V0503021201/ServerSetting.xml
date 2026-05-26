@@ -39,6 +39,7 @@
     <FtpPort>21</FtpPort>
     <SqlPort>1433</SqlPort>
     <ReportSavePath>C:\Users\谢刚\Desktop</ReportSavePath>
+    <StartDeHelp>1</StartDeHelp>
     <OpenDeHelp>1</OpenDeHelp>
   </ServerSetting>
   <项目打开记录>
