@@ -2134,7 +2134,9 @@ namespace RecoQuotaRecommend
                 server = "127.0.0.1";
             }
 
-            string connectionString = "Data Source=" + server + ",1433;Initial Catalog=RecoData2020;User ID=reco;Password=" + BuildSqlPassword() + ";Connect Timeout=8;Encrypt=False;TrustServerCertificate=True";
+            string databaseName = ResolveDatabaseName();
+            QuotaRecommendPanel.Log("Build search index from database: " + databaseName);
+            string connectionString = "Data Source=" + server + ",1433;Initial Catalog=" + databaseName + ";User ID=reco;Password=" + BuildSqlPassword() + ";Connect Timeout=8;Encrypt=False;TrustServerCertificate=True";
             using (System.Data.SqlClient.SqlConnection connection = new System.Data.SqlClient.SqlConnection(connectionString))
             {
                 connection.Open();
@@ -2177,6 +2179,35 @@ namespace RecoQuotaRecommend
             return String.Join("_", new string[] { "Des", "Reco", "2006" });
         }
 
+        private static string ResolveDatabaseName()
+        {
+            try
+            {
+                string baseDir = Path.GetDirectoryName(typeof(QuotaRecommendPanel).Assembly.Location) ?? "";
+                string processPath = "";
+                try
+                {
+                    processPath = Process.GetCurrentProcess().MainModule.FileName ?? "";
+                }
+                catch
+                {
+                }
+
+                string probe = (baseDir + " " + processPath).ToLowerInvariant();
+                if (probe.Contains("2024") ||
+                    File.Exists(Path.Combine(baseDir, "ReJJGSNet2024.exe")) ||
+                    File.Exists(Path.Combine(baseDir, "ReJJQDNet2024.exe")))
+                {
+                    return "RecoData2024";
+                }
+            }
+            catch
+            {
+            }
+
+            return "RecoData2020";
+        }
+
         private static void WriteQuotaIndex(System.Data.SqlClient.SqlConnection connection, string path)
         {
             string temp = path + ".tmp";
@@ -2203,7 +2234,7 @@ namespace RecoQuotaRecommend
                         row["section_name"] = ReadString(reader, 7);
                         row["work_content"] = ReadString(reader, 8);
                         row["base_price"] = Convert.ToString(reader.GetDouble(9), CultureInfo.InvariantCulture);
-                        row["is_current"] = reader.GetBoolean(10) ? "1" : "0";
+                        row["is_current"] = IsTruthy(reader.GetValue(10)) ? "1" : "0";
                         row["sort_order"] = Convert.ToString(reader.GetInt32(11), CultureInfo.InvariantCulture);
                         row["search_text"] = TextMatcher.Normalize(String.Join(" ", new string[] { row["quota_code"], row["quota_name"], row["quota_unit"], row["book_category"], row["specialty"], row["section_name"], row["work_content"] }));
                         writer.WriteLine(LearningStore.ToJson(row));
@@ -2229,7 +2260,7 @@ namespace RecoQuotaRecommend
                     while (reader.Read())
                     {
                         Dictionary<string, string> row = new Dictionary<string, string>();
-                        row["material_code"] = Convert.ToString(reader.GetInt32(0), CultureInfo.InvariantCulture);
+                        row["material_code"] = Convert.ToString(reader.GetValue(0), CultureInfo.InvariantCulture);
                         row["material_name"] = ReadString(reader, 1);
                         row["material_unit"] = ReadString(reader, 2);
                         row["doc_no"] = ReadString(reader, 3);
@@ -2249,6 +2280,23 @@ namespace RecoQuotaRecommend
         private static string ReadString(System.Data.SqlClient.SqlDataReader reader, int index)
         {
             return reader.IsDBNull(index) ? "" : Convert.ToString(reader.GetValue(index), CultureInfo.CurrentCulture).Trim();
+        }
+
+        private static bool IsTruthy(object value)
+        {
+            if (value == null || value == DBNull.Value)
+            {
+                return false;
+            }
+
+            try
+            {
+                return Convert.ToInt32(value, CultureInfo.InvariantCulture) != 0;
+            }
+            catch
+            {
+                return String.Equals(Convert.ToString(value, CultureInfo.InvariantCulture), "true", StringComparison.OrdinalIgnoreCase);
+            }
         }
 
         private static void ReplaceFile(string temp, string path)

@@ -1,50 +1,205 @@
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
-$softwareDir = Get-ChildItem -Path $root -Directory |
-  Where-Object { Test-Path (Join-Path $_.FullName "NPOI.dll") } |
-  Select-Object -First 1 -ExpandProperty FullName
-if (-not $softwareDir) {
-  throw "Could not find software directory containing NPOI.dll under $root"
-}
 $outDir = Join-Path $PSScriptRoot "bin"
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
 
-$csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-$out = Join-Path $outDir "QuotaLearningImporter.exe"
-$pluginOut = Join-Path $outDir "RecoQuotaRecommend.dll"
-$npoi = Join-Path $softwareDir "NPOI.dll"
-$npoiOoxml = Join-Path $softwareDir "NPOI.OOXML.dll"
-$npoiOpenXml4Net = Join-Path $softwareDir "NPOI.OpenXml4Net.dll"
-$npoiOpenXmlFormats = Join-Path $softwareDir "NPOI.OpenXmlFormats.dll"
-$source = Join-Path $PSScriptRoot "QuotaLearningImporter.cs"
-$pluginSource = Join-Path $PSScriptRoot "QuotaRecommendPanel.cs"
+function Add-SoftwareTarget {
+  param(
+    [System.Collections.ArrayList]$Targets,
+    [string]$Path
+  )
 
-& $csc /nologo /target:exe /out:$out `
+  if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+    return
+  }
+
+  $resolved = (Resolve-Path -LiteralPath $Path).Path
+  if (-not ($Targets -contains $resolved)) {
+    [void]$Targets.Add($resolved)
+  }
+}
+
+function Ensure-PluginConfig {
+  param(
+    [string]$ConfigPath,
+    [string]$TemplatePath
+  )
+
+  if (-not (Test-Path -LiteralPath $ConfigPath)) {
+    if (-not [string]::IsNullOrWhiteSpace($TemplatePath) -and (Test-Path -LiteralPath $TemplatePath)) {
+      Copy-Item -LiteralPath $TemplatePath -Destination $ConfigPath -Force
+    } else {
+      Set-Content -LiteralPath $ConfigPath -Encoding UTF8 -Value @(
+        '<?xml version="1.0" encoding="utf-8"?>',
+        '<configuration>',
+        '  <startup useLegacyV2RuntimeActivationPolicy="true">',
+        '    <supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.6" />',
+        '  </startup>',
+        '  <runtime />',
+        '</configuration>'
+      )
+    }
+  }
+
+  $backupPath = $ConfigPath + ".pre-plugin-loader.bak"
+  if (-not (Test-Path -LiteralPath $backupPath)) {
+    Copy-Item -LiteralPath $ConfigPath -Destination $backupPath -Force
+  }
+
+  [xml]$xml = Get-Content -LiteralPath $ConfigPath -Raw
+  if ($xml.configuration -eq $null) {
+    throw "Invalid config file: $ConfigPath"
+  }
+
+  $runtime = $xml.configuration.runtime
+  if ($runtime -eq $null) {
+    $runtime = $xml.CreateElement("runtime")
+    [void]$xml.configuration.AppendChild($runtime)
+  }
+
+  $managerAssembly = $runtime.appDomainManagerAssembly
+  if ($managerAssembly -eq $null) {
+    $managerAssembly = $xml.CreateElement("appDomainManagerAssembly")
+    [void]$runtime.PrependChild($managerAssembly)
+  }
+  $managerAssembly.SetAttribute("value", "RecoPluginLoader, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null")
+
+  $managerType = $runtime.appDomainManagerType
+  if ($managerType -eq $null) {
+    $managerType = $xml.CreateElement("appDomainManagerType")
+    $insertAfter = $runtime.appDomainManagerAssembly
+    if ($insertAfter -ne $null -and $insertAfter.NextSibling -ne $null) {
+      [void]$runtime.InsertBefore($managerType, $insertAfter.NextSibling)
+    } else {
+      [void]$runtime.AppendChild($managerType)
+    }
+  }
+  $managerType.SetAttribute("value", "RecoPluginLoader.AutoLoadDomainManager")
+
+  $xml.Save($ConfigPath)
+}
+
+function Ensure-TargetConfigs {
+  param([string]$SoftwareDir)
+
+  $template = Join-Path $SoftwareDir "RecoNet2024.exe.config"
+  if (-not (Test-Path -LiteralPath $template)) {
+    $template = Join-Path $SoftwareDir "RejjNet2020.exe.config"
+  }
+
+  $exeNames = @("RejjNet2020.exe", "ReJJGSNet2024.exe", "ReJJQDNet2024.exe")
+  foreach ($exeName in $exeNames) {
+    $exePath = Join-Path $SoftwareDir $exeName
+    if (Test-Path -LiteralPath $exePath) {
+      Ensure-PluginConfig -ConfigPath ($exePath + ".config") -TemplatePath $template
+    }
+  }
+}
+
+$targets = New-Object System.Collections.ArrayList
+Get-ChildItem -LiteralPath $root -Directory -Recurse |
+  Where-Object {
+    (Test-Path -LiteralPath (Join-Path $_.FullName "NPOI.dll")) -and
+    (
+      (Test-Path -LiteralPath (Join-Path $_.FullName "RejjNet2020.exe")) -or
+      (Test-Path -LiteralPath (Join-Path $_.FullName "ReJJGSNet2024.exe")) -or
+      (Test-Path -LiteralPath (Join-Path $_.FullName "ReJJQDNet2024.exe"))
+    )
+  } |
+  Sort-Object FullName |
+  ForEach-Object { Add-SoftwareTarget -Targets $targets -Path $_.FullName }
+
+if ($targets.Count -eq 0) {
+  throw "Could not find any supported software directory under $root"
+}
+
+$referenceDir = $targets | Where-Object { Test-Path -LiteralPath (Join-Path $_ "NPOI.dll") } | Select-Object -First 1
+if (-not $referenceDir) {
+  throw "Could not find NPOI.dll in any target software directory"
+}
+
+$csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+$importerOut = Join-Path $outDir "QuotaLearningImporter.exe"
+$quotaOut = Join-Path $outDir "RecoQuotaRecommend.dll"
+$loaderOut = Join-Path $outDir "RecoPluginLoader.dll"
+$expandOut = Join-Path $outDir "RecoExpandPanel.dll"
+
+$npoi = Join-Path $referenceDir "NPOI.dll"
+$npoiOoxml = Join-Path $referenceDir "NPOI.OOXML.dll"
+$npoiOpenXml4Net = Join-Path $referenceDir "NPOI.OpenXml4Net.dll"
+$npoiOpenXmlFormats = Join-Path $referenceDir "NPOI.OpenXmlFormats.dll"
+$sharpZipLib = Join-Path $referenceDir "ICSharpCode.SharpZipLib.dll"
+
+& $csc /nologo /target:exe /out:$importerOut `
   /reference:$npoi `
   /reference:$npoiOoxml `
   /reference:$npoiOpenXml4Net `
   /reference:$npoiOpenXmlFormats `
-  $source
+  (Join-Path $PSScriptRoot "QuotaLearningImporter.cs")
 
-& $csc /nologo /target:library /out:$pluginOut `
+& $csc /nologo /target:library /out:$quotaOut `
   /reference:System.Windows.Forms.dll `
   /reference:System.Drawing.dll `
   /reference:System.Data.dll `
-  $pluginSource
+  (Join-Path $PSScriptRoot "QuotaRecommendPanel.cs")
+
+& $csc /nologo /target:library /out:$loaderOut `
+  (Join-Path $root "RecoPluginLoader\AutoLoadDomainManager.cs")
+
+& $csc /nologo /target:library /out:$expandOut `
+  /reference:System.Windows.Forms.dll `
+  /reference:System.Drawing.dll `
+  /reference:System.Data.dll `
+  /reference:System.Xml.dll `
+  /reference:System.Xml.Linq.dll `
+  /reference:System.Core.dll `
+  /reference:System.IO.Compression.dll `
+  /reference:System.IO.Compression.FileSystem.dll `
+  /reference:$npoi `
+  /reference:$npoiOoxml `
+  /reference:$npoiOpenXml4Net `
+  /reference:$npoiOpenXmlFormats `
+  /reference:$sharpZipLib `
+  (Join-Path $root "tools\RecoExpandPanel\FormPanel.cs")
 
 Copy-Item -LiteralPath $npoi -Destination $outDir -Force
 Copy-Item -LiteralPath $npoiOoxml -Destination $outDir -Force
 Copy-Item -LiteralPath $npoiOpenXml4Net -Destination $outDir -Force
 Copy-Item -LiteralPath $npoiOpenXmlFormats -Destination $outDir -Force
-Copy-Item -LiteralPath (Join-Path $softwareDir "ICSharpCode.SharpZipLib.dll") -Destination $outDir -Force
-Copy-Item -LiteralPath $pluginOut -Destination $softwareDir -Force
+Copy-Item -LiteralPath $sharpZipLib -Destination $outDir -Force
 
-$dataSource = Join-Path $root "RecoQuotaData"
-if (Test-Path $dataSource) {
-  Copy-Item -LiteralPath $dataSource -Destination $softwareDir -Recurse -Force
+foreach ($softwareDir in $targets) {
+  Copy-Item -LiteralPath $loaderOut -Destination $softwareDir -Force
+  Copy-Item -LiteralPath $expandOut -Destination $softwareDir -Force
+  Copy-Item -LiteralPath $quotaOut -Destination $softwareDir -Force
+
+  $iconSource = Join-Path $root "tools\RecoExpandPanel\icons"
+  if (Test-Path -LiteralPath $iconSource) {
+    $iconTarget = Join-Path $softwareDir "RecoExpandPanelIcons"
+    New-Item -ItemType Directory -Path $iconTarget -Force | Out-Null
+    Copy-Item -Path (Join-Path $iconSource "*") -Destination $iconTarget -Force
+  }
+
+  $dataTarget = Join-Path $softwareDir "RecoQuotaData"
+  New-Item -ItemType Directory -Path $dataTarget -Force | Out-Null
+  if ($softwareDir -notmatch "2024") {
+    $dataSource = Join-Path $root "RecoQuotaData"
+    if (Test-Path -LiteralPath $dataSource) {
+      Copy-Item -Path (Join-Path $dataSource "*") -Destination $dataTarget -Force
+    }
+  } else {
+    $mappingPath = Join-Path $dataTarget "mapping-boxes.jsonl"
+    if (-not (Test-Path -LiteralPath $mappingPath)) {
+      New-Item -ItemType File -Path $mappingPath -Force | Out-Null
+    }
+  }
+
+  Ensure-TargetConfigs -SoftwareDir $softwareDir
+  Write-Host "Deployed plugins to $softwareDir"
 }
 
-Write-Host "Built $out"
-Write-Host "Built $pluginOut"
-Write-Host "Deployed RecoQuotaRecommend.dll to $softwareDir"
+Write-Host "Built $importerOut"
+Write-Host "Built $quotaOut"
+Write-Host "Built $loaderOut"
+Write-Host "Built $expandOut"
