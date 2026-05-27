@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
+using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
@@ -278,6 +279,7 @@ namespace RecoQuotaRecommend
         private readonly Form mainForm;
         private readonly DataGridView resultGrid;
         private readonly Label statusLabel;
+        private readonly ComboBox quotaCategoryCombo;
         private readonly List<LearningRecord> records;
         private readonly SearchIndexStore searchIndex;
         private readonly MappingStore mappingStore;
@@ -294,6 +296,7 @@ namespace RecoQuotaRecommend
             MinimizeBox = false;
 
             records = LearningStore.Load();
+            LearningStore.BackupLearningFileIfNeeded();
             searchIndex = SearchIndexStore.LoadOrBuild();
             mappingStore = MappingStore.Load(records);
 
@@ -332,6 +335,27 @@ namespace RecoQuotaRecommend
             pasteButton.Width = 140;
             pasteButton.Click += delegate { CopyCheckedForManualPaste(); };
 
+            Label categoryLabel = new Label();
+            categoryLabel.Text = "\u5b9a\u989d\u7c7b\u578b";
+            categoryLabel.Left = 632;
+            categoryLabel.Top = 15;
+            categoryLabel.Width = 58;
+
+            quotaCategoryCombo = new ComboBox();
+            quotaCategoryCombo.Left = 690;
+            quotaCategoryCombo.Top = 11;
+            quotaCategoryCombo.Width = 110;
+            quotaCategoryCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            quotaCategoryCombo.Items.AddRange(new object[] { "\u9884\u7b97\u5b9a\u989d", "\u6982\u7b97\u5b9a\u989d", "\u4f30\u7b97\u5b9a\u989d", "\u5168\u90e8" });
+            quotaCategoryCombo.SelectedIndex = 0;
+            quotaCategoryCombo.SelectedIndexChanged += delegate
+            {
+                if (currentSelection != null)
+                {
+                    FillRecommendations(currentSelection);
+                }
+            };
+
             resultGrid = new DataGridView();
             resultGrid.Left = 12;
             resultGrid.Top = 48;
@@ -360,6 +384,8 @@ namespace RecoQuotaRecommend
             Controls.Add(selectAllButton);
             Controls.Add(clearButton);
             Controls.Add(pasteButton);
+            Controls.Add(categoryLabel);
+            Controls.Add(quotaCategoryCombo);
             Controls.Add(resultGrid);
             Controls.Add(statusLabel);
 
@@ -445,65 +471,131 @@ namespace RecoQuotaRecommend
 
         private void FillRecommendations(ExcelSelection selection)
         {
+            Stopwatch stopwatch = Stopwatch.StartNew();
             currentSelection = selection;
             recommendations.Clear();
             resultGrid.Rows.Clear();
+            string categoryFilter = SelectedQuotaCategory;
+            RecommendationBatchStats stats = new RecommendationBatchStats();
+            Dictionary<string, List<RecommendationRow>> batchCache = new Dictionary<string, List<RecommendationRow>>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (ExcelQuantityItem item in selection.Items)
+            resultGrid.SuspendLayout();
+            try
             {
-                int itemRowIndex = 0;
-                foreach (RecommendationRow recommendation in BuildRecommendations(item))
+                foreach (ExcelQuantityItem item in selection.Items)
                 {
-                    bool isContinuation = itemRowIndex > 0 && String.Equals(recommendation.Source, "mapping", StringComparison.OrdinalIgnoreCase);
-                    recommendations.Add(recommendation);
-                    int gridRowIndex = resultGrid.Rows.Add(
-                        recommendation.Score >= 60,
-                        isContinuation ? "" : "\u6276\u6b63",
-                        isContinuation ? "" : item.Name,
-                        item.Unit,
-                        item.ValueText,
-                        recommendation.ConvertedValueText,
-                        recommendation.QuotaCode,
-                        recommendation.QuotaName,
-                        recommendation.QuotaUnit);
-                    if (isContinuation)
+                    string cacheKey = BuildBatchCacheKey(item, categoryFilter);
+                    List<RecommendationRow> itemRecommendations;
+                    List<RecommendationRow> cached;
+                    if (batchCache.TryGetValue(cacheKey, out cached))
                     {
-                        DataGridViewRow gridRow = resultGrid.Rows[gridRowIndex];
-                        gridRow.Cells["Correct"] = new DataGridViewTextBoxCell();
-                        gridRow.Cells["Correct"].Value = "";
-                        gridRow.Cells["Correct"].ReadOnly = true;
+                        itemRecommendations = CloneRecommendationsForItem(item, cached);
+                        stats.CacheHits++;
                     }
-                    itemRowIndex++;
+                    else
+                    {
+                        itemRecommendations = BuildRecommendations(item, categoryFilter, stats);
+                        batchCache[cacheKey] = CloneRecommendationsForItem(item, itemRecommendations);
+                    }
+
+                    int itemRowIndex = 0;
+                    foreach (RecommendationRow recommendation in itemRecommendations)
+                    {
+                        bool isContinuation = itemRowIndex > 0 && String.Equals(recommendation.Source, "mapping", StringComparison.OrdinalIgnoreCase);
+                        recommendations.Add(recommendation);
+                        int gridRowIndex = resultGrid.Rows.Add(
+                            recommendation.Score >= 60,
+                            isContinuation ? "" : "\u6276\u6b63",
+                            isContinuation ? "" : item.Name,
+                            item.Unit,
+                            item.ValueText,
+                            recommendation.ConvertedValueText,
+                            recommendation.QuotaCode,
+                            recommendation.QuotaName,
+                            recommendation.QuotaUnit);
+                        if (isContinuation)
+                        {
+                            DataGridViewRow gridRow = resultGrid.Rows[gridRowIndex];
+                            gridRow.Cells["Correct"] = new DataGridViewTextBoxCell();
+                            gridRow.Cells["Correct"].Value = "";
+                            gridRow.Cells["Correct"].ReadOnly = true;
+                        }
+                        itemRowIndex++;
+                    }
                 }
             }
+            finally
+            {
+                resultGrid.ResumeLayout();
+            }
+
+            stopwatch.Stop();
 
             statusLabel.Text = String.Format(
                 CultureInfo.CurrentCulture,
-                "\u5df2\u8bfb\u53d6 {0} \u884cExcel\u5de5\u7a0b\u91cf\uff0c\u5b66\u4e60\u5e93 {1} \u6761\uff0c\u5b9a\u989d\u7d22\u5f15 {2} \u6761\uff0c\u6750\u6599\u7d22\u5f15 {3} \u6761\u3002\u9ed8\u8ba4\u52fe\u9009\u8f83\u53ef\u9760\u7684\u63a8\u8350\u3002",
+                "\u5df2\u8bfb\u53d6 {0} \u884cExcel\u5de5\u7a0b\u91cf\uff0c\u5b9a\u989d\u7c7b\u578b\uff1a{1}\uff0c\u5bf9\u5e94\u6846\u547d\u4e2d {2} \u884c\uff0c\u7d22\u5f15\u68c0\u7d22 {3} \u884c\uff0c\u7a7a\u7ed3\u679c {4} \u884c\uff0c\u91cd\u590d\u590d\u7528 {5} \u884c\uff0c\u8017\u65f6 {6} ms\u3002",
                 selection.Items.Count,
-                records.Count,
-                searchIndex.QuotaCount,
-                searchIndex.MaterialCount);
+                categoryFilter,
+                stats.MappingHits,
+                stats.IndexSearches,
+                stats.EmptyRows,
+                stats.CacheHits,
+                stopwatch.ElapsedMilliseconds);
         }
 
-        private List<RecommendationRow> BuildRecommendations(ExcelQuantityItem item)
+        private string SelectedQuotaCategory
         {
-            List<RecommendationRow> mapped = mappingStore.Find(item);
+            get
+            {
+                return quotaCategoryCombo == null || quotaCategoryCombo.SelectedItem == null
+                    ? "\u9884\u7b97\u5b9a\u989d"
+                    : Convert.ToString(quotaCategoryCombo.SelectedItem, CultureInfo.CurrentCulture);
+            }
+        }
+
+        private static string BuildBatchCacheKey(ExcelQuantityItem item, string categoryFilter)
+        {
+            return TextMatcher.Normalize(item == null ? "" : item.Name) + "|" + TextMatcher.Normalize(item == null ? "" : item.Unit) + "|" + TextMatcher.Normalize(categoryFilter);
+        }
+
+        private static List<RecommendationRow> CloneRecommendationsForItem(ExcelQuantityItem item, List<RecommendationRow> source)
+        {
+            List<RecommendationRow> rows = new List<RecommendationRow>();
+            foreach (RecommendationRow original in source)
+            {
+                RecommendationRow row = new RecommendationRow();
+                row.Item = item;
+                row.Record = original.Record;
+                row.QuotaCode = original.QuotaCode;
+                row.QuotaName = original.QuotaName;
+                row.QuotaUnit = original.QuotaUnit;
+                row.ConvertedValueText = String.IsNullOrWhiteSpace(original.QuotaUnit)
+                    ? (item == null ? original.ConvertedValueText : item.ValueText)
+                    : ConvertQuantityForIndex(item == null ? "" : item.ValueText, item == null ? "" : item.Unit, original.QuotaUnit);
+                row.Score = original.Score;
+                row.Reason = original.Reason;
+                row.Source = original.Source;
+                row.TargetKind = original.TargetKind;
+                row.BoxId = original.BoxId;
+                rows.Add(row);
+            }
+            return rows;
+        }
+
+        private List<RecommendationRow> BuildRecommendations(ExcelQuantityItem item, string categoryFilter, RecommendationBatchStats stats)
+        {
+            List<RecommendationRow> mapped = mappingStore.Find(item, categoryFilter, searchIndex);
             if (mapped.Count > 0)
             {
+                stats.MappingHits++;
                 return mapped;
             }
 
-            List<RecommendationRow> indexed = searchIndex.Search(item);
+            stats.IndexSearches++;
+            List<RecommendationRow> indexed = searchIndex.Search(item, categoryFilter);
             if (indexed.Count > 0)
             {
                 return indexed;
-            }
-
-            RecommendationRow best = BuildRecommendation(item);
-            if (!String.IsNullOrWhiteSpace(best.QuotaCode))
-            {
-                return new List<RecommendationRow> { best };
             }
 
             RecommendationRow empty = new RecommendationRow();
@@ -513,6 +605,7 @@ namespace RecoQuotaRecommend
             empty.Reason = "\u672a\u5339\u914d\u5230\u5b9a\u989d\uff0c\u8bf7\u4eba\u5de5\u6276\u6b63";
             empty.Source = "empty";
             empty.TargetKind = "quota";
+            stats.EmptyRows++;
             return new List<RecommendationRow> { empty };
         }
 
@@ -1518,6 +1611,14 @@ namespace RecoQuotaRecommend
             public int Score;
         }
 
+        private sealed class RecommendationBatchStats
+        {
+            public int MappingHits;
+            public int IndexSearches;
+            public int EmptyRows;
+            public int CacheHits;
+        }
+
         private sealed class CellValue
         {
             public string Text;
@@ -1609,6 +1710,8 @@ namespace RecoQuotaRecommend
     {
         private readonly List<IndexQuota> quotas = new List<IndexQuota>();
         private readonly List<IndexMaterial> materials = new List<IndexMaterial>();
+        private readonly Dictionary<string, List<IndexQuota>> quotaTokenIndex = new Dictionary<string, List<IndexQuota>>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, IndexQuota> quotasByCode = new Dictionary<string, IndexQuota>(StringComparer.OrdinalIgnoreCase);
 
         public int QuotaCount { get { return quotas.Count; } }
         public int MaterialCount { get { return materials.Count; } }
@@ -1636,9 +1739,15 @@ namespace RecoQuotaRecommend
             return store;
         }
 
-        public List<RecommendationRow> Search(ExcelQuantityItem item)
+        public List<RecommendationRow> Search(ExcelQuantityItem item, string categoryFilter)
         {
-            List<ScoredQuota> quotaHits = quotas
+            List<IndexQuota> candidates = GetQuotaCandidates(item, categoryFilter);
+            if (candidates.Count == 0)
+            {
+                return new List<RecommendationRow>();
+            }
+
+            List<ScoredQuota> quotaHits = candidates
                 .Select(q => new ScoredQuota { Quota = q, Score = ScoreQuota(item, q) })
                 .Where(q => q.Score >= 55)
                 .OrderByDescending(q => q.Score)
@@ -1658,6 +1767,23 @@ namespace RecoQuotaRecommend
                 .OrderByDescending(r => r.Score)
                 .Take(4)
                 .ToList();
+        }
+
+        public bool IsMappingTargetAllowed(string targetKind, string code, string categoryFilter)
+        {
+            string kind = String.IsNullOrWhiteSpace(targetKind) ? QuotaEntry.GuessKind(code) : targetKind;
+            if (!String.Equals(kind, "quota", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            IndexQuota quota;
+            if (!quotasByCode.TryGetValue((code ?? "").Trim(), out quota))
+            {
+                return false;
+            }
+
+            return CategoryAllowed(quota.BookCategory, categoryFilter);
         }
 
         private void LoadFiles(string quotaPath, string materialPath)
@@ -1688,8 +1814,14 @@ namespace RecoQuotaRecommend
                     if (!String.IsNullOrWhiteSpace(quota.QuotaCode))
                     {
                         quotas.Add(quota);
+                        if (!quotasByCode.ContainsKey(quota.QuotaCode.Trim()))
+                        {
+                            quotasByCode[quota.QuotaCode.Trim()] = quota;
+                        }
                     }
                 }
+
+                BuildQuotaTokenIndex();
             }
 
             if (File.Exists(materialPath))
@@ -1716,6 +1848,111 @@ namespace RecoQuotaRecommend
                     }
                 }
             }
+        }
+
+        private void BuildQuotaTokenIndex()
+        {
+            quotaTokenIndex.Clear();
+            foreach (IndexQuota quota in quotas)
+            {
+                foreach (string token in QuotaIndexTokens(quota))
+                {
+                    List<IndexQuota> bucket;
+                    if (!quotaTokenIndex.TryGetValue(token, out bucket))
+                    {
+                        bucket = new List<IndexQuota>();
+                        quotaTokenIndex[token] = bucket;
+                    }
+                    bucket.Add(quota);
+                }
+            }
+        }
+
+        private static IEnumerable<string> QuotaIndexTokens(IndexQuota quota)
+        {
+            string text = String.Join(" ", new string[] { quota.QuotaName, quota.WorkContent, quota.SectionName, quota.Specialty });
+            foreach (string token in TextMatcher.Keywords(text).Distinct())
+            {
+                if (UseTokenForCandidateLookup(token))
+                {
+                    yield return token;
+                }
+            }
+        }
+
+        private List<IndexQuota> GetQuotaCandidates(ExcelQuantityItem item, string categoryFilter)
+        {
+            HashSet<IndexQuota> candidates = new HashSet<IndexQuota>();
+            foreach (string token in CandidateLookupTokens(item.Name))
+            {
+                List<IndexQuota> bucket;
+                if (!quotaTokenIndex.TryGetValue(token, out bucket))
+                {
+                    continue;
+                }
+
+                foreach (IndexQuota quota in bucket)
+                {
+                    if (CategoryAllowed(quota.BookCategory, categoryFilter))
+                    {
+                        candidates.Add(quota);
+                    }
+                }
+            }
+
+            return candidates.ToList();
+        }
+
+        private static IEnumerable<string> CandidateLookupTokens(string quantityName)
+        {
+            string normalized = TextMatcher.Normalize(quantityName).Replace(" ", "");
+            if (UseTokenForCandidateLookup(normalized))
+            {
+                yield return normalized;
+            }
+
+            foreach (string token in TextMatcher.Keywords(quantityName).Distinct())
+            {
+                if (UseTokenForCandidateLookup(token))
+                {
+                    yield return token;
+                }
+            }
+        }
+
+        private static bool UseTokenForCandidateLookup(string token)
+        {
+            if (String.IsNullOrWhiteSpace(token) || token.Length < 2)
+            {
+                return false;
+            }
+
+            return !TextMatcher.IsNumberLikeToken(token);
+        }
+
+        private static bool CategoryAllowed(string bookCategory, string categoryFilter)
+        {
+            string category = (bookCategory ?? "").Trim();
+            string filter = (categoryFilter ?? "").Trim();
+            if (String.IsNullOrWhiteSpace(filter) || String.Equals(filter, "\u5168\u90e8", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (String.Equals(category, filter, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return IsCommonCategory(category);
+        }
+
+        private static bool IsCommonCategory(string category)
+        {
+            return String.IsNullOrWhiteSpace(category) ||
+                String.Equals(category, "\u57fa\u672c\u5b9a\u989d", StringComparison.OrdinalIgnoreCase) ||
+                String.Equals(category, "\u8865\u5145\u5b9a\u989d", StringComparison.OrdinalIgnoreCase) ||
+                String.Equals(category, "\u8865\u5145\u5355\u4ef7\u5206\u6790", StringComparison.OrdinalIgnoreCase);
         }
 
         private static int ScoreQuota(ExcelQuantityItem item, IndexQuota quota)
@@ -2114,15 +2351,21 @@ namespace RecoQuotaRecommend
             return store;
         }
 
-        public List<RecommendationRow> Find(ExcelQuantityItem item)
+        public List<RecommendationRow> Find(ExcelQuantityItem item, string categoryFilter, SearchIndexStore searchIndex)
         {
             ScoredBox best = null;
             foreach (MappingBox box in boxes)
             {
+                List<MappingTarget> allowedTargets = FilterTargetsByCategory(box.Targets, categoryFilter, searchIndex);
+                if (allowedTargets.Count == 0)
+                {
+                    continue;
+                }
+
                 int score = box.Score(item);
                 if (score >= 70 && (best == null || score > best.Score))
                 {
-                    best = new ScoredBox { Box = box, Score = score };
+                    best = new ScoredBox { Box = box, Score = score, AllowedTargets = allowedTargets };
                 }
             }
 
@@ -2131,11 +2374,37 @@ namespace RecoQuotaRecommend
                 return new List<RecommendationRow>();
             }
 
-            return best.Box.Targets
+            return best.AllowedTargets
                 .OrderBy(t => TargetSortRank(t.TargetKind, t.Code))
                 .ThenBy(t => t.Code ?? "", StringComparer.OrdinalIgnoreCase)
                 .Select(t => t.ToRecommendation(item, best.Score, best.Box.BoxId))
                 .ToList();
+        }
+
+        private static List<MappingTarget> FilterTargetsByCategory(List<MappingTarget> targets, string categoryFilter, SearchIndexStore searchIndex)
+        {
+            List<MappingTarget> quotaTargets = targets
+                .Where(t => String.Equals(String.IsNullOrWhiteSpace(t.TargetKind) ? QuotaEntry.GuessKind(t.Code) : t.TargetKind, "quota", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            List<MappingTarget> materialTargets = targets
+                .Where(t => !String.Equals(String.IsNullOrWhiteSpace(t.TargetKind) ? QuotaEntry.GuessKind(t.Code) : t.TargetKind, "quota", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (quotaTargets.Count == 0)
+            {
+                return materialTargets;
+            }
+
+            List<MappingTarget> allowedQuotaTargets = quotaTargets
+                .Where(t => searchIndex != null && searchIndex.IsMappingTargetAllowed(t.TargetKind, t.Code, categoryFilter))
+                .ToList();
+            if (allowedQuotaTargets.Count == 0)
+            {
+                return new List<MappingTarget>();
+            }
+
+            allowedQuotaTargets.AddRange(materialTargets);
+            return allowedQuotaTargets;
         }
 
         public void Accept(List<RecommendationRow> rows)
@@ -2415,6 +2684,7 @@ namespace RecoQuotaRecommend
         {
             public MappingBox Box;
             public int Score;
+            public List<MappingTarget> AllowedTargets;
         }
     }
 
@@ -2811,6 +3081,11 @@ namespace RecoQuotaRecommend
             decimal value;
             return Decimal.TryParse((text ?? "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value);
         }
+
+        public static bool IsNumberLikeToken(string text)
+        {
+            return IsNumberLike(text);
+        }
     }
 
     internal static class LearningStore
@@ -2859,6 +3134,31 @@ namespace RecoQuotaRecommend
             }
 
             return records;
+        }
+
+        public static void BackupLearningFileIfNeeded()
+        {
+            try
+            {
+                string path = FindLearningPath();
+                if (String.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                {
+                    return;
+                }
+
+                string directory = Path.GetDirectoryName(path);
+                if (Directory.GetFiles(directory, "learning.jsonl.*.bak").Length > 0)
+                {
+                    return;
+                }
+
+                string marker = Path.Combine(directory, "learning.jsonl." + DateTime.Now.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture) + ".bak");
+                File.Copy(path, marker, false);
+            }
+            catch (Exception ex)
+            {
+                QuotaRecommendPanel.Log("Backup learning.jsonl failed: " + ex.Message);
+            }
         }
 
         public static void ReplaceCorrections(ExcelQuantityItem item, List<QuotaEntry> quotas)

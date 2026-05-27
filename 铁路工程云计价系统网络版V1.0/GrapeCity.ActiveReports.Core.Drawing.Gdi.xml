@@ -1,0 +1,282 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>GrapeCity.ActiveReports.Core.Drawing.Gdi</name>
+    </assembly>
+    <members>
+        <member name="T:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas">
+            <summary>
+            Implements drawing canvas as a wrapper around System.Drawing.Graphics
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.#ctor(System.Drawing.Graphics,GrapeCity.ActiveReports.Drawing.Core.IFontsFactory,GrapeCity.ActiveReports.Rendering.Image.IImageConverterService,GrapeCity.ActiveReports.Drawing.Core.LineBreakingAlgorithm)">
+            <summary>
+            Creates a new instance of GraphicsCanvas
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.CreateHatchBrush(GrapeCity.ActiveReports.Drawing.HatchStyleEx,System.Drawing.Color,System.Drawing.Color)">
+            <summary>
+            Initializes a new <see cref="T:GrapeCity.ActiveReports.Drawing.BrushEx"/> using specified hatch pattern and colors.
+            </summary>
+            <param name="hatchStyle">The brush hatch style.</param>
+            <param name="foreColor">The foreground color.</param>
+            <param name="backColor">The background color.</param>
+            <returns>The hatch brush.</returns>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.CreateSolidBrush(System.Drawing.Color)">
+            <summary>
+            Initializes a new <see cref="T:GrapeCity.ActiveReports.Drawing.BrushEx"/> object of specified color.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.CreateImage(GrapeCity.ActiveReports.Extensibility.Rendering.ImageInfo,System.String)">
+            <summary>
+            Initializes a new instance of <see cref="T:GrapeCity.ActiveReports.Drawing.ImageEx"/> and supplies a unique id for which the 
+            <see cref="T:GrapeCity.ActiveReports.Drawing.IDrawingCanvas"/> can implement caching.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.CreateImage(GrapeCity.ActiveReports.Extensibility.Rendering.ImageInfo)">
+            <summary>
+            Initializes a new instance of <see cref="T:GrapeCity.ActiveReports.Drawing.ImageEx"/>.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.DrawImage(GrapeCity.ActiveReports.Drawing.ImageEx,System.Single,System.Single,System.Single,System.Single,System.Single)">
+            <summary>
+            Draws the specified Image object at the specified location and with the specified size with the specified transparency (0..100, where 0 - is transparent).
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.DrawLine(GrapeCity.ActiveReports.Drawing.PenEx,System.Drawing.PointF,System.Drawing.PointF)">
+            <summary>
+            Draws a line connecting two <see cref="T:System.Drawing.PointF"/> structures.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.DrawString(System.String,GrapeCity.ActiveReports.Drawing.FontInfo,GrapeCity.ActiveReports.Drawing.BrushEx,System.Drawing.RectangleF,GrapeCity.ActiveReports.Drawing.StringFormatEx)">
+            <summary>
+            Draws the specified text string in the specified rectangle with the specified Brush and Font 
+            objects using the formatting attributes of the specified StringFormat object.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.TextRenderingHint">
+            <summary>
+            Specifies the quality of text rendering.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.SmoothingMode">
+            <summary>
+            Specifies the rendering quality for this GraphicsCanvas object.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.DrawRectangle(GrapeCity.ActiveReports.Drawing.PenEx,System.Drawing.RectangleF)">
+            <summary>
+            Draws a rectangle rectangle specified by a RectangleF structure.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.FillRectangle(GrapeCity.ActiveReports.Drawing.BrushEx,System.Drawing.RectangleF)">
+            <summary>
+            Fills the interior of a rectangle specified by a RectangleF structure.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.ClipBounds">
+            <summary>
+            Gets a RectangleF structure that bounds the clipping region of this Graphics object.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.IntersectClip(System.Drawing.RectangleF)">
+            <summary>
+            Sets the clipping region of this Graphics object to the rectangle specified by a RectangleF structure.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.IntersectClip(GrapeCity.ActiveReports.Drawing.PathEx)">
+            <summary>
+            Sets the clipping region of this Graphics object to the shape specified by a IDDPath structure.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.DrawEllipse(GrapeCity.ActiveReports.Drawing.PenEx,System.Drawing.RectangleF)">
+            <summary>
+            Draws an ellipse defined by a bounding <see cref="T:System.Drawing.RectangleF" />.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.FillEllipse(GrapeCity.ActiveReports.Drawing.BrushEx,System.Drawing.RectangleF)">
+            <summary>
+            Fills the interior of an ellipse defined by a bounding rectangle specified by a <see cref="T:System.Drawing.RectangleF" /> structure.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.DrawLines(GrapeCity.ActiveReports.Drawing.PenEx,System.Drawing.PointF[])">
+            <summary>
+            Draws a series of line segments that connect an array of <see cref="T:System.Drawing.PointF" /> structures.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.DrawPolygon(GrapeCity.ActiveReports.Drawing.PenEx,System.Drawing.PointF[])">
+            <summary>
+            Draws a polygon defined by an array of <see cref="T:System.Drawing.PointF" /> structures
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.FillPolygon(GrapeCity.ActiveReports.Drawing.BrushEx,System.Drawing.PointF[])">
+            <summary>
+            Fills the interior of a polygon defined by an array of points specified by <see cref="T:System.Drawing.PointF" /> structures
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.DrawAndFillPath(GrapeCity.ActiveReports.Drawing.PenEx,GrapeCity.ActiveReports.Drawing.BrushEx,GrapeCity.ActiveReports.Drawing.PathEx)">
+            <summary>
+            Fills the path supplied with bruh, and strokes it with pen. If brush or pen is null, corresponding
+            operation is omitted.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.Transform">
+            <summary>
+            Gets or sets the world transformation for this object
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen">
+            <summary>
+            Defines an object used to draw lines and curves. This class can't be inherited
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen.#ctor(System.Drawing.Pen,System.Single)">
+            <summary>
+            Creates a new instance of <see cref="T:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen"/> as a wrapper around specified <see cref="T:System.Drawing.Pen"/>
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen.#ctor(System.Drawing.Color,System.Single,System.Single)">
+            <summary>
+            Creates a new instance of <see cref="T:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen"/> using specified color and width
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen.Clone">
+            <summary>Creates an exact copy of this <see cref="T:GrapeCity.ActiveReports.Drawing.PenEx" /> object.</summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen.Color">
+            <summary>Gets or sets the color of this <see cref="T:GrapeCity.ActiveReports.Drawing.PenEx" /> object.</summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen.Width">
+            <summary>Gets or sets the width of this <see cref="T:GrapeCity.ActiveReports.Drawing.PenEx" /> object.</summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen.DashPattern">
+            <summary>
+            Gets or sets an array of custom dashes and spaces used for dashed lines drawn with this <see cref="T:PenEx" /> object.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen.DashStyle">
+            <summary>
+            Gets or sets the style used for dashed lines drawn with this <see cref="T:GrapeCity.ActiveReports.Drawing.PenEx" /> object.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen.Alignment">
+            <summary>
+            Gets or sets the alignment for this <see cref="T:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen" /> object.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen.StartCap">
+            <summary>
+            Gets or sets the cap style used at the beginning of lines drawn with this <see cref="T:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen" /> object.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen.EndCap">
+            <summary>
+            Gets or sets the cap style used at the end of lines drawn with this <see cref="T:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen" /> object.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen.DashCap">
+            <summary>
+            Gets or sets the cap style used at the beginning and the end of the dashes that make up dashed lines drawn with this <see cref="T:PenEx" /> object.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen.LineJoin">
+            <summary>
+            Gets or sets the join style for the ends of two consecutive lines drawn with this Pen.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen._disposed">
+            <summary>
+            Specifies that the instance has been disposed
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsPen.CheckDisposed">
+            <summary>
+            Helper method that checks if the instance has been disposed and throws exception in that case.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.GraphicsImage.Size">
+            <summary>
+            Gets size of image in twips.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvas.Validate">
+            <summary>
+            Checks if the instance has been already disposed
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvasFactory">
+            <summary>
+            Provides capabilities for retrieving drawing graphics canvas impl.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvasFactory.CanvasSettings">
+            <summary>
+            Setting to create a new canvas.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvasFactory.CanvasSettings.GraphicsUnit">
+            <summary>
+            The graphics page scale to twips if it should be modified.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvasFactory.Create(System.Drawing.Graphics,GrapeCity.ActiveReports.Drawing.Core.IFontsFactory,GrapeCity.ActiveReports.Drawing.Gdi.GraphicsCanvasFactory.CanvasSettings)">
+            <summary>
+            Creates graphics canvas for provided native graphics object.
+            </summary>
+            <returns>IDrawingCanvas impl for native graphics.</returns>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsExtensions">
+            <summary>
+            Some usefull extension methods. For internal use only.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsExtensions.TECHNOLOGY">
+            <summary>
+            Device classification
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Drawing.Gdi.GraphicsExtensions.IsPrinter(System.Drawing.Graphics)">
+            <summary>
+            Is printer? For internal use only.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Drawing.Gdi.LinuxFixedCanvas">
+            <summary>
+            Performs couple of tricks to fix bugs of mono's gdiplus implementation: PageScaling, PageUnit and SetClip.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Rendering.GdiGcTextGraphics">
+            <summary>
+            Implementation of the <see cref="T:GrapeCity.Documents.Drawing.GcGraphics"/> that draws text to the <see cref="T:System.Drawing.Graphics"/> object.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Rendering.GdiTextDrawingCanvas">
+            <summary>
+            Draw text using GrapeCity.Document's text layout on to the System.Drawing.Graphics
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Rendering.GraphicsExtensions">
+            <summary> Extends <see cref="T:System.Drawing.Graphics"/> with some useful methods.</summary>
+            <remarks> For internal use.</remarks>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Rendering.GraphicsExtensions.GetTwipsInUnit(System.Drawing.Graphics)">
+            <summary> Gets twips per graphics's unit. For internal use.</summary>
+            <remarks> For internal use.</remarks>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Rendering.GraphicsExtensions.GetDpi(System.Drawing.Graphics)">
+            <summary> Gets the current graphics resolution in dots per inch. </summary>
+            <remarks> For internal use.</remarks>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Rendering.PathExtensions">
+            <summary>
+            Converts path.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Rendering.PathExtensions.ToGdi(GrapeCity.ActiveReports.Drawing.PathEx)">
+            <summary>
+            To GDI path.
+            </summary>
+        </member>
+    </members>
+</doc>

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+ <versioninfo v="5.1.0.1208">
+
+
+	<updateinfo>
+		<info>测试,请忽略</info>
+		<type>FILE</type>
+		<fileserver>http://www.tlgczj.com/files/softwareupdate/rejj/single/1.txt</fileserver>
+		<fileclient>\N1.txt</fileclient>
+		<oldfilename>\1.txt</oldfilename>
+		<version>5.1.0.1208</version>
+		
+		<info>测试,请忽略</info>
+		<type>EXE</type>
+		<fileserver>http://www.tlgczj.com/files/softwareupdate/rejj/single/N测试文件请忽略.exe</fileserver>
+		<fileclient>\N测试文件请忽略.exe</fileclient>
+		<oldfilename>测试文件请忽略.exe</oldfilename>
+		<version>5.0.1.1122</version>
+		
+	</updateinfo>
+
+</versioninfo>

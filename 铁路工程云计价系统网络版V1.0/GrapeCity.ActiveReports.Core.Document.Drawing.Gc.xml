@@ -1,0 +1,2306 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>GrapeCity.ActiveReports.Core.Document.Drawing.Gc</name>
+    </assembly>
+    <members>
+        <member name="T:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcCanvasItemRenderer">
+            <summary>
+            For internal use only.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcCanvasItemRenderer.WithEudc">
+            <summary>
+            For internal use only. Loads EUDC settings from Windows registry.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcCanvasItemRenderer.FontStyleEmulation">
+            <summary>
+            For internal use only. Allows fonts bold/italic emulation.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcCanvasItemRenderer.AllowIvs">
+            <summary>
+            For internal use only. Allows IVS characters in output.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcCanvasItemRenderer.TextLayoutService">
+            <summary>
+            For internal use only. Gets corresponding service.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcCanvasItemRenderer.ImagePersistenceService">
+            <summary>
+            For internal use only. Gets corresponding service.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcCanvasItemRenderer.OnItemStart">
+            <summary>
+            For internal use only. Calls before any canvas item.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcCanvasItemRenderer.BeforeItemStart">
+            <summary>
+            For internal use only. Calls before any canvas item.
+            If return true canvas item will be ignored in render.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcCanvasItemRenderer.OnItemEnd">
+            <summary>
+            For internal use only. Calls after any canvas item.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcCanvasItemRenderer.ConvertToOpaque">
+            <summary>
+            For internal use only. Converts all transparent images to opaque.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcCanvasItemRenderer.#ctor(GrapeCity.Documents.Drawing.GcGraphics,GrapeCity.ActiveReports.Core.Document.Drawing.Gc.IDocumentFontsFactory,GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcCanvasItemRenderer.RendererSettings)">
+            <summary>
+            For internal use only.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcCanvasItemRendererBuilder">
+            <summary>
+            Creates new canvas renderer for cross-platform mode.
+            For internal use only.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcCanvasItemRendererBuilder.Create(System.Drawing.Graphics,System.Collections.Generic.IDictionary{System.Int32,GrapeCity.Documents.Drawing.IImage},System.Action{System.String,System.Drawing.RectangleF},GrapeCity.ActiveReports.Core.Document.Drawing.Gc.IDocumentFontsFactory)">
+            <summary>
+            For internal use only.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcImagePersistenceService">
+            <summary>
+            For internal use only.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.LineBreakingAlgorithm">
+            <summary>
+            Choose line breaking algorithm.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.LineBreakingAlgorithm.Unicode">
+            <summary>
+            All rules from https://unicode.org/reports/tr14/.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.LineBreakingAlgorithm.Legacy">
+            <summary>
+            GDI-like.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcTextLayoutService">
+            <summary>
+            For internal use only.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcTextLayoutService.AlignLastTabToTheRight(System.String,GrapeCity.Documents.Text.TextLayout,GrapeCity.Documents.Text.TextFormat)">
+            <summary>
+            Implements dirty hack to make page numbers in toc be aligned to the right.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcGdiGraphics">
+            <summary>
+            It is bridge between GcDoc and GDI+ which allows to draw in viewers.
+            Limitations: doesn't support some pen alignments, smoothing...
+            For internal use only.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcGdiGraphics.#ctor(System.Drawing.Graphics)">
+            <summary>
+            Creates new bridge.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcGdiGraphics.IsVisible(System.Drawing.RectangleF)">
+            <summary>
+            Can be used for performance optimization.
+            </summary>
+            <param name="bounds">Bounds to check - if it fits clipped area.</param>
+            <returns><b>true</b> if the bounds intersects clipped area.</returns>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcGdiGraphics.GcGdiImage">
+            <summary>
+            Wrapper over GDI+ Image class.
+            Should be used to avoid performance degradation.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcGdiGraphics.TECHNOLOGY">
+            <summary>
+            Device classification
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.GcGdiGraphics.IsPrinter(System.Drawing.Graphics)">
+            <summary>
+            Is printer? For internal use only.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.IDocumentFontsFactory">
+            <summary>
+            For internal use only.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.IDocumentFontsFactory.GetFonts(System.Drawing.Font)">
+            <summary>
+            Map fonts.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Core.Document.Drawing.Gc.IDocumentFontsFactory.Scope">
+            <summary>
+            Allows access to system fonts or not.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.DefaultRenderContext">
+            <summary>
+            Base class that contains current context information (handle table, selected object, etc..) during the rendering of a metafile.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.DefaultRenderContext.ContextState">
+            <summary>
+            Used for stack save/restore support to store context information that can be saved to a stack.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.DefaultRenderContext.ContextState.#ctor(GrapeCity.Documents.Drawing.Brush,GrapeCity.Documents.Metafile.FontDescriptor,GrapeCity.Documents.Drawing.Pen,GrapeCity.Documents.Metafile.Tools.MapMode,System.Drawing.Color,System.Drawing.Color,GrapeCity.Documents.Metafile.Tools.GdiTextAlign,GrapeCity.Documents.Metafile.Tools.GdiBackgroundFillMode,GrapeCity.Documents.Metafile.Tools.GdiPolyFillMode,System.Drawing.Size,System.Drawing.Size,System.Drawing.Point,System.Drawing.Point,GrapeCity.Documents.Metafile.Tools.ROP2,System.Int32)">
+            <summary>
+            Initializes a new instance of the <see cref="T:GrapeCity.Documents.Metafile.DefaultRenderContext.ContextState"/> class with the specified values.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.DefaultRenderContext.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:GrapeCity.Documents.Metafile.DefaultRenderContext"/> class.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.DefaultRenderContext.Save">
+            <summary>
+            Saves the current state of this context object by pushing it onto a stack.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.DefaultRenderContext.Restore(System.Int32)">
+            <summary>
+            Restores a previously saved state by popping it off the stack.
+            </summary>
+            <param name="relative">
+            Specifies the saved state to be restored. If this parameter is positive, nSavedDC represents a specific instance of the state to be restored. If this parameter is negative, nSavedDC represents an instance relative to the current state. For example, ? restores the most recently saved state. 
+            </param>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.DefaultRenderContext.SaveHandleTable">
+            <summary>
+            Save the current handle table to the stack.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.DefaultRenderContext.RestoreHandleTable">
+            <summary>
+            Restore the current handle table from the stack.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.HandleTable">
+            <summary>
+            Returns the current table of GDIObjects (pens, brushes, fonts, etc..).
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.CurrentPath">
+            <summary>
+            The current <see cref="T:GrapeCity.Documents.Imaging.GraphicsPath"/>.
+            </summary>
+            <remarks>
+            Use <see cref="P:GrapeCity.Documents.Metafile.DefaultRenderContext.IsPathUnderConstruction"/> to set or determine whether the path is still being constructed.
+            May return null.
+            </remarks>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.IsPathUnderConstruction">
+            <summary>
+            Sets or determines whether the <see cref="P:GrapeCity.Documents.Metafile.DefaultRenderContext.CurrentPath"/> is still being constructed.
+            </summary>
+            <remarks>
+            Some of the metafile records classes (such as PolyShape) render differently depending whether a path is under construction or not.
+            For example, PolyBezier16 adds one or more Bezier curves to the current path if the path is under construction (between BeginPath and EndPath records).
+            However, if no path is under construction PolyBezier16 draws one or more Bezier curves.
+            </remarks>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.CurrentPoint">
+            <summary>
+            The current position that applicable drawing operations will use (such as LineTo, MoveToEx, PolyBezierTo,etc..).
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.Frame">
+            <summary>
+            The frame of the source metafile.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.Transform">
+            <summary>
+            Gets the current world transformation for this object.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.ScaleTransform">
+            <summary>
+            Gets or sets the current scale transformation for this object.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.Pen">
+            <summary>
+            Returns a reference to the currently selected pen.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.Font">
+            <summary>
+            Returns the currently selected font.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.Brush">
+            <summary>
+            Returns the currently selected brush.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.Rop2">
+            <summary>
+            Returns the currently selected brush.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.TextColor">
+            <summary>
+            Sets or returns the color that should be used to draw text.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.BackColor">
+            <summary>
+            Sets or returns the color that should be used to draw the background.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.TextAlign">
+            <summary>
+            Sets or returns alignment options for text.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.BackgroundFillMode">
+            <summary>
+            The SetBkMode function sets the background mix mode of the specified device context. The background mix mode is used with text, hatched brushes, and pen styles that are not solid lines. 
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.PolyFillMode">
+            <summary>
+            The SetBkMode function sets the background mix mode of the specified device context. The background mix mode is used with text, hatched brushes, and pen styles that are not solid lines. 
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.WindowExtent">
+            <summary>
+            <see cref="P:GrapeCity.Documents.Metafile.IRenderDevice.WindowExtent"/>
+            </summary>
+            <value></value>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.ViewportExtent">
+            <summary>
+            <see cref="P:GrapeCity.Documents.Metafile.IRenderDevice.ViewportExtent"/>
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.DefaultRenderContext.TransformedPenWidth">
+            <summary>
+            Returns the with of the current pen transformed based on the current horizontal scale transform, and converted to inches.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.DefaultRenderContext.MapModeToInchScaleX">
+            <summary>
+            Returns the scaling factor to make horizontal units inches based on the current map mode.
+            </summary>
+            <returns></returns>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.DefaultRenderContext.MapModeToInchScaleY">
+            <summary>
+            Returns the scaling factor to make horizontal units inches based on the current map mode.
+            </summary>
+            <returns></returns>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.DefaultRenderContext.ScaleTransformPoint(System.Drawing.PointF)">
+            <summary>
+            Transform point using the current scale transformation.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.DefaultRenderContext.ScaleTransformPoints(System.Drawing.PointF[])">
+            <summary>
+            Transform an array of points using the current scale transformation.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.DefaultRenderContext.TransformPoint(System.Drawing.PointF)">
+            <summary>
+            Transforms point from the world coordinate space to the page coordinate space using the current transformation of this object.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.DefaultRenderContext.TransformPointInternal(System.Drawing.PointF)">
+            <summary>
+            Transforms point from the world coordinate space to the page coordinate space using the current transformation of this object.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.DefaultRenderContext.TransformPoints(System.Drawing.PointF[])">
+            <summary>
+            Transforms an array of points from the world coordinate space to the page coordinate space using the current transformation of this object.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.DefaultRenderContext.TransformRectangle(System.Drawing.RectangleF)">
+            <summary>
+            Transforms an the specified rectangle from the world coordinate space to the page coordinate space using the current transformation of this object.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.DefaultRenderContext.TransformPointsToInches(System.Drawing.PointF[])">
+            <summary>
+            Transforms the points to inches (as PDFRender is using Inches #*!@).
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.DefaultRenderContext.TransformPointScaleOnly(System.Drawing.PointF)">
+            <summary>
+            Same as above but used for font height scaling, so no remapping to inches of offsets.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.AlphaBlend">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.AlphaBlend"/> record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.Arc">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.Arc"/> record.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.Arc.NormalizePoint(System.Drawing.PointF[],System.Drawing.PointF@,System.Double@,System.Double@)">
+            <summary>
+            Normalizes a point with respect to the box whose corners are passed in
+            "corners". The normalized coordinates are stored in "x" and "y".
+            </summary>
+            <param name="corners"></param>
+            <param name="point"></param>
+            <param name="x"></param>
+            <param name="y"></param>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.Arc.ScaleNormalizedPoint(System.Drawing.PointF[],System.Double,System.Double,System.Drawing.PointF@)">
+            <summary>
+            Scales a normalized point (x, y) with respect to the box whose corners are
+            passed in "corners". The point is stored in "point". The normalized
+            coordinates (-1.0, -1.0) correspond to corners[0], the coordinates
+            (1.0, 1.0) correspond to corners[1].
+            </summary>
+            <param name="corners"></param>
+            <param name="x"></param>
+            <param name="y"></param>
+            <param name="point"></param>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.BackColor">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SetBKColor"/> record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.BeginPath">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.BeginPath"/> record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.BitBlt">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.BitBlt"/> record's data.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.ChangeClipRect">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.IntersectClipRect"/>, or the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.ExcludeClipRect"/> records' data.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.CloseFigure">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.CloseFigure"/> record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.CreateBrushIndirect">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.CreateBrushIndirect"/> record data.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.CreateBrushIndirect.LogBrush32">
+            <summary>
+            Represents the Win32 LOGBRUSH32 structure.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Emf.CreateBrushIndirect.LogBrush32.lbStyle">
+            <summary>
+            Specifies the brush style.
+            </summary>
+            <remarks>
+            If lbStyle is BS_DIBPATTERN, the lbHatch member contains a handle to a packed DIB. For more information, see discussion in lbHatch.
+            </remarks>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Emf.CreateBrushIndirect.LogBrush32.lbColor">
+            Specifies the color in which the brush is to be drawn. 
+            If lbStyle is BS_HATCHED or BS_SOLID, lbColor is a COLORREF color value. 
+            If lbStyle is the BS_HOLLOW or BS_PATTERN style, lbColor is ignored. 
+            If lbStyle is BS_DIBPATTERN or BS_DIBPATTERNPT, the low-order word of lbColor specifies whether the bmiColors members of the BITMAPINFO structure contain explicit red, green, blue (RGB) values or indexes into the currently realized logical palette. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Emf.CreateBrushIndirect.LogBrush32.lbHatch">
+            Specifies a hatch style. The meaning depends on the brush style defined by lbStyle. 
+            If lbStyle is BS_HATCHED, the lbHatch member specifies the orientation of the lines used to create the hatch. 
+            If lbStyle is BS_DIBPATTERN, the lbHatch member contains a handle to a packed DIB. 
+            If lbStyle is BS_DIBPATTERNPT, the lbHatch member contains a pointer to a packed DIB.
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.CreateDIBPatternBrushPT">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.CreateDIBPatternBrushPT"/> record.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.CreateDIBPatternBrushPT.#ctor(System.IO.BinaryReader,GrapeCity.Documents.Metafile.Emf.EmfRecordType,System.Int32)">
+            <summary>
+            Initializes a new instance of the CreateDIBPatternBrushPT class.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.CreateDIBPatternBrushPT.CreateBrush">
+            <summary>
+            Creates a new <see cref="T:System.Drawing.Brush"/> based on this records' bitmap.
+            </summary>
+            <returns></returns>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.CreateDIBPatternBrushPT.Render(GrapeCity.Documents.Metafile.IRenderDevice)">
+            <summary>
+            Adds the brush this record represents to the device's handle table.
+            </summary>
+            <param name="device"></param>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.CreatePen">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.CreatePen"/> record.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.CreatePen.#ctor(System.IO.BinaryReader,GrapeCity.Documents.Metafile.Emf.EmfRecordType,System.Int32)">
+            <summary>
+            Initializes a new instance of the <see cref="T:GrapeCity.Documents.Metafile.Emf.CreatePen"/> class.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.CreatePen.PenIndex">
+            <summary>
+            Returns the pen handle index. 
+            </summary>
+            <remarks>This is the ihPen member of the Win32 LOGPEN structure.</remarks>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.CreatePen.LogPen">
+            <summary>
+            Returns the LOGPEN representation of the pen.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.CreatePen.CreateNetPen">
+            <summary>
+            Creates a pen representation of this LogPen object.
+            </summary>
+            <remarks>The caller is responsible for disposing the returned pen.</remarks>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.CreatePen.DashStyleFromWin32PenStyles(GrapeCity.Documents.Metafile.Tools.Win32PenStyles)">
+            <summary>
+            Converts <see cref="T:GrapeCity.Documents.Metafile.Tools.Win32PenStyles"/> to <see cref="T:GrapeCity.Documents.Drawing.DashStyle"/>.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.DeleteObject">
+            <summary>
+            Handles the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.DeleteObject"/>
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.EmfHeader">
+            <summary>
+            Stores information for the EmfHeader or (same as Win32 ENHMETAHEADER struct).
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.EmfHeader.CalcDeviceDpiX">
+            <summary>
+            Calculates the device's DPI from the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfHeader._sizeDevice"/> and <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfHeader._sizeMillimeters"/> field values.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.EmfHeader.CalcDeviceDpiY">
+            <summary>
+            Calculates the device's DPI from the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfHeader._sizeDevice"/> and <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfHeader._sizeMillimeters"/> field values.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.EmfHeader.CalcDeviceDpmX">
+            <summary>
+            Calculates the device's DPM (dots per mm) from the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfHeader._sizeDevice"/> and <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfHeader._sizeMillimeters"/> field values.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.EmfHeader.CalcDeviceDpmY">
+            <summary>
+            Calculates the device's DPM (dots per mm) from the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfHeader._sizeDevice"/> and <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfHeader._sizeMillimeters"/> field values.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusBitmap">
+            <summary>
+            Handles the EmfPlusBitmap image.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusClear">
+            <summary>
+            Handles the EmfPlusClear record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusGraphicsObjectBase">
+            <summary>
+            The base class of all Emf+ graphics objects.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusGraphicsObjectBase.#ctor(GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusObjectType,System.Int32,System.Int64)">
+            <summary>
+            Allows derived classes to initialize an instance of <see cref="T:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusGraphicsObjectBase"/>.
+            </summary>
+            <param name="objectType">The type of the Emf+ object.</param>
+            <param name="dataSize">The size of the object data.</param>
+            <param name="position">Position of this record in the GDI comment data stream (used for identification purposes during debugging).</param>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusGraphicsObjectBase.ObjectType">
+            <summary>
+            The type of the Emf+ object.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusGraphicsObjectBase.DataSize">
+            <summary>
+            The size of the object data.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusGraphicsObjectBase.Position">
+            <summary>
+            Position of this record in the GDI comment data stream (used for identification purposes during debugging).
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusGraphicsObjectBase.Render(GrapeCity.Documents.Metafile.IRenderDevice)">
+            <summary>
+            Renders the object to the specified device or context.
+            </summary>
+            <param name="renderDevice">The device to render/draw to (e.g. draw a line or text).</param>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusImage">
+            <summary>
+            Handles the EmfPluseImage object.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusImage.MetafileSignature">
+            <summary>
+            A value that identifies the type of metafile. The value for an EMF+ metafile is 0xDBC01.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusImage.GraphicsVersion">
+            <summary>
+            Specifies the version of operating system graphics.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusImage.Type">
+            <summary>
+            Specifies the type of image data.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusImageBase">
+            <summary>
+            The base class for all Emf+ image from image data.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusImageBase.#ctor(GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusImageDataType,System.Int32,System.Int64)">
+            <summary>
+            Allows derived classes to initialize an instance of <see cref="T:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusImageBase"/>.
+            </summary>
+            <param name="imageType">The type of the image from image data.</param>
+            <param name="dataSize">The size of the image data.</param>
+            <param name="position">osition of this record in the GDI comment data stream (used for identification purposes during debugging).</param>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusImageBase.ImageType">
+            <summary>
+            The type of the image from image data.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusImageBase.DataSize">
+            <summary>
+            The size of the image data.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusImageBase.Position">
+            <summary>
+            osition of this record in the GDI comment data stream (used for identification purposes during debugging).
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusImageBase.Render(GrapeCity.Documents.Metafile.IRenderDevice)">
+            <summary>
+            Renders the record to the specified device or context.
+            </summary>
+            <param name="renderDevice">The device to render/draw to (e.g. draw a line or text).</param>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusMetafile">
+            <summary>
+            Handles the EmfPlusMetafile image.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusMetafile.MetafileDataType">
+            <summary>
+            Specifies the type of metafile that is embedded in the MetafileData field.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusMetafile.MetafileData">
+            <summary>
+            The data of the metafile.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusObject">
+            <summary>
+            Handles the EmfPlusObject record.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusObject.ObjectType">
+            <summary>
+            Specifies the type of object to be created by this record.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusObject.ObjectID">
+            <summary>
+            The index in the EMF+ Object Table to associate with the object created by this record.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusObject.IsContinues">
+            <summary>
+            Indicates that the object definition continues on in the next EmfPlusObject record. 
+            Return false in the final record that defines the object.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusRecordBase">
+            <summary>
+            Base class for Emf+ records.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusRecordBase.#ctor(GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusRecordType,System.UInt16,System.UInt32,System.Int64)">
+            <summary>
+            Allows derived classes to initialize an instance of <see cref="T:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusRecordBase"/>.
+            </summary>
+            <param name="recordType">The type of this record.</param>
+            <param name="recordFlags">Flags for the record.</param>
+            <param name="recordSize">Size of this record</param>
+            <param name="position">Position of this record in the GDI comment data stream (used for identification purposes during debugging).</param>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusRecordBase.Position">
+            <summary>
+            Position of this record in the GDI comment data stream (used for identification purposes during debugging).
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusRecordBase.RecordType">
+            <summary>
+            Returns a value indicating the type of EMF+ record this instance represents.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusRecordBase.RecordFlags">
+            <summary>
+            Return a value indicating the flags of the record.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusRecordBase.RecordSize">
+            <summary>
+            Returns the size in bytes of the data for this record object.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusRecordBase.Render(GrapeCity.Documents.Metafile.IRenderDevice)">
+            <summary>
+            Renders the record to the specified device or context.
+            </summary>
+            <param name="renderDevice">The device to render/draw to (e.g. draw a line or text).</param>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusScaleWordTransform">
+            <summary>
+            Handles the EmfPlusScaleWordTrandform record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.EmfPlus.EmfPlusUnknownImage">
+            <summary>.
+            Handles the Emf+ unknown image.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.EmfPlus.GeneralEmfPlusGraphicsObject">
+            <summary>
+            Handles the general Emf+ graphics object.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.GeneralEmfPlusGraphicsObject.Data">
+            <summary>
+            Returns the record specific data if any.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.EmfPlus.GeneralEmfPlusRecord">
+            <summary>
+            A general case for all ignored Emf+ records. It just read the data of the record.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.EmfPlus.GeneralEmfPlusRecord.Data">
+            <summary>
+            Returns the record specific data if any.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.EmfPlus.GenericEmfPlusImage">
+            <summary>.
+            Handles the Emf+ unknown image.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.EmfRecordType">
+            <summary>
+            Specifies the records available in a metafile.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.EndPath">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.EndPath"/> record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.ExtCreateFontIndirectW">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.ExtCreateFontIndirectW"/> record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.ExtCreatePen">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.ExtCreatePen"/> record.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.ExtCreatePen.DashStyleFromWin32PenStyles(GrapeCity.Documents.Metafile.Tools.Win32PenStyles)">
+            <summary>
+            Converts <see cref="T:GrapeCity.Documents.Metafile.Tools.Win32PenStyles"/> to <see cref="T:System.Drawing.Drawing2D.DashStyle"/>.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.ExtSelectClipRgn">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.ExtSelectClipRgn"/> records.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.ExtTextOut">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.ExtTextOutA"/> or <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.ExtTextOutW"/> records.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.ExtTextOut.Render(GrapeCity.Documents.Metafile.IRenderDevice)">
+            <summary>
+            Draws text onto the specified device.
+            </summary>
+            <param name="device"></param>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.ExtTextOut.EmrText">
+            <summary>
+            The Win32 EMRTEXT structure.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Emf.ExtTextOut.EmrText._ptlReference">
+            Logical coordinates of the reference point used to position the string.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Emf.ExtTextOut.EmrText._nChars">
+            Number of characters in string.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Emf.ExtTextOut.EmrText._offString">
+            Offset to string.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Emf.ExtTextOut.EmrText._fOptions">
+            Value specifying how to use the application-defined rectangle. This member can be a combination of the ETO_CLIPPED and ETO_OPAQUE values.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Emf.ExtTextOut.EmrText._rcl">
+            Optional clipping and/or opaquing rectangle, in logical units.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Emf.ExtTextOut.EmrText._offDx">
+            Offset to intercharacter spacing array.
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.ExtTextOut.EmrText.Read(System.IO.BinaryReader)">
+            <summary>
+            Reads the feilds of this structure from the specified reader. Does not read the text only the offset value to it.
+            </summary>
+            <param name="reader"></param>
+            <returns></returns>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.FillRgn">
+            <summary>
+            Handles the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.FillRgn"/> record.
+            The rectangle is outlined by using the current pen and filled by using the current brush. 
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.GdiComment">
+            <summary>
+            Handles some of the common actions embedded with the EMRGDICOMMENT record
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.GenericMetaRecord">
+            <summary>
+            Represents a generic metafile record.
+            </summary>
+            <remarks>
+            This is essentially any record that does not have a class to directly represent it, an "unhandled" record by this library.
+            </remarks>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.GenericMetaRecord.Data">
+            <summary>
+            Returns the record specific data if any.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.LineTo">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.LineTo"/> or <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.MoveToEx"/> record's data.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.MetaRecordBase">
+            <summary>
+            An abstract base class for metafile records that provides a default implementation for 
+            <see cref="P:GrapeCity.Documents.Metafile.Emf.MetaRecordBase.RecordType"/> and <see cref="P:GrapeCity.Documents.Metafile.Emf.MetaRecordBase.RecordSize"/>.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.MetaRecordBase.Position">
+            <summary>
+            Position of this record in the image stream (used for identification purposes during debugging).
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.MetaRecordBase.RecordType">
+            <summary>
+            Returns a value indicating the type of meta file record this instance represents.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Emf.MetaRecordBase.RecordSize">
+            <summary>
+            Returns the size in bytes of the data for this record object.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Emf.MetaRecordBase.Render(GrapeCity.Documents.Metafile.IRenderDevice)">
+            <summary>
+            Renders the record to the specified device or context.
+            </summary>
+            <param name="renderDevice">The device to render/draw to (e.g. draw a line or text).</param>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.ModifyWorldTransform">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.ModifyWorldTransform"/> record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.ModifyWorldTransform.ModifyWorldTransformMode">
+            <summary>
+            Specifies the possible values for the <see cref="F:GrapeCity.Documents.Metafile.Emf.ModifyWorldTransform._mode"/> member.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Emf.ModifyWorldTransform.ModifyWorldTransformMode.Identity">
+            Resets the current world transformation by using the identity matrix. If this mode is specified, the XFORM structure pointed to by lpXform is ignored.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Emf.ModifyWorldTransform.ModifyWorldTransformMode.LeftMultiply">
+            Multiplies the current transformation by the data in the XFORM structure. (The data in the XFORM structure becomes the left multiplicand, and the data for the current transformation becomes the right multiplicand.)
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Emf.ModifyWorldTransform.ModifyWorldTransformMode.RightMultiply">
+            Multiplies the current transformation by the data in the XFORM structure. (The data in the XFORM structure becomes the right multiplicand, and the data for the current transformation becomes the left multiplicand.)
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.Pie">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.Pie"/> record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.PolyPolyGon16">
+            <summary>
+            Handles the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.RoundRect"/> record.
+            The rectangle is outlined by using the current pen and filled by using the current brush. 
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.PolyShape16">
+            <summary>
+            Represents a <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.PolyBezier16"/>, 
+            <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.PolyBezierTo16"/>,
+            <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.Polygon16"/>,
+            <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.PolyLine16"/>,
+            or a <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.PolyLineTo16"/>.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.RectangleRecord">
+            <summary>
+            Handles the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.Rectangle"/> and <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.Ellipse"/> records.
+            The rectangle is outlined by using the current pen and filled by using the current brush. 
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.RestoreDC">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.RestoreDC"/> record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.RoundRect">
+            <summary>
+            Handles the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.RoundRect"/> record.
+            The rectangle is outlined by using the current pen and filled by using the current brush. 
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.SaveDC">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SaveDC"/> record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.SelectClipPath">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SelectClipPath"/> EMF record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.SelectObject">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SelectObject"/> EMF record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.SetBkMode">
+            <summary>
+            Handles the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SetBKMode"/> record.
+            </summary>
+            <remarks>
+            The SetBkMode function sets the background mix mode of the specified device context. 
+            The background mix mode is used with text, hatched brushes, and pen styles that are 
+            not solid lines. 
+            </remarks>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.SetExtent">
+            <summary>
+            Handles the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SetWindowExtEx"/> and <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SetViewPortExtEx"/> records.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.SetMapMode">
+            <summary>
+            Represents <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SetMapMode"/> record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.SetMetaRgn">
+            <summary>
+            Handles the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SetMetaRgn"/> record.	
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.SetOrg">
+            <summary>
+            Handles <see cref="!:EmfRecordType.SetViewportOrgEx"/> and <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SetWindowOrgEx"/>.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.SetPolyFillMode">
+            <summary>
+            Handles the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SetPolyFillMode"/> record.
+            </summary>
+            <remarks>
+            The SetBkMode function sets the background mix mode of the specified device context. 
+            The background mix mode is used with text, hatched brushes, and pen styles that are 
+            not solid lines. 
+            </remarks>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.SetROP2">
+            <summary>
+            Handles the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SetROP2"/> record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.SetScaleExt">
+            <summary>
+            Handles the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.ScaleViewPortExtEx"/> and <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.ScaleWindowExtEx"/> records.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.SetTextAlign">
+            <summary>
+            Handles the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SetTextAlign"/> record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.SetTextColor">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SetTextColor"/> record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.SetWorldTransform">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.ModifyWorldTransform"/> record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.StretchDIBits">
+            <summary>
+            Represents the <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.StretchDIBits"/> record's data.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Emf.StrokeFillPath">
+            <summary>
+            Represents the Win32 <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.StrokeAndFillPath"/>, <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.FillPath"/>, or <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.StrokePath"/> records.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.IntersectClipWithCurrentPath">
+            <summary>
+            Modifies the current clipping path by intersecting it with the current path (built with commands between calls to <see cref="M:GrapeCity.Documents.Metafile.GcRenderDevice.BeginPath"/> and <see cref="M:GrapeCity.Documents.Metafile.GcRenderDevice.EndPath"/>).
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.ResetClip">
+            <summary>
+            Resets clip for by rolling back to a firstly saved context state.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.IntersectClip(System.Drawing.Rectangle)">
+            <summary>
+            Modifies the current clipping path by intersecting it with the specified clipping rectangle.
+            </summary>		
+            		
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.IntersectClipDeviceUnits(System.Drawing.Rectangle)">
+            <summary>
+            Intersect Clip in DeviceUnits
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.DrawLines(System.Drawing.PointF[])">
+            <summary>
+            Implementation of <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.DrawLines(System.Drawing.PointF[])"/>.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.DrawLinesTo(System.Drawing.PointF[])">
+            <summary>
+            Implements <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.DrawLineTo(System.Drawing.Point)"/>.
+            </summary>
+            <remarks>
+            A line is drawn from the current position to the first point specified by the lppt parameter by using the current pen. 
+            For each additional line, the function draws from the ending point of the previous line to the next point specified by lppt. 
+            This method moves the current drawing position to the ending point of the last line. 
+            If the line segments drawn by this function form a closed figure, the figure is not filled. 
+            </remarks>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.DrawBeziers(System.Drawing.PointF[])">
+            <summary>
+            Implements <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.DrawBeziers(System.Drawing.PointF[])"/>.
+            </summary>
+            <remarks>
+            The first curve is drawn from the first point to the fourth point by using the  second and third points as control points. 
+            Each subsequent curve in the sequence needs exactly three more points: the ending point of the previous curve is used as the starting point, the next two points in the sequence are control points, and the third is the ending point.
+            Therefore the number of points must be "one more than three times the number of curves".
+            The current position is neither used nor updated by the PolyBezier function.
+            The figure is not filled.
+            This function draws lines by using the current pen.
+            </remarks>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.DrawBeziersTo(System.Drawing.PointF[])">
+            <summary>
+            Implements <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.DrawBeziersTo(System.Drawing.PointF[])"/>.
+            </summary>
+            <remarks>
+            The first curve is drawn from the current drawing position to the third point by using the first two points as control points. 
+            For each  subsequent curve, the function needs exactly three more points, and uses the ending point of the previous curve as the starting point for the next.
+            The figure is not filled. This function draws lines by using the current pen.
+            </remarks>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.DrawLineTo(System.Drawing.Point)">
+            <summary>
+            Implementation of <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.DrawLineTo(System.Drawing.Point)"/>.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.MoveTo(System.Drawing.Point)">
+            <summary>
+            Moves the current drawing point to the specified point.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.Polygon(System.Drawing.PointF[])">
+            <summary>
+            Draws a polygon defined by an array of Point structures. 
+            </summary>
+            <remarks>
+            Every pair of two consecutive points in the array specify a side of the polygon. 
+            In addition, if the last point and the first point of the array do not coincide, they 
+            specify the last side of the polygon.
+            </remarks>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.Polygons(GrapeCity.Documents.Metafile.Tools.GdiPolygon[])">
+            <summary>
+            Draws an array of polygons as one drawing path
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.Rectangle(System.Drawing.Rectangle)">
+            <summary>
+            Implementation of <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.Rectangle(System.Drawing.Rectangle)"/>.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.FillRectangle(System.Drawing.Rectangle,System.Drawing.Color)">
+            <summary>
+            Implementation of <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.FillRectangle(System.Drawing.Rectangle,System.Drawing.Color)"/>.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.FillRectangle(System.Drawing.Rectangle,GrapeCity.Documents.Drawing.Brush)">
+            <summary>
+            Implementation of <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.FillRectangle(System.Drawing.Rectangle,System.Drawing.Color)"/>.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.RoundRectangle(System.Drawing.Rectangle,System.Int32,System.Int32)">
+            <summary>
+            Implements <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.RoundRectangle(System.Drawing.Rectangle,System.Int32,System.Int32)"/>.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.Ellipse(System.Drawing.Rectangle)">
+            <summary>
+            Implements <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.Ellipse(System.Drawing.Rectangle)"/>.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.DrawImage(System.Byte[],System.Drawing.Rectangle,System.Drawing.Rectangle,System.Boolean)">
+            <summary>
+            Draws the specified portion of the specified Image object at the specified location and with the specified size.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.GcRenderDevice.IsWordpadDocObject">
+            <summary>
+            To mark if the metafile object is from a wordpad document object.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.SaveContext">
+            <summary>
+            Saves the current state of the specified device context (DC) by copying data 
+            describing selected objects and graphic modes (such as the bitmap, brush, palette, 
+            font, pen, region, drawing mode, and mapping mode) to a context stack.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.RestoreContext(System.Int32)">
+            <summary>
+            Restores a context to the specified state. The context is restored by popping state 
+            information off a stack created by earlier calls to the <see cref="M:GrapeCity.Documents.Metafile.GcRenderDevice.SaveContext"/> 
+            function.
+            </summary>
+            <param name="relative">Relative instance to restore. 
+            Specifies the saved state to be restored. If this parameter is positive, nSavedDC 
+            represents a specific instance of the state to be restored. If this parameter is 
+            negative, nSavedDC represents an instance relative to the current state.
+            </param>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.GcRenderDevice.HandleTable">
+            <summary>
+            The table of GDI objects 
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.GcRenderDevice.Pen">
+            <summary>
+            The current pen that applicable drawing operations will use.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.GcRenderDevice.Brush">
+            <summary>
+            The current brush that applicable drawing operations will use.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.GcRenderDevice.Rop2">
+            <summary>
+            Rop2
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.GcRenderDevice.BackgroundFillMode">
+            <summary>
+            The SetBkMode function sets the background mix mode of the specified device context. The background mix mode is used with text, hatched brushes, and pen styles that are not solid lines. 
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.GcRenderDevice.PolyFillMode">
+            <summary>
+            The PolyFillMode function sets the background mix mode of the specified device context. The background mix mode is used with text, hatched brushes, and pen styles that are not solid lines. 
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.GcRenderDevice.Font">
+            <summary>
+            The current Font that applicable drawing operations will use.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.BeginPath">
+            <summary>
+            Implements <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.BeginPath"/>.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.EndPath">
+            <summary>
+            Implements <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.EndPath"/>.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.CloseFigure">
+            <summary>
+            Implements <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.CloseFigure"/>.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.GcRenderDevice.Frame">
+            <summary>
+            The frame of the source metafile.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.GcRenderDevice.MapMode">
+            <summary>
+            Sets or returns the current mapping mode.
+            </summary>
+            <remarks>
+            The SetMapMode function sets the mapping mode of the specified device context. The mapping mode defines the unit of measure used to transform page-space units into device-space units, and also defines the orientation of the device's x and y axes.
+            </remarks>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.MultiplyTransform(System.Numerics.Matrix3x2,System.Boolean)">
+            <summary>
+            Multiplies this object's current transformation matrix by the specified matrix in the specified order.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.GcRenderDevice.TextColor">
+            <summary>
+            Sets or returns the color that should be used to draw text.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.GcRenderDevice.BackColor">
+            <summary>
+            Sets or returns the color that should be used to draw the background.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.GcRenderDevice.TextAlign">
+            <summary>
+            Sets or returns alignment options for text.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.GcRenderDevice.Size">
+            <summary>
+            The Size of the device.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.CalculateSweepAngle(GrapeCity.Documents.Metafile.Tools.RectL,System.Drawing.PointF,System.Drawing.PointF,System.Single@,System.Single@)">
+            <summary>
+            Calculate the sweep angle, and also the start and end angle in clockwise.
+            </summary>
+            <param name="rect">the bounds of the ellipse.</param>
+            <param name="start">the start point of the pie in counter clockwise.</param>
+            <param name="end">the end point of the pie in counter clickwise.</param>
+            <param name="startAngle_Clockwise">the start angle of the pie in clockwise.</param>
+            <param name="endAngle_Clockwise">the end angle of the pie in clockwise.</param>
+            <returns>The sweep angle of the pie.</returns>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.TransformAngle(System.Single)">
+            <summary>
+            Transform an angle measured in degrees counterclockwise from the x-axis
+            to an angle measured in degrees clockwise from the x-axis.
+            Force the result angle from -180 to 180.
+            e.g.
+            From -90 To 90;
+            From 90  To -90;
+            From 270 To 90;
+            From -270 to -90;
+            </summary>
+            <param name="angle">the angle in counterclockwise to transform. from -360 to 360.</param>
+            <returns>the transformed angle in clockwise. from -180 to 180.</returns>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.CalculateAngle_CounterClockwise(GrapeCity.Documents.Metafile.Tools.RectL,System.Drawing.PointF)">
+            <summary>
+            Calculate the angle in degrees counterclockwise from the x-axis.
+            </summary>
+            <remarks>
+            The angle is is based on the x-axis and the line through the center point and the given point.
+            </remarks>
+            <param name="box">the bounds of the ellipse.</param>
+            <param name="point">the point to define the angle.</param>
+            <returns>the angle in degrees counterclockwise from the x-axis. from -360 to 360.</returns>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.GcRenderDevice.DrawString(System.String,System.Drawing.Rectangle)">
+            <summary>
+            Draws the specified string a the specified location with the current <see cref="P:GrapeCity.Documents.Metafile.GcRenderDevice.TextColor"/>.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.IFontResolver">
+            <summary>
+            Font resolver interface. Allows to customer to specify fonts for report (and obtain the same output on all platforms).
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IFontResolver.GetFonts(System.String,System.Boolean,System.Boolean)">
+            <summary>
+            Gets fonts for requested font family name.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IFontResolver.Scope">
+            <summary>
+            Allows access to system fonts or not.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.IRenderDevice">
+            <summary>
+            An interface used to render graphics operations.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.DrawLines(System.Drawing.PointF[])">
+            <summary>
+            Draws line segments between each of the specified points.
+            </summary>
+            <remarks>This method not use or update the current drawing position.</remarks>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.DrawLinesTo(System.Drawing.PointF[])">
+            <summary>
+            Draws line segments between each of the specified points and uses and updates the current drawing position. 
+            </summary>
+            <remarks>
+            A line is drawn from the current position to the first point specified by the lppt parameter by using the current pen. 
+            For each additional line, the function draws from the ending point of the previous line to the next point specified by lppt. 
+            This method moves the current drawing position to the ending point of the last line. 
+            If the line segments drawn by this function form a closed figure, the figure is not filled. 
+            </remarks>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.DrawBeziers(System.Drawing.PointF[])">
+            <summary>
+            Draws cubic Bezier curves by using the specified endpoints and control points. 
+            </summary>
+            <remarks>
+            This method participates in path construction. If a path is under construction this method will add its contents to the current path, and not output to the device.
+            The first curve is drawn from the first point to the fourth point by using the  second and third points as control points. 
+            Each subsequent curve in the sequence needs exactly three more points: the ending point of the previous curve is used as the starting point, the next two points in the sequence are control points, and the third is the ending point.
+            Therefore the number of points must be "one more than three times the number of curves".
+            The current position is neither used nor updated by the PolyBezier function.
+            The figure is not filled.
+            This function draws lines by using the current pen.
+            </remarks>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.DrawBeziersTo(System.Drawing.PointF[])">
+            <summary>
+            Draws cubic Bezier curves by using the specified endpoints and control points, and changes the current drawing position to the ending point of the last curve.
+            </summary>
+            <remarks>
+            The first curve is drawn from the current drawing position to the third point by using the first two points as control points. 
+            For each  subsequent curve, the function needs exactly three more points, and uses the ending point of the previous curve as the starting point for the next.
+            The figure is not filled. This function draws lines by using the current pen.
+            </remarks>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.DrawLineTo(System.Drawing.Point)">
+            <summary>
+            Draws a segment from the current point to the specified point. 
+            The current point then changed to the specified point.
+            This effects paths after a call to <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.BeginPath"/> and before the subsequent call to <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.EndPath"/>.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.MoveTo(System.Drawing.Point)">
+            <summary>
+            Moves the current point to the specified point.
+            This effects paths after a call to <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.BeginPath"/> and before the subsequent call to <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.EndPath"/>.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.Polygon(System.Drawing.PointF[])">
+            <summary>
+            Renders a polygon defined by the specified array of point structures.
+            Polygon is outlined using the current pen and filled using the current brush and polygon fill mode.
+            </summary>
+            <remarks>
+            This method participates in path construction if a path is being constructed.
+            Every pair of two consecutive points in the array specify a side of the polygon. In addition, if the last point and the first point of the array do not coincide, they specify the last side of the polygon.
+            </remarks>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.Polygons(GrapeCity.Documents.Metafile.Tools.GdiPolygon[])">
+            <summary>
+            Draws given polygons as one PDF Path and it is outlined using the current pen and filled using the current brush and polygon fill mode.
+            </summary>
+            <param name="polys">An array of polygons to draw</param>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.Rectangle(System.Drawing.Rectangle)">
+            <summary>
+            Renders the specified rectangle.
+            The rectangle is outlined by using the current pen and is filled by using the current brush.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.FillRectangle(System.Drawing.Rectangle,System.Drawing.Color)">
+            <summary>
+            Fills rectangle with color.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.FillRectangle(System.Drawing.Rectangle,GrapeCity.Documents.Drawing.Brush)">
+            <summary>
+            Fills rectangle with texture.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.RoundRectangle(System.Drawing.Rectangle,System.Int32,System.Int32)">
+            <summary>
+            Outlines the specified rectangle using the current pen.
+            The rounded rectangle is outlined by using the current pen and is filled by using the current brush.
+            </summary>
+            <param name="boundingBox">Bounding rectangle for the ellipse. The center of the ellipse is the center of this rectangle.</param>
+            <param name="cornerWidth">The width of the ellipse used to round corners.</param>
+            <param name="cornerHeight">The height of the ellipse used to round corners.</param>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.Ellipse(System.Drawing.Rectangle)">
+            <summary>
+            Renders the ellipse that conforms to the speicifed bounding box. 
+            The ellipse is outlined by using the current pen and is filled by using the current brush.
+            </summary>
+            <param name="boundingBox">Bounding rectangle for the ellipse. The center of the ellipse is the center of this rectangle.</param>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.DrawCurrentPath">
+            <summary>
+            Draws the current path (constructed with <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.BeginPath"/>/<see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.EndPath"/>) with the context's current pen.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.FillCurrentPath">
+            <summary>
+            Fills the interior of the current path (constructed with <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.BeginPath"/>/<see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.EndPath"/>) with the context's current brush.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.DrawImage(System.Byte[],System.Drawing.Rectangle,System.Drawing.Rectangle,System.Boolean)">
+            <summary>
+            Draws the specified portion of the specified Image object at the specified location and with the specified size.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.DrawString(System.String,System.Drawing.Rectangle)">
+            <summary>
+            Draws the specified string a the specified location with the current <see cref="P:GrapeCity.Documents.Metafile.IRenderDevice.TextColor"/>.
+            </summary>
+            <param name="text">The text to be drawn.</param>
+            <param name="rcl">Bounds.</param>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.DrawPie(GrapeCity.Documents.Metafile.Tools.RectL,System.Drawing.PointF,System.Drawing.PointF)">
+            <summary>
+            Draws pie.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.IsWordpadDocObject">
+            <summary>
+            To mark if the metafile object is from a wordpad document object.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.SaveContext">
+            <summary>
+            Saves the current state of the specified device context (DC) by copying data 
+            describing selected objects and graphic modes (such as the bitmap, brush, palette, 
+            font, pen, region, drawing mode, current clipping path, and mapping mode) to a context stack.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.RestoreContext(System.Int32)">
+            <summary>
+            Restores a context to the specified state. The context is restored by popping state 
+            information off a stack created by earlier calls to the <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.SaveContext"/> 
+            function.
+            </summary>
+            <param name="relative">Relative instance to restore. 
+            Specifies the saved state to be restored. If this parameter is positive, nSavedDC 
+            represents a specific instance of the state to be restored. If this parameter is 
+            negative, nSavedDC represents an instance relative to the current state. For 
+            example, –1 restores the most recently saved state.
+            </param>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.SaveHandleTable">
+            <summary>
+            Saves the state of current handle table of the specified device to a stack.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.RestoreHandleTable">
+            <summary>
+            Restrore the handle table of the specified device to the previous saved state from a stack.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.IntersectClip(System.Drawing.Rectangle)">
+            <summary>
+            Modifies the current clipping path by intersecting it with the specified clipping rectangle.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.IntersectClipDeviceUnits(System.Drawing.Rectangle)">
+            <summary>
+            Modifies the current clipping path by intersecting it with the specified clipping path in device units.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.ResetClip">
+            <summary>
+            Resets current clip
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.IntersectClipWithCurrentPath">
+            <summary>
+            Modifies the current clipping path by intersecting it with the current path (built with commands between calls to <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.BeginPath"/> and <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.EndPath"/>).
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.HandleTable">
+            <summary>
+            The table of GDI objects 
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.Pen">
+            <summary>
+            The current pen that applicable drawing operations will use.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.Rop2">
+            <summary>
+            The current pen that applicable drawing operations will use.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.Brush">
+            <summary>
+            The current brush that applicable drawing operations will use.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.Font">
+            <summary>
+            The current Font that applicable drawing operations will use.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.BeginPath">
+            <summary>
+            After calling <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.BeginPath"/> subsequent applicable drawing operations will be used to build a path and not actually render anything to the output device.  To resume normal output drawing, call <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.EndPath"/>.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.EndPath">
+            <summary>
+            Called after a call to <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.BeginPath"/> to indicate that the path under construction is complete, and subsequent drawing operations should render to the output device normally.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.CloseFigure">
+            <summary>
+            Called after <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.BeginPath"/> and before <see cref="M:GrapeCity.Documents.Metafile.IRenderDevice.EndPath"/> to indicate that the current figure in the path under construction should be closed.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.Frame">
+            <summary>
+            The frame of the source metafile.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.WindowOrigin">
+            <summary>
+            Specifies which window point maps to the viewport origin (0,0). 
+            </summary>
+            <remarks>
+            This helps define the mapping from the logical coordinate space (also known as a 
+            window) to the device coordinate space (the viewport). WindowOrigin specifies which 
+            logical point maps to the device point (0,0). It has the effect of shifting the axes 
+            so that the logical point (0,0) no longer refers to the upper-left corner. 
+            <seealso cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SetWindowOrgEx"/>
+            </remarks>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.WindowExtent">
+            <summary>
+            Sets or returns the window extent.
+            </summary>
+            <remarks>
+            <seealso cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SetWindowExtEx"/>
+            When the following mapping modes are set, calls to WindowExtEx and ViewportExtEx are ignored: MapMode.HiEnglish, MapMode.HiMetric, MapMode.LoEnglish, MapMode.LoMetric, MapMode.Text, MapMode.Twips.
+            </remarks>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.ViewportOrigin">
+            <summary>
+            Specifies which device point maps to the window origin (0,0).
+            </summary>
+            <remarks>
+            This (along with ViewportExtent and WindowExtent) helps define the mapping from the logical coordinate space (also known as a window) to the device coordinate space (the viewport). 
+            ViewportOrigin specifies which device point maps to the logical point (0,0).  
+            It has the effect of shifting the axes so that the logical point (0,0) no longer refers to the upper-left corner. 
+            <seealso cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SetViewPortOrgEx"/>
+            </remarks>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.ViewportExtent">
+            <summary>
+            Sets or returns the viewport extent.
+            </summary>
+            <remarks>
+            <see cref="F:GrapeCity.Documents.Metafile.Emf.EmfRecordType.SetViewPortExtEx"/>
+            Calls to WindowExtEx and ViewportExtEx are ignored unless the MapMode is AnIsotropic.
+            </remarks>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.MapMode">
+            <summary>
+            Sets or returns the current mapping mode.
+            </summary>
+            <remarks>
+            Calls to WindowExtEx and ViewportExtEx are ignored unless the MapMode is AnIsotropic.
+            </remarks>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.SetScaleTransform(System.Single)">
+            <summary>
+            Sets the current scale transformation matrix.
+            </summary>
+            <param name="matrix">The scale transformation matrix.</param>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.MultiplyScaleTransform(System.Single)">
+            <summary>
+            post-multiply the current scale transformation matrix.
+            </summary>
+            <param name="matrix">The scale transformation matrix.</param>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.MultiplyTransform(System.Numerics.Matrix3x2,System.Boolean)">
+            <summary>
+            Multiples this object's current transformation matrix by the specified matrix in the specified order.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.IRenderDevice.SetTransform(System.Numerics.Matrix3x2)">
+            <summary>
+            Set this object's current transformation matrix by the specified matrix in the specified order.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.TextColor">
+            <summary>
+            Sets or returns the color that should be used to draw text.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.BackColor">
+            <summary>
+            Sets or returns the color that should be used to draw text.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.TextAlign">
+            <summary>
+            Sets or returns alignment options for text.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.BackgroundFillMode">
+            <summary>
+            The SetBkMode function sets the background mix mode of the specified device context. The background mix mode is used with text, hatched brushes, and pen styles that are not solid lines. 
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.PolyFillMode">
+            <summary>
+            The PolyFillMode function sets how a polygon will be filled. 
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.IRenderDevice.Size">
+            <summary>
+            The Size of the device.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.MetafileReader">
+            <summary>
+            Can read and render a stream of enhanced metafile (EMF) records.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.MetafileReader.Render(System.IO.BinaryReader,GrapeCity.Documents.Metafile.IRenderDevice,System.IO.TextWriter,System.Boolean)">
+            <summary>
+            Enumerates the metafile in the stream specified in this class's constructor.
+            </summary>
+            <param name="reader">A <see cref="T:System.IO.BinaryReader"/> to read a stream of enhanced metafile (EMF) data.</param>
+            <param name="renderDevice">The device to render to as records are read.</param>
+            <param name="tracer">An output stream to write tracing information to. Can be null in which no tracing will occur.</param>
+            <param name="isEmbeddedImage">Whether the image is embedded in the emf+ record.</param>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.MetafileReader.PreProcessForWordpadDocument(GrapeCity.Documents.Metafile.IRenderDevice,GrapeCity.Documents.Metafile.Emf.MetaRecordBase,GrapeCity.Documents.Metafile.MetafileReader.WordpadDocumentFontHolder)">
+            <summary>
+            For the metafile which comes from a wordpad document object.
+            In this type of metafile, there is one or more than one empty ExtTextOut records before the ExtTextOut record with the real content.
+            The empty ones and the real one have the same scale values. The code uses this rule to judge this metafile type.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.MetafileReader.PostProcessForWordpadDocument(GrapeCity.Documents.Metafile.IRenderDevice,GrapeCity.Documents.Metafile.Emf.MetaRecordBase,GrapeCity.Documents.Metafile.MetafileReader.WordpadDocumentFontHolder)">
+            <summary>
+            will store the CreateFontIndirectW records and SelectObject record to render again if the metafile is from a wordpad document object.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.MetafileReader.WordpadDocumentFontHolder">
+            <summary>
+            for metafile which comes from wordpad document object, 
+            save the ExtCreateFontIndirectW record and corresponding SelectObject record,
+            and then render them again before the render of ExtTextOut record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.MetafileRenderer">
+            <summary>
+            Main class for metafiles rendering.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.BitmapFileHeader">
+            <summary>
+            Represents the Win32 BITMAPFILEHEADER structure.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.BitmapFileHeader.SizeOf">
+            <summary>
+            The size of the <see cref="T:GrapeCity.Documents.Metafile.Tools.BitmapFileHeader"/> structure in bytes.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.BitmapFileHeader._bfType">
+            Specifies the file type, must be BM (0x4d42). 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.BitmapFileHeader._bfSize">
+            Specifies the size, in bytes, of the bitmap file. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.BitmapFileHeader._bfReserved1">
+            Reserved; must be zero.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.BitmapFileHeader._bfReserved2">
+            Reserved; must be zero.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.BitmapFileHeader._bfOffBits">
+            Specifies the offset, in bytes, from the beginning of the BITMAPFILEHEADER structure to the bitmap bits.
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Tools.BitmapFileHeader.Read(System.IO.BinaryReader)">
+            <summary>
+            Reads a Win32 BITMAPFILEHEADER structure from the current position in the specified stream, and returns a <see cref="T:GrapeCity.Documents.Metafile.Tools.BitmapFileHeader"/> representation of the data.
+            </summary>
+            <param name="reader"></param>
+            <returns></returns>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Tools.BitmapFileHeader.WriteTo(System.IO.BinaryWriter)">
+            <summary>
+            Writes this records' data to the specified stream.
+            </summary>
+            <param name="writer"></param>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Tools.ExtLogFont.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:GrapeCity.Documents.Metafile.Tools.ExtLogFont"/> class.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Tools.ExtLogFont.Read(System.IO.BinaryReader)">
+            <summary>
+            Reads a Win32 EXTLOGFONT structure from teh specified reader and returns a <see cref="T:GrapeCity.Documents.Metafile.Tools.ExtLogFont"/> representation of the data.
+            </summary>
+            <param name="reader"></param>
+            <returns></returns>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Tools.ExtLogFont.ToFont(System.Boolean)">
+            <summary>
+            Needs a bool parameter to tell whether this font's size needs transform.
+            </summary>
+            <returns></returns>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Tools.ExtLogFont.Panose.Read(System.IO.BinaryReader)">
+            <summary>
+            Reads a Win32 Panose structure from the stream and returns the data as a <see cref="T:GrapeCity.Documents.Metafile.Tools.ExtLogFont.Panose"/> object.
+            </summary>
+            <param name="reader"></param>
+            <returns></returns>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.ExtLogPen.DIB_RGB_COLORS">
+            Color table in RGBs (used with the color member).
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.ExtLogPen.DIB_PAL_COLORS">
+            Color table in palette indices (used with the color member).
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.ExtLogPen._penStyle">
+            Specifies a combination of pen type, style, end cap style, and join style. The values from each category can be retrieved by using a bitwise AND operator with the appropriate mask.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.ExtLogPen._width">
+            Specifies the width of the pen. If the elpPenStyle member is 
+            <see cref="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.TypeGeometric"/>, this value is the width of the line in logical 
+            units. Otherwise, the lines are cosmetic and this value is 1, which indicates a line 
+            with a width of one pixel. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.ExtLogPen._brushStyle">
+            Specifies the brush style of the pen. The elpBrushStyle member value can be one of the following. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.ExtLogPen._color">
+            If elpBrushStyle is BS_SOLID or BS_HATCHED, elpColor specifies the color in which the 
+            pen is to be drawn. For BS_HATCHED, the SetBkMode and SetBkColor functions determine 
+            the background color. 
+            If elpBrushStyle is BS_HOLLOW or BS_PATTERN, elpColor is ignored. 
+            If elpBrushStyle is BS_DIBPATTERN or BS_DIBPATTERNPT, the low-order word of elpColor 
+            specifies whether the bmiColors members of the BITMAPINFO structure contain explicit 
+            RGB values or indices into the currently realized logical palette. 
+            The elpColor value must be one of the following.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.ExtLogPen._hatch">
+            If elpBrushStyle is BS_PATTERN, elpHatch is a handle to the bitmap that defines the pattern. 
+            If elpBrushStyle is BS_SOLID or BS_HOLLOW, elpHatch is ignored. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.ExtLogPen._numEntries">
+            Specifies the number of entries in the style array in the elpStyleEntry member. This value is zero if elpPenStyle does not specify PS_USERSTYLE. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.ExtLogPen._styleEntries">
+            Specifies a user-supplied style array. The array is specified with a finite length, but it is used as if it repeated indefinitely. The first entry in the array specifies the length of the first dash. The second entry specifies the length of the first gap. Thereafter, lengths of dashes and gaps alternate. 
+            If elpWidth specifies geometric lines, the lengths are in logical units. Otherwise, the lines are cosmetic and lengths are in device units. 
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Tools.ExtLogPen.Read(System.IO.BinaryReader,System.Int32)">
+            <summary>
+            Reads a EXTLOGPEN structure from the specified stream and returns a <see cref="T:GrapeCity.Documents.Metafile.Tools.ExtLogPen"/> representation of the structure.
+            </summary>
+            <param name="reader">The BinaryReader to read the pen data from.</param>
+            <returns>A <see cref="T:GrapeCity.Documents.Metafile.Tools.ExtLogPen"/>.</returns>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.Win32PenStyles">
+            <summary>
+            Represents the Win32 PSDK PS_XXX pens style constants.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.TypeCosmetic">
+            The pen is cosmetic.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.TypeGeometric">
+            The pen is geometric.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.TypeMask">
+            The bitwise AND mask used to determine a pen's type.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.StyleSolid">
+            The pen is solid.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.StyleDash">
+            The pen is dashed.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.StyleDot">
+            The pen is dotted.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.StyleDashDot">
+            The pen has alternating dashes and dots.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.StyleDashDotDot">
+            The pen has alternating dashes and double dots.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.StyleNull">
+            The pen is invisible.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.StyleInsideFrame">
+            The pen is solid. When this pen is used in any GDI drawing function that takes a bounding rectangle, the dimensions of the figure are shrunk so that it fits entirely in the bounding rectangle, taking into account the width of the pen. 
+            This applies only to <see cref="!:Win32PenStyles.Geomtric"/> pens.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.StyleUserStyle">
+            The pen uses a styling array supplied by the user.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.StyleMask">
+            The bitwise AND mask used to determine pen's dash style.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.EndCapRound">
+            Line end caps are round.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.EndCapSquare">
+             Line end caps are square. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.EndCapFlat">
+            Line end caps are flat.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.EndCapMask">
+            The bitwise AND mask used to determine pen's end cap style.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.JoinRound">
+            Line joins are round.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.JoinBevel">
+            Line joins are beveled.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.JoinMiter">
+            Line joins are mitered when they are within the current limit set by the SetMiterLimit function. A join is beveled when it would exceed the limit.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32PenStyles.JoinMask">
+            The bitwise AND mask used to determine a pen's line join style.
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.Win32BrushStyle">
+            <summary>
+            Represents the Win32 PSDK BS_XXX brush style constants.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32BrushStyle.Solid">
+            Solid brush.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32BrushStyle.Null">
+            Same as BS_HOLLOW.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32BrushStyle.Hollow">
+            Hollow brush.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32BrushStyle.Hatched">
+            Hatched brush.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32BrushStyle.Pattern">
+            Pattern brush defined by a memory bitmap.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32BrushStyle.DibPattern">
+            A pattern brush defined by a device-independent bitmap (DIB) specification. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32BrushStyle.DibPatternPt">
+            A pattern brush defined by a device-independent bitmap (DIB) specification. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32BrushStyle.Pattern8x8">
+            Same as BS_PATTERN.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32BrushStyle.DibPattern8x8">
+            Same as BS_DIBPATTERN.
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.Win32HatchStyle">
+            <summary>
+            Specifies the Win32 PSDK HS_xxxx hatch style constants.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32HatchStyle.Horizontal">
+            -----
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32HatchStyle.Vertical">
+            |||||
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32HatchStyle.FDiagonal">
+            \\\\\
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32HatchStyle.BDiagonal">
+            /////
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32HatchStyle.Cross">
+            +++++
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.Win32HatchStyle.DiagCross">
+            xxxxx
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.GdiStockObject">
+            <summary>
+            Specifies the stock GDI object contants.  These are pens, brushes, and fonts that are assumed "built-in" to be in the rendering implementation.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.GdiObjectKind">
+            <summary>
+            Specifies the kind of <see cref="!:IGDIObject"/>.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.MapMode">
+            <summary>
+            Specifies the mapping mode for a GDI device.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.MapMode.AnIsotropic">
+            Logical units are mapped to arbitrary units with arbitrarily scaled axes. Use the SetWindowExtEx and SetViewportExtEx functions to specify the units, orientation, and scaling. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.MapMode.HiEnglish">
+            Each logical unit is mapped to 0.001 inch. Positive x is to the right; positive y is up. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.MapMode.HiMetric">
+            Each logical unit is mapped to 0.01 millimeter. Positive x is to the right; positive y is up. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.MapMode.Isotropic">
+            Logical units are mapped to arbitrary units with equally scaled axes; that is, one unit along the x-axis is equal to one unit along the y-axis. Use the SetWindowExtEx and SetViewportExtEx functions to specify the units and the orientation of the axes. Graphics device interface (GDI) makes adjustments as necessary to ensure the x and y units remain the same size (When the window extent is set, the viewport will be adjusted to keep the units isotropic). 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.MapMode.LoEnglish">
+            Each logical unit is mapped to 0.01 inch. Positive x is to the right; positive y is up. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.MapMode.LoMetric">
+            Each logical unit is mapped to 0.1 millimeter. Positive x is to the right; positive y is up. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.MapMode.Text">
+            Each logical unit is mapped to one device pixel. Positive x is to the right; positive y is down. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.MapMode.Twips">
+            Each logical unit is mapped to one twentieth of a printer's point (1/1440 inch, also called a twip). Positive x is to the right; positive y is up. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.DibColorTableType.RgbColors">
+            color table in RGBs
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.DibColorTableType.PaletteColors">
+            color table in palette indices
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation">
+            <summary>
+            The Win32 "Ternary raster operations". Used with <see cref="!:BitBlt.dwRop"/>, <see cref="!:StretchDIBits.dwRop"/>.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.SrcCopy">
+            Copies the source rectangle directly to the destination rectangle.
+            dest = source
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.SrcPaint">
+            Combines the colors of the source and destination rectangles by using the Boolean OR operator.
+            dest = source OR dest
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.SrceAnd">
+            Combines the colors of the source and destination rectangles by using the Boolean AND operator.
+            dest = source AND dest
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.SrcInvert">
+            Combines the colors of the source and destination rectangles by using the Boolean XOR operator.
+            dest = source XOR dest
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.SrcErase">
+            Combines the inverted colors of the destination rectangle with the colors of the source rectangle by using the Boolean AND operator.
+            dest = source AND (NOT dest )
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.NotSrcCopy">
+            Copies the inverted source rectangle to the destination.
+            dest = (NOT source)
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.NotSrcErase">
+            Combines the colors of the source and destination rectangles by using the Boolean OR operator and then inverts the resultant color.
+            dest = (NOT src) AND (NOT dest)
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.MergeCopy">
+            Merges the colors of the source rectangle with the brush currently selected in hdcDest, by using the Boolean AND operator.
+            dest = (source AND pattern)
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.MergePaint">
+            Merges the colors of the inverted source rectangle with the colors of the destination rectangle by using the Boolean OR operator.
+            dest = (NOT source) OR dest
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.PatCopy">
+            Copies the brush currently selected in hdcDest, into the destination bitmap.
+            dest = pattern
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.PatPaint">
+            Combines the colors of the brush currently selected in hdcDest, with the colors of the inverted source rectangle by using the Boolean OR operator. The result of this operation is combined with the colors of the destination rectangle by using the Boolean OR operator.
+            dest = DPSnoo
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.PatInvert">
+            Combines the colors of the brush currently selected in hdcDest, with the colors of the destination rectangle by using the Boolean XOR operator.
+            dest = pattern XOR dest
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.DstInvert">
+            Inverts the destination rectangle.
+            dest = (NOT dest)
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.Blackness">
+            Fills the destination rectangle using the color associated with index 0 in the physical palette. (This color is black for the default physical palette.)
+            dest = BLACK
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.Whiteness">
+            Fills the destination rectangle using the color associated with index 1 in the physical palette. (This color is white for the default physical palette.)
+            dest = WHITE
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.NoMirrorBitmap">
+            Windows 98/Me, Windows 2000/XP: Prevents the bitmap from being mirrored.
+            Do not Mirror the bitmap in this call
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiRasterOperation.CaptureBlt">
+            Windows 98/Me, Windows 2000/XP: Includes any windows that are layered on top of your window in the resulting image. By default, the image only contains your window.
+            Include layered windows
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.GdiTextAlign">
+            <summary>
+            Text alignment options used with SetTextAlign EMF record.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiTextAlign.TA_BASELINE">
+            The reference point will be on the base line of the text. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiTextAlign.TA_BOTTOM">
+            The reference point will be on the bottom edge of the bounding rectangle. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiTextAlign.TA_TOP">
+            The reference point will be on the top edge of the bounding rectangle. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiTextAlign.TA_CENTER">
+            The reference point will be aligned horizontally with the center of the bounding rectangle. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiTextAlign.TA_LEFT">
+            The reference point will be on the left edge of the bounding rectangle. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiTextAlign.TA_RIGHT">
+            The reference point will be on the right edge of the bounding rectangle. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiTextAlign.TA_NOUPDATECP">
+            The current position is not updated after each text output call. The reference point is passed to the text output function. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiTextAlign.TA_RTLREADING">
+            Middle East language edition of Windows: The text is laid out in right to left reading order, as opposed to the default left to right order. This applies only when the font selected into the device context is either Hebrew or Arabic. 	
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.GdiTextAlign.TA_UPDATECP">
+            The current position is updated after each text output call. The current position is used as the reference point. 
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.GdiBackgroundFillMode">
+            <summary>
+            Background mode Used with SetBkMode record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.GdiPolyFillMode">
+            <summary>
+            Poly Fill Mode used with SetPolyFillMode record.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.ClippingMode">
+            <summary>
+            Specifies the way to use the path.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.ClippingMode.And">
+            The new clipping region includes the intersection (overlapping areas) 
+            of the current clipping region and the current path. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.ClippingMode.Or">
+            The new clipping region includes the union (combined areas) of the current 
+            clipping region and the current path. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.ClippingMode.Xor">
+            The new clipping region includes the union of the current clipping region and 
+            the current path but without the overlapping areas. 
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.ClippingMode.Diff">
+            The new clipping region includes the areas of the current clipping region with 
+            those of the current path excluded.
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.ClippingMode.Copy">
+            The new clipping region is the current path. 
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.GdiObjectFactory">
+            <summary>
+            Creates GDI Pen, Brush, and Font objects, including stock objects.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.GdiObjectFactory.StockObjectEntry">
+            <summary>
+            Used as entries into the stock object hashtable to provide the object and an efficient way of identifying the type of object.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Tools.GdiObjectFactory.CreateStockObject(GrapeCity.Documents.Metafile.Tools.GdiStockObject,GrapeCity.Documents.Metafile.Tools.GdiObjectKind@)">
+            <summary>
+            Creates the stock object specified by the stockObject arguments and returns it.
+            </summary>
+            <param name="stockObject"></param>
+            <param name="objectKind">Returns a value indicating the type of object returned.</param>
+            <returns>A stock object, could be a <see cref="T:GrapeCity.Documents.Drawing.Pen"/>, <see cref="T:System.Drawing.Brush"/>, or <see cref="T:System.Drawing.Font"/>.</returns>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.GdiPolygon">
+            <summary>
+            Represents a polygon object as a set of points.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.LogFont">
+            <summary>
+            Represents the Win32 LogFont structure.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.LogFont._lfEscapement">
+            <summary>
+            Value of type LONG that contains the angle, in tenths of degrees, between the 
+            escapement vector and the x-axis of the device. The escapement vector is parallel 
+            to the base line of a row of text. 
+            </summary>
+        </member>
+        <member name="P:GrapeCity.Documents.Metafile.Tools.LogFont.SizeInPoints">
+            <summary>
+            Derives a point size rounded to nearest half a point from lfHeight.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Tools.LogFont.#ctor">
+            <summary>
+            Initializes a new instance of hte LogFont structure.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Tools.LogFont.Read(System.IO.BinaryReader)">
+            <summary>
+            Reads a Win32 LOGFONT structure from the current position in the specified reader and returns a <see cref="T:GrapeCity.Documents.Metafile.Tools.LogFont"/> representation of the data.
+            </summary>
+            <param name="reader"></param>
+            <returns></returns>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.LogPen">
+            <summary>
+            Represents the Win32 LOGPEN structure.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Tools.LogPen.Read(System.IO.BinaryReader)">
+            <summary>
+            Reads a Win32 LOGPEN structure from the specified BinaryReader and returns the <see cref="T:GrapeCity.Documents.Metafile.Tools.LogPen"/> representation of it.
+            </summary>
+            <param name="reader"></param>
+            <returns></returns>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Tools.LogPen.CreateNetPen">
+            <summary>
+            Creates a pen representation of this LogPen object.
+            </summary>
+            <remarks>The caller is responsible for disposing the returned pen.</remarks>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.RectL">
+            <summary>
+            Equivalent of the RECTL structure in Win32.
+            Rectangle that stores Top, Left, Right and Bottom values instead of Top, Left, Width, Height.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.RectL.Top">
+            <summary>
+            Returns the top position of the rectangle.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.RectL.Left">
+            <summary>
+            Returns the left position of the rectangle.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.RectL.Right">
+            <summary>
+            Returns the right position of the rectangle.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Tools.RectL.Bottom">
+            <summary>
+            Returns the bottom position of the rectangle.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Tools.RectL.Read(System.IO.BinaryReader)">
+            <summary>
+            Reads the top, left, right, bottom (32 bit) values from the stream and returns a <see cref="T:GrapeCity.Documents.Metafile.Tools.RectL"/>.  
+            </summary>
+            <returns>
+            A <see cref="T:GrapeCity.Documents.Metafile.Tools.RectL"/> which is equivelent to the Win32 RECTL structure.
+            </returns>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Tools.StreamUtil">
+            <summary>
+            Utilites for working with streams and binary readers.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Wmf.PlaceableMetafileHeader">
+            <summary>
+            Defines the fields of a placeable metafile header.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Wmf.PlaceableMetafileHeader.Key1">
+            <summary>
+            Identification value that indicates the presence of a placeable metafile header. This value is always 0x9AC6CDD7.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Wmf.PlaceableMetafileHeader.Key2">
+            <summary>
+            Identification value that indicates the presence of a placeable metafile header. This value is always 0x00090002.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Wmf.PlaceableMetafileHeader.Key3">
+            <summary>
+            Identification value that indicates the presence of a placeable metafile header. This value is always 0x00090001.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Wmf.PlaceableMetafileHeader.Hmf">
+            <summary>
+            Handle to the metafile in memory. When written to disk, this field is not used and will always contains the value 0.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Wmf.PlaceableMetafileHeader.BoundingBox">
+            <summary>
+            Destination rectangle, measured in twips, for displaying the metafile. 
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Wmf.PlaceableMetafileHeader.Inch">
+            <summary>
+            Number of twips per inch used to represent the image.
+            Normally, there are 1440 twips per inch; however, this number can be changed to scale the image. 
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Wmf.PlaceableMetafileHeader.Reserved">
+            <summary>
+            Not used and is always set to 0. 
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Wmf.PlaceableMetafileHeader.Checksum">
+            <summary>
+            Checksum for the previous 10 WORDs in the header. This value can be used to determine whether the metafile has become corrupted.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Wmf.PlaceableMetafileHeader.Size">
+            <summary>
+            Size of the PlaceableMetafileHeader structure in bytes.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Wmf.PlaceableMetafileHeader.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:GrapeCity.Documents.Metafile.Wmf.PlaceableMetafileHeader"/> class.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Wmf.PlaceableMetafileHeader.Read(System.IO.BinaryReader)">
+            <summary>
+            Reads a <see cref="!:EmfRecordType.PlaceableMetafileHeader"/> record from the reader begining at offset 4 (the key field is not read by this function as typically the caller will need to read it to determine how to procede), and returns a <see cref="T:GrapeCity.Documents.Metafile.Wmf.PlaceableMetafileHeader"/> object that represents the data.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Wmf.PlaceableMetafileHeader.PWMFRect16.Read(System.IO.BinaryReader)">
+            <summary>
+            Reads a PWMFRect16 structure from the specified <see cref="T:System.IO.BinaryReader"/>.
+            </summary>
+            <param name="reader"></param>
+            <returns></returns>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Wmf.WmfHeader">
+            <summary>
+            This is the header for a traditional metafile (not an enhanced metafile/EMF).
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Wmf.WmfHeader.Type">
+            <summary>
+            Specifies whether the metafile is in memory or recorded in a disk file. This member can be one of the following values.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Wmf.WmfHeader.HeaderSize">
+            <summary>
+            Specifies the size, in words, of the metafile header. 
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Wmf.WmfHeader.Version">
+            <summary>
+            Specifies the system version number. 
+            The version number for metafiles that support device-independent bitmaps (DIBs) is 0x0300. Otherwise, the version number is 0x0100. 
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Wmf.WmfHeader.Size">
+            <summary>
+            Specifies the size, in words, of the file. 
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Wmf.WmfHeader.NoObjects">
+            <summary>
+            Specifies the maximum number of objects that exist in the metafile at the same time. 
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Wmf.WmfHeader.MaxRecord">
+            <summary>
+            Specifies the size, in words, of the largest record in the metafile.
+            </summary>
+        </member>
+        <member name="F:GrapeCity.Documents.Metafile.Wmf.WmfHeader.NoParameters">
+            <summary>
+            Reserved.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.Documents.Metafile.Wmf.WmfHeader.WmfType">
+            <summary>
+            Represents the different types of windows metafiles.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.Documents.Metafile.Wmf.WmfHeader.Read(System.IO.BinaryReader)">
+            <summary>
+            Reads this structures data from the specified <see cref="T:System.IO.BinaryReader"/>.
+            </summary>
+        </member>
+    </members>
+</doc>

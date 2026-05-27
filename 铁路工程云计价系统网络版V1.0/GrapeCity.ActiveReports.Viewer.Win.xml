@@ -1,0 +1,1193 @@
+<?xml version="1.0" encoding="utf-8"?>
+<doc>
+  <assembly>
+    <name>GrapeCity.ActiveReports.Viewer.Win</name>
+  </assembly>
+  <members>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.Controls.DropDownButton">
+      <summary>
+            For internal use only!
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.Controls.HorizontalScrollbar">
+      <summary>
+            Flat horizontal scrollbar used for <see cref="T:System.Windows.Forms.ScrollableControl" />. For internal use only!
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Controls.HorizontalScrollbar.ThumbColor">
+      <summary>
+            Gets or sets the color of the scrollbar thumb.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Controls.HorizontalScrollbar.ThumbHeight">
+      <summary>
+            Gets or sets the height of the scrollbar.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Controls.HorizontalScrollbar.#ctor">
+      <summary>
+            Initializes new instance of the <see cref="T:GrapeCity.ActiveReports.Viewer.Win.Controls.HorizontalScrollbar" />.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Controls.HorizontalScrollbar.Dispose(System.Boolean)">
+      <summary>
+            Clean up any CommonResources being used.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Controls.HorizontalScrollbar.SetScrolledControl(System.Windows.Forms.ScrollableControl)">
+      <summary>
+            Sets the <see cref="T:System.Windows.Forms.ScrollableControl" /> to be scrolled.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Controls.HoverButton.IsTextShown">
+      <summary>
+            Defines if text is shown on the button.
+            </summary>
+    </member>
+    <member name="E:GrapeCity.ActiveReports.Viewer.Win.Controls.HoverButton.ActiveChanged">
+      <summary>
+            Occurs when the value of the Active property changes.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Controls.HoverButton.Active">
+      <summary>
+            The state defining the fore color and background color of the button. 
+            </summary>
+    </member>
+    <member name="F:GrapeCity.ActiveReports.Viewer.Win.Controls.HoverButton.blockClick">
+      <summary>
+            Defines if MouseClick event handling will change the state or not.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Controls.HoverButton.#ctor">
+      <summary>
+            Initializes a new instance of the <see cref="T:GrapeCity.ActiveReports.Viewer.Win.Controls.HoverButton" /> class.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Controls.HoverButton.Text">
+      <summary>
+            The text of the button.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Controls.HoverButton.SetColor(System.Drawing.Color)">
+      <summary>
+            Sets the color of the button's text or background depending on its state.
+            </summary>
+      <param name="color">Color to be set.</param>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.Controls.IColorScheme">
+      <summary>
+            Defines a class for that specified color can be set.For internal use only!
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Controls.IColorScheme.SetColor(System.Drawing.Color)">
+      <summary>
+            Set color of the content.
+            </summary>
+      <param name="color">Color to be set.</param>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.Controls.IPopUp">
+      <summary>
+            For internal use only!
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.Controls.PopUpDropDown">
+      <summary>
+            For internal use only! Performs dropdown logic.
+            </summary>
+    </member>
+    <member name="F:GrapeCity.ActiveReports.Viewer.Win.Controls.PopUpDropDown.Hiding">
+      <summary>
+            Performs when hiding the content control.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Controls.PopUpDropDown.IsDropDown">
+      <summary>
+            Gets or sets the value indicating than content appears under the owner control or not.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Controls.PopUpDropDown.#ctor(System.Windows.Forms.Control,System.Int32,System.Int32)">
+      <summary>
+            Initializes a new instance of the <see cref="T:GrapeCity.ActiveReports.Viewer.Win.Controls.PopUpDropDown" /> class.
+            </summary>
+      <param name="popedControl">The content control to be showed.</param>
+      <param name="verticalOffset">The vertical offset from the owner control.</param>
+      <param name="horisontalOffset">The horisontal offset from the owner control.</param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Controls.PopUpDropDown.#ctor(System.Windows.Forms.Control)">
+      <summary>
+            Initializes a new instance of the <see cref="T:GrapeCity.ActiveReports.Viewer.Win.Controls.PopUpDropDown" /> class.
+            </summary>
+      <param name="popedControl">The content control to be showed.</param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Controls.PopUpDropDown.Show(System.Windows.Forms.Control)">
+      <summary>
+            Shows the content control.
+            </summary>
+      <param name="control">The owner control rised the dropdown.</param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Controls.PopUpDropDown.Dispose(System.Boolean)">
+      <summary> 
+            Clean up any resources being used.
+            </summary>
+      <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.Controls.PopUpPanel">
+      <summary>
+            For internal use only! Control opening by dropdown.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Controls.PopUpPanel.#ctor">
+      <summary>
+            Initializes a new instance of the <see cref="T:GrapeCity.ActiveReports.Viewer.Win.Controls.PopUpPanel" /> class.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Controls.PopUpPanel.Dispose(System.Boolean)">
+      <summary> 
+            Clean up any resources being used.
+            </summary>
+      <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.Controls.ToolHoverButton">
+      <summary>
+            For internal use only!
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.FindEventArgs">
+      <summary>
+            Provides data for the Find event. 
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.FindEventArgs.#ctor(System.Boolean,System.Int32)">
+      <summary>
+            Initializes a new instance of the FindEventArgs class and sets the Found and PageIndex properties.  
+            </summary>
+      <param name="found">Specifies whether the text was found. </param>
+      <param name="pageIndex">Specifies the page number where the text was found. </param>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.FindEventArgs.Found">
+      <summary>
+            Gets the value that determines whether the text was found.  
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.FindEventArgs.PageIndex">
+      <summary>
+            Gets the page number where the text was found.  
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.FindEventHandler">
+      <summary>
+            Represents the method that will handle the Find click event. 
+            </summary>
+      <param name="sender">A FindEventArgs that contains the event data.</param>
+      <param name="e">The source of the event.</param>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.FlagEnumUiEditor">
+      <summary>
+            UITypeEditor for flag enums
+            This implementation has taken from http://www.codeproject.com/Articles/13793/A-UITypeEditor-for-easy-editing-of-flag-enum-prope
+            with minor refactoring
+            FOR INTERNAL USE ONLY
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.FlagEnumUiEditor.#ctor">
+      <summary>
+            Initializes a new instance of the <see cref="T:GrapeCity.ActiveReports.Viewer.Win.FlagEnumUiEditor" /> class.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.FlagEnumUiEditor.#ctor(System.Resources.ResourceManager)">
+      <summary>
+            Initializes a new instance of the <see cref="T:GrapeCity.ActiveReports.Viewer.Win.FlagEnumUiEditor" /> class.
+            </summary>
+      <param name="resourceManager">Resource manager for this instance</param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.FlagEnumUiEditor.EditValue(System.ComponentModel.ITypeDescriptorContext,System.IServiceProvider,System.Object)">
+      <summary>
+            Edits the specified object's value using the editor style indicated by the <see cref="M:System.Drawing.Design.UITypeEditor.GetEditStyle" /> method.
+            </summary>
+      <param name="context">An <see cref="T:System.ComponentModel.ITypeDescriptorContext" /> that can be used to gain additional context information.</param>
+      <param name="provider">An <see cref="T:System.IServiceProvider" /> that this editor can use to obtain services.</param>
+      <param name="value">The object to edit.</param>
+      <returns>The new value of the object. If the value of the object has not changed, this should return the same object it was passed.</returns>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.FlagEnumUiEditor.GetEditStyle(System.ComponentModel.ITypeDescriptorContext)">
+      <summary>
+            Gets the editor style used by the <see cref="M:System.Drawing.Design.UITypeEditor.EditValue(System.IServiceProvider,System.Object)" /> method.
+            </summary>
+      <param name="context">An <see cref="T:System.ComponentModel.ITypeDescriptorContext" /> that can be used to gain additional context information.</param>
+      <returns>A <see cref="T:System.Drawing.Design.UITypeEditorEditStyle" /> value that indicates the style of editor used by the <see cref="M:System.Drawing.Design.UITypeEditor.EditValue(System.IServiceProvider,System.Object)" /> method. If the <see cref="T:System.Drawing.Design.UITypeEditor" /> does not support this method, then <see cref="M:System.Drawing.Design.UITypeEditor.GetEditStyle" /> will return <see cref="F:System.Drawing.Design.UITypeEditorEditStyle.None" />.</returns>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.FlatViewer">
+      <summary>
+            For internal use only! Viewer control with toolstrip used in FlatEUD.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.FlatViewer.Dispose(System.Boolean)">
+      <summary> 
+            Clean up any resources being used.
+            </summary>
+      <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.ParametersPanel">
+      <summary>
+            Represents the parameter panel of the Viewer.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.ParametersPanel.VisibleRuntime">
+      <summary>
+            Overridden. Gets or sets a value indicating whether this <see cref="T:GrapeCity.ActiveReports.Viewer.Win.ParametersPanel" /> is visible in runtime.
+            </summary>
+      <value>
+        <c>true</c> if visible; otherwise, <c>false</c>.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.ParametersPanel.EnabledRuntime">
+      <summary>
+            Gets or sets a value indicating whether this <see cref="T:GrapeCity.ActiveReports.Viewer.Win.ParametersPanel" /> is enabled in runtime.
+            </summary>
+      <value>
+        <c>true</c> if enabled; otherwise, <c>false</c>.</value>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.ParametersPanel.Refresh">
+      <summary>
+            Overridden. Refreshes the Parameters panel.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.ParametersPanel.Text">
+      <summary>
+            Overridden. Gets or sets the caption of parameters panel.  
+            </summary>
+      <value>The caption text.</value>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.SearchPanel">
+      <summary>
+            Represents the search panel of the Viewer.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.SearchPanel.VisibleRuntime">
+      <summary>
+            Gets or sets a value indicating whether this <see cref="T:GrapeCity.ActiveReports.Viewer.Win.SearchPanel" /> is visible in runtime.
+            </summary>
+      <value>
+        <c>true</c> if visible; otherwise, <c>false</c>.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.SearchPanel.EnabledRuntime">
+      <summary>
+            Gets or sets a value indicating whether this <see cref="T:GrapeCity.ActiveReports.Viewer.Win.SearchPanel" /> is enabled in runtime.
+            </summary>
+      <value>
+        <c>true</c> if enabled; otherwise, <c>false</c>.</value>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.SearchPanel.Clear">
+      <summary>
+            Overridden. Clears the search panel UI, resets the search parameters and clears the search result.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.SearchPanel.Text">
+      <summary>
+            Overridden. Gets or sets the caption of search panel. 
+            </summary>
+      <value>The caption text.</value>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.Sidebar">
+      <summary>
+            Exposes Viewer public API.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Sidebar.TocPanel">
+      <summary>
+            Gets the toc panel.
+            </summary>
+      <value>The toc panel.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Sidebar.SearchPanel">
+      <summary>
+            Gets the search panel.
+            </summary>
+      <value>The search panel.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Sidebar.ParametersPanel">
+      <summary>
+            Gets the parameters panel.
+            </summary>
+      <value>The parameters panel.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Sidebar.ThumbnailsPanel">
+      <summary>
+            Gets the thumbnails panel.
+            </summary>
+      <value>The thumbnails panel.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Sidebar.SelectedIndex">
+      <summary>
+            Gets or Sets the index of the selected panel.
+            </summary>
+      <value>The index of the selected panel.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Sidebar.Width">
+      <summary>
+            Gets or Sets the width of the sidebar.
+            </summary>
+      <value>The width.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Sidebar.Visible">
+      <summary>
+            Gets or sets a value indicating whether this <see cref="T:GrapeCity.ActiveReports.Viewer.Win.Sidebar" /> is visible.
+            </summary>
+      <value>
+        <c>true</c> if visible; otherwise, <c>false</c>.</value>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Sidebar.ToggleVisibility">
+      <summary>
+            Toggles the Sidebar visibility.
+            </summary>
+    </member>
+    <member name="E:GrapeCity.ActiveReports.Viewer.Win.Sidebar.SelectedIndexChanged">
+      <summary>
+            Raises when the index of the selected panel changes.
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.SidebarPanel">
+      <summary>
+            Exposes public properties of the sidebar panels.
+            </summary>
+    </member>
+    <member name="F:GrapeCity.ActiveReports.Viewer.Win.SidebarPanel.ViewerViewModel">
+      <summary>
+            The view model for entire viewer
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.SidebarPanel.VisibleRuntime">
+      <summary>
+            Gets or sets a value indicating whether this <see cref="T:GrapeCity.ActiveReports.Viewer.Win.SidebarPanel" /> is visible in runtime.
+            </summary>
+      <value>
+        <c>true</c> if visible; otherwise, <c>false</c>.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.SidebarPanel.EnabledRuntime">
+      <summary>
+            Gets or sets a value indicating whether this <see cref="T:GrapeCity.ActiveReports.Viewer.Win.SidebarPanel" /> is enabled in runtime.
+            </summary>
+      <value>
+        <c>true</c> if enabled; otherwise, <c>false</c>.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.SidebarPanel.Visible">
+      <summary>
+            Gets or sets a value indicating whether this <see cref="T:GrapeCity.ActiveReports.Viewer.Win.SidebarPanel" /> is visible.
+            </summary>
+      <value>
+        <c>true</c> if visible; otherwise, <c>false</c>.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.SidebarPanel.Enabled">
+      <summary>
+            Gets or sets a value indicating whether this <see cref="T:GrapeCity.ActiveReports.Viewer.Win.SidebarPanel" /> is enabled.
+            </summary>
+      <value>
+        <c>true</c> if enabled; otherwise, <c>false</c>.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.SidebarPanel.Width">
+      <summary>
+            Gets or sets the width of entire sidebar.
+            </summary>
+      <remarks>
+            Note: this property was added for backward compatibility reasons only.
+            Use Viewer.Sidebar.Width instead (if possible).
+            </remarks>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.SidebarPanel.Refresh">
+      <summary>
+            Refreshes the sidebar panel.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.SidebarPanel.Clear">
+      <summary>
+            Clears this instance.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.SidebarPanel.ContextMenu">
+      <summary>
+            Gets or sets the context menu for the sidebar panel.
+            </summary>
+      <value>The context menu.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.SidebarPanel.Text">
+      <summary>
+            Gets or sets the caption of sidebar panel.
+            </summary>
+      <value>The caption text.</value>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.Theming.ColorableToolStrip">
+      <summary>
+            Allows to overwrite the default painting styles for ToolStrip objects
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.Theming.IThemeManager">
+      <summary>
+            Allows to manage the colors of controls
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Theming.IThemeManager.AddControl(GrapeCity.ActiveReports.Viewer.Win.Theming.IColorableControl)">
+      <summary>
+            Enable color management for all elements of the  <paramref name="control" /></summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Theming.IThemeManager.RemoveControl(GrapeCity.ActiveReports.Viewer.Win.Theming.IColorableControl)">
+      <summary>
+            Disable color management for all elements of the  <paramref name="control" /></summary>
+      <param name="control"></param>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.Theming.IColorableControl">
+      <summary>
+            Contains a collection of the <see cref="T:GrapeCity.ActiveReports.Viewer.Win.Theming.ColorableElement" /> elements
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Theming.IColorableControl.GetElements">
+      <summary>
+            Get UI-elements of the control
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Theming.IColorableControl.GetChildControls">
+      <summary>
+            Get nested controls
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Theming.IColorableControl.ReApplyColors">
+      <summary>
+            Invoke if the control colors should be redrawn
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.Theming.IObservableColorableControl">
+      <summary>
+            A <see cref="T:GrapeCity.ActiveReports.Viewer.Win.Theming.IColorableControl" /> with the ability to notify of changes
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Theming.IObservableColorableControl.ColorsChanged">
+      <summary>
+            Occurs if the control colors were changed
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.Theming.ColorableElement">
+      <summary>
+            Representation of the specific UI-element of an control
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Theming.ColorableElement.ControlType">
+      <summary>
+            Control type (text box, label, treeview, etc.)
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Theming.ColorableElement.ElementType">
+      <summary>
+            Color type (background color, text color, border color, etc.)
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Theming.ColorableElement.ApplyColor">
+      <summary>
+            Set the color of the element
+            </summary>
+    </member>
+    <member name="F:GrapeCity.ActiveReports.Viewer.Win.Theming.ColorableElement.ReApplyColor">
+      <summary>
+            Invoke if the element color should be redrawn
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.ThumbnailsPanel">
+      <summary>
+            Represents the thumbnails panel of the Viewer.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.ThumbnailsPanel.VisibleRuntime">
+      <summary>
+            Gets or sets a value indicating whether this <see cref="T:GrapeCity.ActiveReports.Viewer.Win.ThumbnailsPanel" /> is visible in runtime.
+            </summary>
+      <value>
+        <c>true</c> if visible; otherwise, <c>false</c>.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.ThumbnailsPanel.EnabledRuntime">
+      <summary>
+            Gets or sets a value indicating whether this <see cref="T:GrapeCity.ActiveReports.Viewer.Win.ThumbnailsPanel" /> is enabled in runtime.
+            </summary>
+      <value>
+        <c>true</c> if enabled; otherwise, <c>false</c>.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.ThumbnailsPanel.Text">
+      <summary>
+            Overridden. Gets or sets the caption of thumbnails panel.
+            </summary>
+      <value>The caption text.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.ThumbnailsPanel.Zoom">
+      <summary>
+            Gets or sets the zoom level of items in the ThumbnailsPanel.
+            </summary>
+      <value>The zoom level.</value>
+    </member>
+    <member name="E:GrapeCity.ActiveReports.Viewer.Win.ThumbnailsPanel.ZoomChanged">
+      <summary>
+            Occurs when the zoom level changes in the ThumbnailsPanel.
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.TocPanel">
+      <summary>
+            Represents the table of contents panel of the Viewer.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.TocPanel.VisibleRuntime">
+      <summary>
+            Gets or sets a value indicating whether this <see cref="T:GrapeCity.ActiveReports.Viewer.Win.TocPanel" /> is visible in runtime.
+            </summary>
+      <value>
+        <c>true</c> if visible; otherwise, <c>false</c>.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.TocPanel.EnabledRuntime">
+      <summary>
+            Gets or sets a value indicating whether this <see cref="T:GrapeCity.ActiveReports.Viewer.Win.TocPanel" /> is enabled in runtime.
+            </summary>
+      <value>
+        <c>true</c> if enabled; otherwise, <c>false</c>.</value>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.TocPanel.Clear">
+      <summary>
+            Overridden. Clears the table of contents panel.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.TocPanel.Refresh">
+      <summary>
+            Overridden. Forces the table of contents panel to invalidate its client area and immediately redraw itself and any child controls.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.TocPanel.ContextMenu">
+      <summary>
+            Overridden. Gets or sets a context menu when the user right clicks on the toc panel.
+            </summary>
+      <value>The context menu.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.TocPanel.Text">
+      <summary>
+            Overridden. Gets or sets the caption of table of content panel.
+            </summary>
+      <value>The caption text.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.TocPanel.Expanded">
+      <summary>
+             Expand or collapse TOC
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.UiFlagsTypeEditor">
+      <summary>
+            This is a generic flags enum editor.  This assumes the enum associated has FlagsAttribute
+            assigned and also that the value "0x0" is assigned.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.UiFlagsTypeEditor.GetEditStyle(System.ComponentModel.ITypeDescriptorContext)">
+      <summary>
+            Gets the editor style used by the EditValue method.
+            </summary>
+      <param name="context">An ITypeDescriptorContext that can be used to gain additional context information.</param>
+      <returns>A UITypeEditorEditStyle value that indicates the style of editor used by EditValue. If the UITypeEditor
+             does not support this method, then GetEditStyle will return None.</returns>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.UiFlagsTypeEditor.EditValue(System.ComponentModel.ITypeDescriptorContext,System.IServiceProvider,System.Object)">
+      <summary>
+            Edits the value of the specified object using the editor style indicated by GetEditStyle.
+            </summary>
+      <param name="context">An ITypeDescriptorContext that can be used to gain additional 
+            context information.</param>
+      <param name="provider">An IServiceProvider that this editor can use to obtain services.</param>
+      <param name="value">The object to edit.</param>
+      <returns>The new value of the object.</returns>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.Viewer">
+      <summary>
+            Viewer
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.#ctor">
+      <summary>
+            Initializes a new instance of the <see cref="T:GrapeCity.ActiveReports.Viewer.Win.Viewer" /> class.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.GetElements">
+      <summary>
+            For internal use only!
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.GetChildControls">
+      <summary>
+            For internal use only!
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.ReApplyColors">
+      <summary>
+            For internal use only!
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.ColorsChanged">
+      <summary>
+            For internal use only!
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.WndProc(System.Windows.Forms.Message@)">
+      <summary>
+            Overridden. Processes Windows messages.
+            </summary>
+      <param name="m">The Windows message.</param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.HandleError(System.Exception)">
+      <summary>
+            Reports about runtime error
+            </summary>
+      <param name="ex">error</param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.OnFontChanged(System.EventArgs)">
+      <summary>
+            Overridden. Raises the <see cref="E:System.Windows.Forms.Control.FontChanged" /> event.
+            </summary>
+      <param name="e">An <see cref="T:System.EventArgs" /> that contains the event data.</param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.ProcessCmdKey(System.Windows.Forms.Message@,System.Windows.Forms.Keys)">
+      <summary>
+            Overridden. Processes the command key.
+            </summary>
+      <param name="msg">A <see cref="T:System.Windows.Forms.Message" />, passed by reference, that represents the window message to process.</param>
+      <param name="keyData">One of the <see cref="T:System.Windows.Forms.Keys" /> values that represents the key to process.</param>
+      <returns>true if the character was processed by the control; otherwise, false.</returns>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.Dispose(System.Boolean)">
+      <summary> 
+            Clean up any resources being used.
+            </summary>
+      <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.CancelRender">
+      <summary>
+            Cancels report rendering.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.ShowFindDialog">
+      <summary>
+            Displays Find Dialog
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.Print(System.Boolean)">
+      <summary>
+            Prints the currently opened document(section or page)
+            </summary>
+      <param name="showPrintDialog"></param>
+      <returns></returns>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.Print(System.Boolean,System.Boolean)">
+      <summary>
+            Prints the currently opened document(section or page)
+            </summary>
+      <param name="showPrintDialog"></param>
+      <param name="showPrintProgressDialog"></param>
+      <returns></returns>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.Print(System.Boolean,System.Boolean,System.Boolean)">
+      <summary>
+            Prints the currently opened document(section or page)
+            </summary>
+      <param name="showPrintDialog"></param>
+      <param name="showPrintProgressDialog"></param>
+      <param name="usePrintingThread"></param>
+      <returns></returns>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.Print(GrapeCity.Viewer.Common.PrintingSettings)">
+      <summary>
+            Prints the currently opened document(section or page)
+            </summary>
+      <param name="settings"></param>
+      <returns></returns>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.LoadDocument(System.IO.Stream,GrapeCity.Viewer.Common.DocumentFormat)">
+      <summary>
+            Loads the document from stream.
+            </summary>
+      <param name="stream">Stream with report. Note: Page report with master file should contains full path to master file.</param>
+      <param name="format"></param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.LoadDocument(System.String)">
+      <summary>
+            Loads the document from a specified file path.
+            </summary>
+      <param name="filePath">The file path.</param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.LoadDocument(GrapeCity.Viewer.Common.IDocumentLoader)">
+      <summary>
+            Loads the document with specified document loader.
+            </summary>
+      <param name="parameter">The document loader.</param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.LoadDocument(GrapeCity.ActiveReports.Document.PageDocument)">
+      <summary>
+            Loads the specified page document.
+            </summary>
+      <param name="pageDocument">The page document.</param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.LoadDocument(GrapeCity.ActiveReports.SectionReport)">
+      <summary>
+            Loads the specified section report.
+            </summary>
+      <param name="report">The section report.</param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.LoadDocument(GrapeCity.ActiveReports.Document.SectionDocument)">
+      <summary>
+            Loads the specified section document.
+            </summary>
+      <param name="document">The section document.</param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.SetParametersValues(System.Collections.Generic.IEnumerable{GrapeCity.Viewer.Common.IParameter})">
+      <summary>
+            Loads the specified remote report.
+            </summary>
+      <param name="remoteReport">The remote report.</param>
+      <summary>
+            Sets values of parameters for the report that is shown.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.PreviewPages">
+      <summary>
+            Pages to load.  Pass value less or equal to 0 to load all
+            Applicable only for loading from SectionReport or PageDocument instances
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.AnnotationToolbarVisible">
+      <summary>
+            Gets or Sets the annotation toolbar's visibility.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.AnnotationDropDownVisible">
+      <summary>
+            Gets or Sets the dropdown of annotation toolbar.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.MouseModeButtonsVisible">
+      <summary>
+            Controls visibility of MouseMode buttons.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.CanExport">
+      <summary>
+            Returns "false" if export is not permitted.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.IsFplDocumentOpened">
+      <summary>
+            For internal use only
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.Export(GrapeCity.ActiveReports.Export.IDocumentExport,System.IO.FileInfo)">
+      <summary>
+            Exports the specified page range of the currently loaded report to the specified file by using the specified export filter.
+            </summary>
+      <param name="filter"></param>
+      <param name="file"></param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.Export(GrapeCity.ActiveReports.Export.IDocumentExport,System.IO.FileInfo,System.String)">
+      <summary>
+            Exports the specified page range of the currently loaded report to the specified file by using the specified export filter.
+            </summary>
+      <param name="filter"></param>
+      <param name="file"></param>
+      <param name="pageRange"></param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.Export(GrapeCity.ActiveReports.Export.IDocumentExport,System.IO.Stream)">
+      <summary>
+            Exports the specified page range of the currently loaded report to the specified stream by using the specified export filter.
+            </summary>
+      <param name="filter"></param>
+      <param name="stream"></param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.Export(GrapeCity.ActiveReports.Export.IDocumentExport,System.IO.Stream,System.String)">
+      <summary>
+            Exports the specified page range of the currently loaded report to the specified stream by using the specified export filter.
+            </summary>
+      <param name="filter"></param>
+      <param name="stream"></param>
+      <param name="pageRange"></param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.Render(GrapeCity.ActiveReports.Extensibility.Rendering.IRenderingExtension,GrapeCity.ActiveReports.Extensibility.Rendering.IO.StreamProvider,System.Collections.Specialized.NameValueCollection)">
+      <summary>
+            Exports the specified loaded report to the specified file (or group of files) by using the specified export extension.
+            Note: for page report only.
+            </summary>
+    </member>
+    <member name="E:GrapeCity.ActiveReports.Viewer.Win.Viewer.RefreshReport">
+      <summary>
+             Fires before report refreshes
+             (right after opening of new report, toggling/sorting and drill-through actions,
+             pressing of buttons: view report (parameters panel), galley mode, refresh, back to parent).
+            
+             In case of no error it fires before <see cref="E:GrapeCity.ActiveReports.Viewer.Win.Viewer.LoadCompleted" /> event.
+             </summary>
+    </member>
+    <member name="E:GrapeCity.ActiveReports.Viewer.Win.Viewer.ErrorOccured">
+      <summary>
+            Fires in case of any error (in error panel etc.).
+            </summary>
+    </member>
+    <member name="E:GrapeCity.ActiveReports.Viewer.Win.Viewer.RefreshReportEvent">
+      <summary>
+            Fires before report refreshes.
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.Viewer.ActionEventArgs">
+      <summary>
+            The event args for Action event.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.ActionEventArgs.PageNumber">
+      <summary>
+            Specifies the page number in current layout tree that should be navigated to
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.ActionEventArgs.Action">
+      <summary>
+            Specifies the action that should be performed in response to this event
+            </summary>
+      <remarks>There could be no action defined for the event in that case <see cref="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.ActionEventArgs.PageNumber" /> specifies page which should be activated.</remarks>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.ActionEventArgs.#ctor(GrapeCity.Viewer.Common.Model.Interactivity.IAction)">
+      <summary>
+            Initalizes rendering event data with <see cref="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.ActionEventArgs.Action" /></summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.ActionEventArgs.#ctor(GrapeCity.Viewer.Common.Model.Interactivity.IAction,System.Int32)">
+      <summary>
+            Initalizes rendering event data with <see cref="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.ActionEventArgs.Action" /></summary>
+    </member>
+    <member name="E:GrapeCity.ActiveReports.Viewer.Win.Viewer.Action">
+      <summary>
+            This event fires when report item with specified action was clicked
+            in the report preview control.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.OnAction(System.Object,GrapeCity.ActiveReports.Viewer.Win.Viewer.ActionEventArgs)">
+      <summary>
+            Helper method fires RenderingCompleted event when appropriate.
+            </summary>
+      <param name="sender"></param>
+      <param name="e"></param>
+    </member>
+    <member name="E:GrapeCity.ActiveReports.Viewer.Win.Viewer.Find">
+      <summary>
+            Occurs when the Find dialog finds the requested text in the document.  
+            </summary>
+    </member>
+    <member name="E:GrapeCity.ActiveReports.Viewer.Win.Viewer.HyperLink">
+      <summary>
+            Occurs when the user clicks on text or an image that has a hyperlink assigned to it.  
+            </summary>
+    </member>
+    <member name="E:GrapeCity.ActiveReports.Viewer.Win.Viewer.ZoomChanged">
+      <summary>
+            Occurs when the zoom has changed in the viewer.  
+            </summary>
+    </member>
+    <member name="E:GrapeCity.ActiveReports.Viewer.Win.Viewer.LoadCompleted">
+      <summary>
+            Occurs after all the viewer pages have been fully loaded.  
+            </summary>
+    </member>
+    <member name="E:GrapeCity.ActiveReports.Viewer.Win.Viewer.TableOfContentsAfterSelect">
+      <summary>
+            Occurs after an item is selected in the table of contents treeview.  
+            </summary>
+    </member>
+    <member name="E:GrapeCity.ActiveReports.Viewer.Win.Viewer.TableOfContentsClick">
+      <summary>
+            Occurs when the user clicks an item in the table of contents treeview.  
+            </summary>
+    </member>
+    <member name="E:GrapeCity.ActiveReports.Viewer.Win.Viewer.TableOfContentsSelectedIndexChanged">
+      <summary>
+            Occurs when the index of the currently selected item in the table of contents changes.  
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.TouchModeToolbar">
+      <summary>
+            Pubilc API for touch mode Toolbar manipulation.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.TouchModeButtonVisibility">
+      <summary>
+            Display Touch mode button on viewer's toolbar or not.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.TouchMode">
+      <summary>
+            Enable touch mode or not.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.TouchContextMenuStrip">
+      <summary>
+            Gets or sets the context menu which is to show while user long tap the touch screen.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.History">
+      <summary>
+            Public API for history manipulation.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.Sidebar">
+      <summary>
+            Sidebar Panels public API
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.TableOfContents">
+      <summary>
+            Gets the table of contents panel.
+            </summary>
+      <value>The table of contents panel.</value>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.Toolbar">
+      <summary>
+            Pubilc API for Toolbar manipulation.
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.Viewer.ViewerToolbar">
+      <summary>
+            Represents the toolbar of the Viewer.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.ViewerToolbar.MainBar">
+      <summary>
+            Main tool strip
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.ViewerToolbar.ToolStrip">
+      <summary>
+            Main tool strip
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.ViewerToolbar.NavigationBar">
+      <summary>
+            Navigation tool strip
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.ViewerToolbar.MouseModeBar">
+      <summary>
+            Mouse mode tool strip
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.ViewerToolbar.Font">
+      <summary>
+            Gets or sets the font used to display text in the control.
+            </summary>
+      <value>The font used to display text in the control.</value>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.Viewer.ViewerToolbar.ToString">
+      <summary>
+            Convert the value of this instance to its equivalent string representation.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.AllowSplitter">
+      <summary>
+            Gets or sets a value that determines whether the user is allowed to split the view.  
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.CurrentPage">
+      <summary>
+            Gets or sets the number of the current document page displayed in the viewer.  
+            1 based.
+            Returns 0 if no report is loaded.
+            Affects History.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.GalleyMode">
+      <summary>
+            Gets or sets GalleyMode of report
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.SplitView">
+      <summary>
+            Gets or sets a value that determines whether the viewer is split into two views.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.Zoom">
+      <summary>
+            Gets or sets the viewer's zoom level. 
+            -1 for FitWidth mode
+            -2 for Fit Whole Page mode.
+            Throws ArgumentOutOfRangeException on invalid value.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.ViewType">
+      <summary>
+            Gets or sets a value that determines how the viewer shows pages(single/multi/continous).
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.PagesBackColor">
+      <summary>
+            Public API for background color of report pane.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.ScrollbarEnabled">
+      <summary>
+            Public API. show or hide scrolls within report pane
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.HyperlinkForeColor">
+      <summary>
+            Gets or sets the color of the text within a control that hosts a hyperlink. The default is Blue. For SectionReports only.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.HyperlinkBackColor">
+      <summary>
+            Gets or sets the background color of the controls that hosts a hyperlink. The default is transparent.  For SectionReports only.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.HyperlinkUnderline">
+      <summary>
+            Gets or sets a value determining whether the text in a control that hosts a hyperlink is underlined. The default value is true. For SectionReports only.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.UseHyperlinkSettings">
+      <summary>
+            Gets or sets whether to apply the hyperlink settings when hyperlinks are displayed in the Viewer. For SectionReports only.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.PrintingSettings">
+      <summary>
+            Gets or sets printing settings
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.MultiplePageRows">
+      <summary>
+            Gets or sets the number of pages displayed vertically when the viewer is in MultiPageMode.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.MultiPageRows">
+      <summary>
+            Gets or sets the number of pages displayed vertically when the viewer is in MultiPageMode.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.MultiplePageCols">
+      <summary>
+            Gets or sets the number of horizontal pages to display when the viewer is in MultiPageMode.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.MultiPageCols">
+      <summary>
+            Gets or sets the number of horizontal pages to display when the viewer is in MultiPageMode.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.RepositionPage">
+      <summary>
+            Determines whether the viewer will reposition the view to the top of the page when a user goes to another page after scrolling downward in a page. 
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.SearchResultsForeColor">
+      <summary>
+            Gets or sets the color of the highlighted text when using the Viewer control's Find functionality.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.SearchResultsBackColor">
+      <summary>
+            Gets or sets the background color of the highlighted text when using the Viewer control's Find functionality. 
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.TargetView">
+      <summary>
+            Gets or sets a value that specifies the current target view when SplitView is true. 
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.PageOffset">
+      <summary>
+            Public Api. offsets are in pixels. zoom ignored.
+            different values per pane. for single page only.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.ReportViewer">
+      <summary>
+            Public API. Exposed for backward compatibility reasons.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.Document">
+      <summary>
+            Public API. Exposed for backward compatibility reasons.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.MouseMode">
+      <summary>
+            Public API. Mouse mode
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.ScrollingMode">
+      <summary>
+            Gets/sets the scrolling mode
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.TabTitleLength">
+      <summary>
+            Not used anymore.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.DisplayUnits">
+      <summary>
+            Not used anymore.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.Viewer.RunningInsideVisualStudio">
+      <summary>
+            For internal use only!
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.TargetView">
+      <summary>
+            Determines the current active view in the viewer.
+            </summary>
+    </member>
+    <member name="F:GrapeCity.ActiveReports.Viewer.Win.TargetView.Primary">
+      <summary>
+            The primary view
+            </summary>
+    </member>
+    <member name="F:GrapeCity.ActiveReports.Viewer.Win.TargetView.Secondary">
+      <summary>
+            The secondary view
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.DisplayUnits">
+      <summary>
+            Not used anymore.
+            </summary>
+    </member>
+    <member name="F:GrapeCity.ActiveReports.Viewer.Win.DisplayUnits.Inches">
+      <summary>
+            Inches.
+            </summary>
+    </member>
+    <member name="F:GrapeCity.ActiveReports.Viewer.Win.DisplayUnits.Metric">
+      <summary>
+            Metrics.
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.ZoomChangedEventArgs">
+      <summary>
+            Provides data for the ZoomChanged event. 
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.ZoomChangedEventArgs.#ctor(System.Double)">
+      <summary>
+            Initializes an instance of the ZoomChangedEventArgs class and sets the Zoom property value.  
+            </summary>
+      <param name="zoom">Specifies the new zoom value.</param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Viewer.Win.ZoomChangedEventArgs.#ctor">
+      <summary>
+            Initializes a new instance of the ZoomChangedEventArgs class.  
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.Viewer.Win.ZoomChangedEventArgs.Zoom">
+      <summary>
+            Returns the viewer's new Zoom value. 
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Viewer.Win.ZoomChangedEventHandler">
+      <summary>
+            Represents the method that will handle the zoom click event. 
+            </summary>
+      <param name="sender">A ZoomChangedEventArgs that contains the event data.</param>
+      <param name="e">The source of the event.</param>
+    </member>
+  </members>
+</doc>

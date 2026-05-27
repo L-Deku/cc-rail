@@ -1,0 +1,272 @@
+<?xml version="1.0" encoding="utf-8"?>
+<doc>
+  <assembly>
+    <name>GrapeCity.ActiveReports.Win</name>
+  </assembly>
+  <members>
+    <member name="T:GrapeCity.ActiveReports.PrintControllerFactory">
+      <summary>
+            For internal use only.
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.RichTextService">
+      <summary>
+            For internal use only.
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.WinFormsUiService">
+      <summary>
+            For internal use only.
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.WinFormsService">
+      <summary>
+            For internal use only.
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.SystemPrinter">
+      <summary>
+            Represents the settings of the SystemPrinter class.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.PrinterSettings">
+      <summary>
+            Gets the printer settings associated with the page.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.Collate">
+      <summary>
+            Determines whether all the pages of the report should be printed before another copy of the report.  
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.Color">
+      <summary>
+            Determines whether or not the report will print in color.  
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.Copies">
+      <summary>
+            Determines the number of copies to print.  
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.DpiX">
+      <summary>
+            Gets the horizontal resolution of the SystemPrinter object. 
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.DpiY">
+      <summary>
+            Gets the vertical resolution of the SystemPrinter object.  
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.CanDuplex">
+      <summary>
+            Determines whether or not the report can be duplexed while printing.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.Duplex">
+      <summary>
+            Gets or sets the report document setting for double-sided printing.  
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.Graphics">
+      <summary>
+            Draws the page to the printer.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.Landscape">
+      <summary>
+            Determines whether or not the report will be landscaped for printing.  
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.PaperSizes">
+      <summary>
+            Returns a reference to the collection of paper sizes the printer supports.  
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.PaperSize">
+      <summary>
+            Gets or sets the paper size for the page. 
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.PaperSources">
+      <summary>
+            Returns a reference to the collection of paper sources the printer supports.  
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.PaperSource">
+      <summary>
+            Gets or sets the paper source for the page. 
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.PaperWidth">
+      <summary>
+            Sets or returns the width of the paper used to print the report.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.PaperHeight">
+      <summary>
+            Gets or sets the paper height for printing.  
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.PhysicalOffsetX">
+      <summary>
+            Returns the measurement in pixels of the non-printable section on the left side of the page. 
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.PhysicalOffsetY">
+      <summary>
+            Returns the measurement in pixels of the non-printable section at the top of the page.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.PrinterNames">
+      <summary>
+            Returns the collection of printer names available.  
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.PrinterName">
+      <summary>
+            Gets or sets the name of the printer to use.  
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.FileName">
+      <summary>
+            Gets or sets the file name used to print to a file. 
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.PrinterResolutions">
+      <summary>
+            Returns a collection of the available printer resolutions.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.PrinterResolution">
+      <summary>
+            Gets or sets the printer resolution for the page. 
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.ToPage">
+      <summary>
+            Sets the number of the last page to be printed.
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.FromPage">
+      <summary>
+            Sets the starting page in a print job. 
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.MaxPage">
+      <summary>
+            Sets the total page count in the progress dialog when doing custom printing. 
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.Port">
+      <summary>
+            Gets or sets the current printer port. 
+            </summary>
+    </member>
+    <member name="P:GrapeCity.ActiveReports.SystemPrinter.Ports">
+      <summary>
+            Returns the collection of printer ports available. 
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.SystemPrinter.StartJob(System.String)">
+      <summary>
+            Starts a SystemPrinter print job. 
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.SystemPrinter.AbortJob">
+      <summary>
+            Aborts the SystemPrinter print job initialized by the StartJob method. 
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.SystemPrinter.EndJob">
+      <summary>
+            Ends the SystemPrinter print job initialized by the StartJob method.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.SystemPrinter.StartPage">
+      <summary>
+            Starts a specific page in a SystemPrinter print job.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.SystemPrinter.EndPage">
+      <summary>
+            Ends a specific page in a SystemPrinter print job initialized by the StartPage method.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.SystemPrinter.Escape(System.String)">
+      <summary>
+            Allows escape codes to be entered.  
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.SystemPrinter.SetupDialog">
+      <summary>
+            Shows a SystemPrinter setup dialog.  
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.SystemPrinter.PrintDialog">
+      <summary>
+            Shows a SystemPrinter print dialog.  
+            </summary>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.Document.Section.ActiveReportPrintControllerWithStatusDialog">
+      <summary>
+            For internal use only.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Document.Section.ActiveReportPrintControllerWithStatusDialog.#ctor">
+      <summary>
+            Create a new instance of the ActiveReportPrintControllerWithStatusDialog class.
+            </summary>
+    </member>
+    <member name="E:GrapeCity.ActiveReports.Document.Section.ActiveReportPrintControllerWithStatusDialog.PrintAborted">
+      <summary>
+            Occurs when [print aborted].
+            </summary>
+    </member>
+    <member name="E:GrapeCity.ActiveReports.Document.Section.ActiveReportPrintControllerWithStatusDialog.PrintingProgress">
+      <summary>
+            Occurs when [printing progress].
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Document.Section.ActiveReportPrintControllerWithStatusDialog.OnStartPrint(System.Drawing.Printing.PrintDocument,System.Drawing.Printing.PrintEventArgs)">
+      <summary>
+            OnStartPrint
+            </summary>
+      <param name="prnDoc"></param>
+      <param name="ppea"></param>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Document.Section.ActiveReportPrintControllerWithStatusDialog.OnStartPage(System.Drawing.Printing.PrintDocument,System.Drawing.Printing.PrintPageEventArgs)">
+      <summary>
+            OnStartPage
+            </summary>
+      <param name="prnDoc"></param>
+      <param name="ppea"></param>
+      <returns></returns>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Document.Section.ActiveReportPrintControllerWithStatusDialog.OnEndPage(System.Drawing.Printing.PrintDocument,System.Drawing.Printing.PrintPageEventArgs)">
+      <summary>
+            OnEndPage
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.Document.Section.ActiveReportPrintControllerWithStatusDialog.OnEndPrint(System.Drawing.Printing.PrintDocument,System.Drawing.Printing.PrintEventArgs)">
+      <summary>
+            OnEndPrint
+            </summary>
+      <param name="prnDoc"></param>
+      <param name="ppea"></param>
+    </member>
+    <member name="T:GrapeCity.ActiveReports.SectionDocumentExtension">
+      <summary>
+            Extensions to SectionDocument.
+            </summary>
+    </member>
+    <member name="M:GrapeCity.ActiveReports.SectionDocumentExtension.CopyToClipboard(GrapeCity.ActiveReports.Document.SectionDocument,System.Int32,System.Int32)">
+      <summary>
+            Export the page(s) to Text and Rtf data, and copy it to clipboard.
+            </summary>
+      <param name="firstPageIndex">The zero-based starting page index.</param>
+      <param name="count">The number of pages copy to clipboard.</param>
+    </member>
+  </members>
+</doc>

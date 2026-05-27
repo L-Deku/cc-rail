@@ -1,0 +1,242 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>GrapeCity.ActiveReports.Core.Scripting</name>
+    </assembly>
+    <members>
+        <member name="T:GrapeCity.ActiveReports.Core.Scripting.AssertionHelper">
+            <summary>
+            For internal use only.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Scripting.AssertionHelper.ExecuteWithMemberAccessAssert(System.Action{System.Boolean})">
+            <summary>
+            Executes code while asserting reflection permission
+            </summary>
+            <param name="permission"></param>
+            <param name="action"></param>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Scripting.AssertionHelper.ExecuteWithAssert(System.Security.CodeAccessPermission,System.Action{System.Boolean})">
+            <summary>
+            Executes code while asserting specific permission
+            </summary>
+            <param name="permission"></param>
+            <param name="action"></param>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Scripting.Severity">
+            <summary>
+            Message severity.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Scripting.CompilationResult">
+            <summary>
+            Compilation result message.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Scripting.Language">
+            <summary>
+            Sources language.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Scripting.IAssemblyLoader">
+            <summary>
+            Defines an interface for assembly loaders.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Scripting.IAssemblyLoader.LoadFromAssemblyName(System.Reflection.AssemblyName)">
+            <summary>
+            Resolves and loads an assembly given its AssemblyName.
+            </summary>
+            <returns>Loaded <see cref="T:System.Reflection.Assembly"/>.</returns>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Scripting.IAssemblyLoader.LoadFromStream(System.IO.Stream)">
+            <summary>
+            Loads the Assembly with a common object file format (COFF) based image containing an emitted Assembly.
+            </summary>
+            <returns>Loaded <see cref="T:System.Reflection.Assembly"/>.</returns>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Scripting.IAssemblyLoader.GetAssemblies">
+            <summary>
+            Gets the assemblies that have been loaded into the execution context of this application domain.
+            </summary>
+            <returns>An array of loaded assemblies.</returns>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Scripting.IAssemblyLoader.CreateInstanceAndUnwrap(System.String,System.String,System.Object[])">
+            <summary>
+            Creates a new instance of the specified type. Parameters specify the assembly where the type is defined, and the name of the type.
+            </summary>
+            <returns>An instance of the object specified by <paramref name="typeName" />.</returns>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Scripting.AssemblyLoader">
+            <summary>Loads assemblies using AppDomain.</summary>
+            <remarks>For internal use only.</remarks>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Scripting.AssemblyLoader.GetAppDomain">
+            <summary>
+            Returns the <see cref="T:System.AppDomain"/> used for running custom code and custom assemblies.
+            </summary>
+            <returns>Custom <see cref="T:System.AppDomain"/>.</returns>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Scripting.CodeCompiler">
+            <summary>
+            Scripts compiler.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Scripting.CodeCompiler.TryCompile(GrapeCity.ActiveReports.Core.Scripting.Language,System.String,System.String[],GrapeCity.ActiveReports.Core.Scripting.IAssemblyLoader,System.Reflection.Assembly@,System.Collections.Generic.IEnumerable{GrapeCity.ActiveReports.Core.Scripting.CompilationResult}@,System.Boolean)">
+            <summary>
+            Compile script.
+            </summary>
+            <returns></returns>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Scripting.ReportCustomCodeBuilder">
+            <summary> Initializes custom code objects. </summary>
+            <remarks>For internal use only.</remarks>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Scripting.ReportCustomCodeBuilder.Build(GrapeCity.ActiveReports.PageReportModel.Report,GrapeCity.ActiveReports.Core.Rendering.Remote.IInstanceFactory,GrapeCity.ActiveReports.Core.Scripting.IAssemblyLoader,System.Func{GrapeCity.ActiveReports.Expressions.Remote.GlobalDataTypes.Parameters})">
+            <summary>
+            Initializes custom code objects.
+            </summary>
+            <param name="report">Report definition.</param>
+            <param name="instanceFactory">The instance factory.</param>
+            <param name="assemblyLoader">The object used to load assemblies.</param>
+            <param name="parameters">The parameters for the report.</param>
+            <returns>The custom code objects.</returns>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Scripting.ReportScriptException">
+            <summary>
+            The ReportScriptException is thrown when an error occurs in the report scripting code or any of the report's calculated DataField expressions.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Scripting.ReportScriptException.#ctor">
+            <summary>
+            Initializes a new instance of the <see cref="T:GrapeCity.ActiveReports.Core.Scripting.ReportScriptException"/> class.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Scripting.ReportScriptException.#ctor(System.String)">
+            <summary>
+            Initializes a new instance of the <see cref="T:GrapeCity.ActiveReports.Core.Scripting.ReportScriptException" /> class with a specified error message.
+            </summary>
+            <param name="message">A message that describes the error.</param>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Scripting.ReportScriptException.#ctor(System.String,System.Exception)">
+            <summary>
+            Initializes a new instance of the <see cref="T:GrapeCity.ActiveReports.Core.Scripting.ReportScriptException" /> class with a specified error message and a reference to the inner exception that is the cause of this exception.
+            </summary>
+            <param name="message">The error message that explains the reason for the exception.</param>
+            <param name="innerException">The exception that is the cause of the current exception. If the <paramref name="innerException" /> parameter is not a null reference, the current exception is raised in a catch block that handles the inner exception.</param>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Scripting.ReportScriptException.#ctor(System.Runtime.Serialization.SerializationInfo,System.Runtime.Serialization.StreamingContext)">
+            <summary>
+            Initializes a new instance of the <see cref="T:GrapeCity.ActiveReports.Core.Scripting.ReportScriptException" /> class with serialized data.
+            </summary>
+            <param name="info">The object that holds the serialized object data.</param>
+            <param name="context">The contextual information about the source or destination.</param>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Core.Scripting.ReportScriptException.ErrorData">
+            <summary>
+            Error data, depends on error code.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Scripting.StringExtensions">
+            <summary>
+            Extends <see cref="T:System.String"/> class with helper methods.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Scripting.StringExtensions.LinesNumber(System.String)">
+            <summary>
+            Returns number of lines (strings splitted by \r\n sequence) in the defined text
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Rendering.Remote.CustomCodeService">
+            <summary>
+            Builds custom code facilities.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Rendering.Remote.CustomCodeService.Build(GrapeCity.ActiveReports.Core.Scripting.IAssemblyLoader,GrapeCity.ActiveReports.Core.Rendering.Remote.CustomCode,GrapeCity.ActiveReports.Core.Rendering.Remote.IInstanceFactory)">
+            <summary>
+            Initializes custom code objects.
+            </summary>
+            <param name="assemblyLoader">The object used to load assemblies.</param>
+            <param name="customCode">The custom code</param>
+            /// <param name="instanceFactory">The instance factory.</param>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Rendering.Remote.CustomCode">
+            <summary>
+            Custom code definition.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Rendering.Remote.CodeClassInstance">
+            <summary>
+            Represents a class name and instance name.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Core.Rendering.Remote.CodeClassInstance.ClassName">
+            <summary>
+            Gets the class name of this class/instance pair.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Core.Rendering.Remote.CodeClassInstance.InstanceName">
+            <summary>
+            Gets the instance name of this class/instance pair.
+            </summary>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Rendering.Remote.IInstanceFactory">
+            <summary>
+            Represents factory to create instances of specified types. For internal use only.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Rendering.Remote.IInstanceFactory.CreateInstance(System.Type)">
+            <summary>
+            Creates new instance of specified type.
+            </summary>
+            <param name="type">The type to create new instance of.</param>
+            <returns>The instance of specified type.</returns>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Core.Rendering.Remote.LoaderProxy">
+            <summary>
+            Loads assemblies, compiles custom code, and instantiates classes.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Core.Rendering.Remote.LoaderProxy.AssemblyLoader">
+            <summary>
+            Gets the assembly loader.
+            </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Core.Rendering.Remote.LoaderProxy.InstanceFactory">
+            <summary>
+            Gets the factory to create class instances.
+            </summary>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Rendering.Remote.LoaderProxy.LoadReferencedAssembly(System.String)">
+            <summary>
+            Loads the assemblyName parameter and if successful, creates definitions for all 
+            applicable types in the assembly.
+            </summary>
+            <param name="assemblyName">The name of the assembly to load.</param>
+            <returns>A list of all defintions found in the assembly.</returns>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Rendering.Remote.LoaderProxy.CreateInstance(System.String)">
+            <summary>
+            Creates an instance of the class type passed in and returns applicable defintions.
+            </summary>
+            <param name="className">The name of the type to create.</param>
+            <returns>A list of the defintions applicable to the newly created instance.</returns>
+        </member>
+        <member name="M:GrapeCity.ActiveReports.Core.Rendering.Remote.LoaderProxy.Compile(GrapeCity.ActiveReports.Core.Rendering.Remote.CustomCode)">
+            <summary>
+            Compiles the snippet of code passed in and returns custom code proxy.
+            </summary>
+            <param name="code">The snippet of code to compile.</param>
+        </member>
+        <member name="T:GrapeCity.ActiveReports.Expressions.Remote.GlobalDataTypes.ReportProxy">
+             <summary>
+            Allows to access to parameters of report via custom code.
+             </summary>
+        </member>
+        <member name="P:GrapeCity.ActiveReports.Expressions.Remote.GlobalDataTypes.ReportProxy.Parameters">
+             <summary>
+            Gets the parameters of the currently rendered report.
+             </summary>
+        </member>
+    </members>
+</doc>
