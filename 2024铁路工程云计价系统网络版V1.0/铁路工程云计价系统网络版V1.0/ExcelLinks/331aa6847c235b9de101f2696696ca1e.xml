@@ -7,15 +7,15 @@
       <TotalNo>14</TotalNo>
       <ChapterSeq>130</ChapterSeq>
       <OrderNo>1</OrderNo>
-      <QuotaCode>PY-388</QuotaCode>
+      <QuotaCode>PY-388/1</QuotaCode>
       <QuotaName>顶管工作坑、交汇坑回填土方 坑深≤5m</QuotaName>
       <ExcelPath>C:\Users\谢刚\Desktop\自动预算\阜阳北机务段新增股道工程\阜阳北机务段新增股道工程房建工程量(1).xls</ExcelPath>
       <WorksheetName>基础</WorksheetName>
       <CellAddress>G7</CellAddress>
       <Expression>G7</Expression>
       <LastSyncValue>6.336</LastSyncValue>
-      <LastStatus>定额行不存在</LastStatus>
-      <UpdatedAt>2026-05-27 17:52:03</UpdatedAt>
+      <LastStatus>已同步</LastStatus>
+      <UpdatedAt>2026-05-27 21:11:53</UpdatedAt>
     </ExcelQuotaLink>
     <ExcelQuotaLink>
       <ProjectId>192.168.2.13,1433|Reco20260421091402370</ProjectId>
@@ -23,15 +23,15 @@
       <TotalNo>14</TotalNo>
       <ChapterSeq>130</ChapterSeq>
       <OrderNo>2</OrderNo>
-      <QuotaCode>PY-385</QuotaCode>
+      <QuotaCode>PY-385/1</QuotaCode>
       <QuotaName>顶管工作坑、交汇坑人工挖松土、普通土 坑深≤8m</QuotaName>
       <ExcelPath>C:\Users\谢刚\Desktop\自动预算\阜阳北机务段新增股道工程\阜阳北机务段新增股道工程房建工程量(1).xls</ExcelPath>
       <WorksheetName>基础</WorksheetName>
       <CellAddress>G8</CellAddress>
       <Expression>G8</Expression>
       <LastSyncValue>5.253</LastSyncValue>
-      <LastStatus>定额行不存在</LastStatus>
-      <UpdatedAt>2026-05-27 17:52:14</UpdatedAt>
+      <LastStatus>已同步</LastStatus>
+      <UpdatedAt>2026-05-27 21:11:53</UpdatedAt>
     </ExcelQuotaLink>
     <ExcelQuotaLink>
       <ProjectId>192.168.2.13,1433|Reco20260421091402370</ProjectId>
@@ -39,15 +39,15 @@
       <TotalNo>14</TotalNo>
       <ChapterSeq>130</ChapterSeq>
       <OrderNo>3</OrderNo>
-      <QuotaCode>PY-386</QuotaCode>
+      <QuotaCode>PY-386/1</QuotaCode>
       <QuotaName>顶管工作坑、交汇坑人工挖硬土 坑深≤5m</QuotaName>
       <ExcelPath>C:\Users\谢刚\Desktop\自动预算\阜阳北机务段新增股道工程\阜阳北机务段新增股道工程房建工程量(1).xls</ExcelPath>
       <WorksheetName>基础</WorksheetName>
       <CellAddress>G9</CellAddress>
       <Expression>G9</Expression>
       <LastSyncValue>1.083</LastSyncValue>
-      <LastStatus>定额行不存在</LastStatus>
-      <UpdatedAt>2026-05-27 17:52:20</UpdatedAt>
+      <LastStatus>已同步</LastStatus>
+      <UpdatedAt>2026-05-27 21:11:53</UpdatedAt>
     </ExcelQuotaLink>
     <ExcelQuotaLink>
       <ProjectId>192.168.2.13,1433|Reco20260421091402370</ProjectId>
@@ -55,15 +55,15 @@
       <TotalNo>14</TotalNo>
       <ChapterSeq>130</ChapterSeq>
       <OrderNo>4</OrderNo>
-      <QuotaCode>PY-388</QuotaCode>
+      <QuotaCode>PY-388/1</QuotaCode>
       <QuotaName>顶管工作坑、交汇坑回填土方 坑深≤5m</QuotaName>
       <ExcelPath>C:\Users\谢刚\Desktop\自动预算\阜阳北机务段新增股道工程\阜阳北机务段新增股道工程房建工程量(1).xls</ExcelPath>
       <WorksheetName>基础</WorksheetName>
       <CellAddress>G10</CellAddress>
       <Expression>G10</Expression>
       <LastSyncValue>0.16245</LastSyncValue>
-      <LastStatus>定额行不存在</LastStatus>
-      <UpdatedAt>2026-05-27 17:52:25</UpdatedAt>
+      <LastStatus>已同步</LastStatus>
+      <UpdatedAt>2026-05-27 21:11:53</UpdatedAt>
     </ExcelQuotaLink>
   </Links>
 </ExcelLinkStore>

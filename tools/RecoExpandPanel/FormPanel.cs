@@ -25,6 +25,8 @@ namespace RecoNet
         private static readonly HashSet<Form> InstalledForms = new HashSet<Form>();
         private static readonly HashSet<TreeView> HookedTrees = new HashSet<TreeView>();
         private static readonly Dictionary<ContextMenuStrip, MenuInfo> MenuInfos = new Dictionary<ContextMenuStrip, MenuInfo>();
+        private static readonly Dictionary<ContextMenu, MenuInfo> LegacyMenuInfos = new Dictionary<ContextMenu, MenuInfo>();
+        private static readonly Dictionary<Form, NativeTreeMenuFilter> NativeTreeMenuFilters = new Dictionary<Form, NativeTreeMenuFilter>();
         private static readonly Dictionary<Form, ExcelLinkRuntime> ExcelLinkRuntimes = new Dictionary<Form, ExcelLinkRuntime>();
         private static readonly Dictionary<Form, ExcelLinkPanel> ExcelLinkPanels = new Dictionary<Form, ExcelLinkPanel>();
         private static readonly Dictionary<Form, QuickBindPanel> QuickBindPanels = new Dictionary<Form, QuickBindPanel>();
@@ -50,6 +52,17 @@ namespace RecoNet
             public string Key
             {
                 get { return TotalNo + "|" + ChapterSeq + "|" + OrderNo; }
+            }
+        }
+
+        private sealed class FactorInfo
+        {
+            public string Operator;
+            public string Factor;
+
+            public string Suffix
+            {
+                get { return Operator + Factor; }
             }
         }
 
@@ -123,11 +136,14 @@ namespace RecoNet
                 if (InstalledForms.Contains(mainForm))
                 {
                     InstallAllContextMenus(mainForm);
+                    InstallTreeMouseHook(mainForm);
+                    InstallNativeTreeMenuFilter(mainForm);
                     return;
                 }
 
                 int menus = InstallAllContextMenus(mainForm);
                 InstallTreeMouseHook(mainForm);
+                InstallNativeTreeMenuFilter(mainForm);
                 InstallQuotaGridShortcuts(mainForm);
                 EnsureExcelLinkRuntime(mainForm);
                 if (menus == 0)
@@ -156,6 +172,20 @@ namespace RecoNet
             }
 
             HookedTrees.Add(tree);
+            if (tree.ContextMenu != null)
+            {
+                tree.ContextMenu.Popup -= LegacyContextMenuPopup;
+                tree.ContextMenu.Popup += LegacyContextMenuPopup;
+                LegacyMenuInfos[tree.ContextMenu] = new MenuInfo { MainForm = mainForm, Name = "MenuTree" };
+                AddLegacyTreeMultiplierItem(tree.ContextMenu, mainForm);
+            }
+            if (tree.ContextMenuStrip != null)
+            {
+                tree.ContextMenuStrip.Opening -= ContextMenuOpening;
+                tree.ContextMenuStrip.Opening += ContextMenuOpening;
+                MenuInfos[tree.ContextMenuStrip] = new MenuInfo { MainForm = mainForm, Name = "MenuTree" };
+                AddMultiplierItem(tree.ContextMenuStrip, mainForm, false, true);
+            }
             tree.MouseUp += delegate(object sender, MouseEventArgs e)
             {
                 if (e.Button != MouseButtons.Right)
@@ -175,15 +205,7 @@ namespace RecoNet
                     tv.SelectedNode = node;
                 }
 
-                Timer timer = new Timer();
-                timer.Interval = 120;
-                timer.Tick += delegate
-                {
-                    timer.Stop();
-                    timer.Dispose();
-                    TryPatchVisibleTreeMenu(mainForm, tv.PointToScreen(e.Location));
-                };
-                timer.Start();
+                PatchVisibleToolStripTreeMenus(mainForm);
             };
             Log("Tree mouse hook installed.");
         }
@@ -198,14 +220,18 @@ namespace RecoNet
                     continue;
                 }
 
-                bool looksLikeTreeMenu = HasAnyItem(menu, "计算参数设置", "删除条目", "恢复章节", "整理清单编码", "复制数据(D)", "清空数据", "计算结果统计");
-                if (!looksLikeTreeMenu)
+                if (!LooksLikeTreeMenu(menu))
                 {
                     continue;
                 }
 
                 AddMultiplierItem(menu, mainForm, false, true);
                 ForceMenuRelayout(menu, screenPoint);
+                patched = true;
+            }
+
+            if (PatchVisibleToolStripTreeMenus(mainForm))
+            {
                 patched = true;
             }
 
@@ -244,43 +270,37 @@ namespace RecoNet
                 count++;
                 menu.Opening -= ContextMenuOpening;
                 menu.Opening += ContextMenuOpening;
-                menu.Opened -= ContextMenuOpened;
-                menu.Opened += ContextMenuOpened;
                 MenuInfos[menu] = new MenuInfo { MainForm = mainForm, Name = field.Name };
                 AddMultiplierItemIfMatched(menu);
             }
 
+            foreach (FieldInfo field in mainForm.GetType().GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+            {
+                ContextMenu menu = field.GetValue(mainForm) as ContextMenu;
+                if (menu == null)
+                {
+                    continue;
+                }
+
+                count++;
+                menu.Popup -= LegacyContextMenuPopup;
+                menu.Popup += LegacyContextMenuPopup;
+                LegacyMenuInfos[menu] = new MenuInfo { MainForm = mainForm, Name = field.Name };
+                AddLegacyTreeMultiplierItemIfMatched(menu);
+            }
+
             return count;
+        }
+
+        private static void LegacyContextMenuPopup(object sender, EventArgs e)
+        {
+            AddLegacyTreeMultiplierItemIfMatched(sender as ContextMenu);
         }
 
         private static void ContextMenuOpening(object sender, System.ComponentModel.CancelEventArgs e)
         {
             ContextMenuStrip menu = sender as ContextMenuStrip;
             AddMultiplierItemIfMatched(menu);
-            BeginAddMultiplierItem(menu);
-        }
-
-        private static void ContextMenuOpened(object sender, EventArgs e)
-        {
-            ContextMenuStrip menu = sender as ContextMenuStrip;
-            AddMultiplierItemIfMatched(menu);
-            BeginAddMultiplierItem(menu);
-        }
-
-        private static void BeginAddMultiplierItem(ContextMenuStrip menu)
-        {
-            if (menu == null)
-            {
-                return;
-            }
-
-            try
-            {
-                menu.BeginInvoke((MethodInvoker)delegate { AddMultiplierItemIfMatched(menu); });
-            }
-            catch
-            {
-            }
         }
 
         private static void AddMultiplierItemIfMatched(ContextMenuStrip menu)
@@ -299,6 +319,75 @@ namespace RecoNet
             }
 
             AddMultiplierItem(menu, info.MainForm, isDeMenu, isTreeMenu);
+        }
+
+        private static void AddLegacyTreeMultiplierItemIfMatched(ContextMenu menu)
+        {
+            if (menu == null || !LegacyMenuInfos.ContainsKey(menu))
+            {
+                return;
+            }
+
+            MenuInfo info = LegacyMenuInfos[menu];
+            bool isTreeMenu = info.Name == "MenuTree" || LooksLikeLegacyTreeMenu(menu);
+            if (!isTreeMenu)
+            {
+                return;
+            }
+
+            AddLegacyTreeMultiplierItem(menu, info.MainForm);
+        }
+
+        private static void InstallNativeTreeMenuFilter(Form mainForm)
+        {
+            if (mainForm == null || NativeTreeMenuFilters.ContainsKey(mainForm))
+            {
+                return;
+            }
+
+            NativeTreeMenuFilter filter = new NativeTreeMenuFilter(mainForm);
+            NativeTreeMenuFilters[mainForm] = filter;
+            Application.AddMessageFilter(filter);
+            mainForm.FormClosed += delegate
+            {
+                Application.RemoveMessageFilter(filter);
+                NativeTreeMenuFilters.Remove(mainForm);
+            };
+            Log("Native tree menu filter installed.");
+        }
+
+        private static bool PatchVisibleToolStripTreeMenus(Form mainForm)
+        {
+            bool patched = false;
+            EnumThreadWindows(GetCurrentThreadId(), delegate(IntPtr hWnd, IntPtr lParam)
+            {
+                if (!IsWindowVisible(hWnd))
+                {
+                    return true;
+                }
+
+                ToolStrip menu = Control.FromHandle(hWnd) as ToolStrip;
+                if (menu == null || !LooksLikeTreeMenu(menu))
+                {
+                    return true;
+                }
+
+                AddMultiplierItem(menu, mainForm, false, true);
+                try
+                {
+                    menu.PerformLayout();
+                    menu.Refresh();
+                }
+                catch
+                {
+                }
+
+                patched = true;
+                Log("Visible ToolStrip tree menu patched. visible=" + VisibleItemText(menu));
+                return true;
+            }, IntPtr.Zero);
+
+            return patched;
         }
 
         private static void EnsureExcelLinkRuntime(Form mainForm)
@@ -352,7 +441,7 @@ namespace RecoNet
             return source != null && expected != null && Object.ReferenceEquals(source, expected);
         }
 
-        private static bool HasAnyItem(ContextMenuStrip menu, params string[] texts)
+        private static bool HasAnyItem(ToolStrip menu, params string[] texts)
         {
             foreach (ToolStripItem item in menu.Items)
             {
@@ -381,7 +470,7 @@ namespace RecoNet
             return null;
         }
 
-        private static void AddMultiplierItem(ContextMenuStrip menu, Form mainForm, bool isDeMenu, bool isTreeMenu)
+        private static void AddMultiplierItem(ToolStrip menu, Form mainForm, bool isDeMenu, bool isTreeMenu)
         {
             int insertIndex = FindInsertIndex(menu, isTreeMenu);
             if (insertIndex < 0)
@@ -398,26 +487,31 @@ namespace RecoNet
             }
 
             ToolStripMenuItem multiply = FindMenuItem(menu, "乘系数");
+            if (multiply != null && multiply.DropDownItems.Count == 0)
+            {
+                int existingIndex = menu.Items.IndexOf(multiply);
+                menu.Items.Remove(multiply);
+                multiply.Dispose();
+                multiply = null;
+                if (existingIndex >= 0)
+                {
+                    insertIndex = existingIndex;
+                }
+            }
+
             if (multiply == null)
             {
                 multiply = new ToolStripMenuItem("乘系数");
                 multiply.Visible = true;
                 multiply.Available = true;
                 multiply.Enabled = true;
-                multiply.Click += delegate
-                {
-                    if (isDeMenu)
-                    {
-                        ApplyToSelectedQuotaRows(mainForm);
-                    }
-                    else if (isTreeMenu)
-                    {
-                        ApplyToTree(mainForm);
-                    }
-                };
                 menu.Items.Insert(Math.Min(insertIndex, menu.Items.Count), multiply);
             }
+            multiply.Visible = true;
+            multiply.Available = true;
+            multiply.Enabled = true;
             ApplyMenuIcon(multiply, "multiply.png");
+            ConfigureFactorTargetMenu(multiply, mainForm, isDeMenu, isTreeMenu);
 
             if (isDeMenu)
             {
@@ -449,7 +543,59 @@ namespace RecoNet
             }
         }
 
-        private static ToolStripMenuItem FindMenuItem(ContextMenuStrip menu, string text)
+        private static void ConfigureFactorTargetMenu(ToolStripMenuItem root, Form mainForm, bool isDeMenu, bool isTreeMenu)
+        {
+            if (root == null)
+            {
+                return;
+            }
+
+            EnsureFactorTargetItem(root, mainForm, isDeMenu, isTreeMenu, "乘到原来的工程量", "quantity");
+            EnsureFactorTargetItem(root, mainForm, isDeMenu, isTreeMenu, "乘到定额编号", "quotaCode");
+        }
+
+        private static void EnsureFactorTargetItem(ToolStripMenuItem parent, Form mainForm, bool isDeMenu, bool isTreeMenu, string text, string target)
+        {
+            if (FindDropDownMenuItem(parent, text) != null)
+            {
+                return;
+            }
+
+            AddFactorTargetItem(parent, mainForm, isDeMenu, isTreeMenu, text, target);
+        }
+
+        private static void AddFactorTargetItem(ToolStripMenuItem parent, Form mainForm, bool isDeMenu, bool isTreeMenu, string text, string target)
+        {
+            ToolStripMenuItem item = new ToolStripMenuItem(text);
+            item.Click += delegate
+            {
+                if (isDeMenu)
+                {
+                    ApplyToSelectedQuotaRows(mainForm, target);
+                }
+                else if (isTreeMenu)
+                {
+                    ApplyToTree(mainForm, target);
+                }
+            };
+            parent.DropDownItems.Add(item);
+        }
+
+        private static ToolStripMenuItem FindDropDownMenuItem(ToolStripMenuItem menu, string text)
+        {
+            foreach (ToolStripItem item in menu.DropDownItems)
+            {
+                ToolStripMenuItem menuItem = item as ToolStripMenuItem;
+                if (menuItem != null && menuItem.Text == text)
+                {
+                    return menuItem;
+                }
+            }
+
+            return null;
+        }
+
+        private static ToolStripMenuItem FindMenuItem(ToolStrip menu, string text)
         {
             foreach (ToolStripItem item in menu.Items)
             {
@@ -462,6 +608,340 @@ namespace RecoNet
 
             return null;
         }
+
+        private static void AddLegacyTreeMultiplierItem(ContextMenu menu, Form mainForm)
+        {
+            if (menu == null)
+            {
+                return;
+            }
+
+            MenuItem multiply = FindLegacyMenuItem(menu, "乘系数");
+            if (multiply != null && multiply.MenuItems.Count == 0)
+            {
+                int existingIndex = menu.MenuItems.IndexOf(multiply);
+                menu.MenuItems.Remove(multiply);
+                multiply.Dispose();
+                multiply = null;
+                AddLegacyTreeMultiplierItem(menu, mainForm, existingIndex);
+                return;
+            }
+
+            if (multiply == null)
+            {
+                AddLegacyTreeMultiplierItem(menu, mainForm, FindLegacyInsertIndex(menu));
+                return;
+            }
+
+            EnsureLegacyTargetItem(multiply, "乘到原来的工程量", mainForm, "quantity");
+            EnsureLegacyTargetItem(multiply, "乘到定额编号", mainForm, "quotaCode");
+        }
+
+        private static void AddLegacyTreeMultiplierItem(ContextMenu menu, Form mainForm, int insertIndex)
+        {
+            MenuItem multiply = new MenuItem("乘系数");
+            EnsureLegacyTargetItem(multiply, "乘到原来的工程量", mainForm, "quantity");
+            EnsureLegacyTargetItem(multiply, "乘到定额编号", mainForm, "quotaCode");
+            int index = Math.Max(0, Math.Min(insertIndex, menu.MenuItems.Count));
+            menu.MenuItems.Add(index, multiply);
+            Log("Legacy tree multiplier inserted. index=" + index.ToString(CultureInfo.InvariantCulture));
+        }
+
+        private static void EnsureLegacyTargetItem(MenuItem parent, string text, Form mainForm, string target)
+        {
+            if (FindLegacyMenuItem(parent, text) != null)
+            {
+                return;
+            }
+
+            MenuItem item = new MenuItem(text);
+            item.Click += delegate { ApplyToTree(mainForm, target); };
+            parent.MenuItems.Add(item);
+        }
+
+        private static MenuItem FindLegacyMenuItem(Menu menu, string text)
+        {
+            if (menu == null)
+            {
+                return null;
+            }
+
+            foreach (MenuItem item in menu.MenuItems)
+            {
+                if (NormalizeMenuText(item.Text) == NormalizeMenuText(text))
+                {
+                    return item;
+                }
+            }
+
+            return null;
+        }
+
+        private static bool LooksLikeLegacyTreeMenu(Menu menu)
+        {
+            return HasAnyLegacyItem(menu, "计算参数设置", "删除条目", "恢复章节", "整理清单编码", "复制数据(D)", "清空数据", "计算结果统计", "删除单项概算标识");
+        }
+
+        private static bool HasAnyLegacyItem(Menu menu, params string[] texts)
+        {
+            if (menu == null)
+            {
+                return false;
+            }
+
+            foreach (MenuItem item in menu.MenuItems)
+            {
+                string itemText = NormalizeMenuText(item.Text);
+                foreach (string text in texts)
+                {
+                    if (itemText == NormalizeMenuText(text))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool LooksLikeTreeMenu(ToolStrip menu)
+        {
+            int matches = 0;
+            if (HasAnyItem(menu, "计算参数设置")) matches++;
+            if (HasAnyItem(menu, "删除条目")) matches++;
+            if (HasAnyItem(menu, "整理清单编码")) matches++;
+            if (HasAnyItem(menu, "复制数据(D)", "复制数据(&D)")) matches++;
+            if (HasAnyItem(menu, "清空数据")) matches++;
+            if (HasAnyItem(menu, "计算结果统计")) matches++;
+            if (HasAnyItem(menu, "插入子级", "恢复章节", "删除单项概算标识")) matches++;
+            return matches >= 2;
+        }
+
+        private static int FindLegacyInsertIndex(ContextMenu menu)
+        {
+            string[] anchors = new string[] { "计算参数设置", "删除单项概算标识", "删除条目", "恢复章节", "整理清单编码", "复制数据(D)", "计算结果统计" };
+            for (int i = 0; i < menu.MenuItems.Count; i++)
+            {
+                string text = NormalizeMenuText(menu.MenuItems[i].Text);
+                foreach (string anchor in anchors)
+                {
+                    if (text == NormalizeMenuText(anchor))
+                    {
+                        return i + 1;
+                    }
+                }
+            }
+
+            return menu.MenuItems.Count;
+        }
+
+        private static string NormalizeMenuText(string text)
+        {
+            if (String.IsNullOrEmpty(text))
+            {
+                return String.Empty;
+            }
+
+            return text.Replace("&", String.Empty).Trim();
+        }
+
+        private sealed class NativeTreeMenuFilter : IMessageFilter
+        {
+            private const int WM_CONTEXTMENU = 0x007B;
+            private const int WM_COMMAND = 0x0111;
+            private const int WM_INITMENUPOPUP = 0x0117;
+            private const int WM_RBUTTONDOWN = 0x0204;
+            private const int WM_RBUTTONUP = 0x0205;
+            private const uint MF_STRING = 0x0000;
+            private const uint MF_POPUP = 0x0010;
+            private const uint MF_BYPOSITION = 0x0400;
+            private const int NativeQuantityCommand = 28433;
+            private const int NativeQuotaCodeCommand = 28434;
+
+            private readonly Form mainForm;
+            private bool scanScheduled;
+
+            public NativeTreeMenuFilter(Form mainForm)
+            {
+                this.mainForm = mainForm;
+            }
+
+            public bool PreFilterMessage(ref Message m)
+            {
+                if (m.Msg == WM_INITMENUPOPUP)
+                {
+                    TryPatchNativeTreeMenu(m.WParam);
+                    return false;
+                }
+
+                if (m.Msg == WM_CONTEXTMENU || m.Msg == WM_RBUTTONDOWN || m.Msg == WM_RBUTTONUP)
+                {
+                    ScheduleVisibleToolStripScan();
+                    return false;
+                }
+
+                if (m.Msg == WM_COMMAND)
+                {
+                    int command = unchecked((int)((long)m.WParam & 0xFFFF));
+                    if (command == NativeQuantityCommand)
+                    {
+                        ApplyToTree(mainForm, "quantity");
+                        return true;
+                    }
+                    if (command == NativeQuotaCodeCommand)
+                    {
+                        ApplyToTree(mainForm, "quotaCode");
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            private void ScheduleVisibleToolStripScan()
+            {
+                if (scanScheduled)
+                {
+                    return;
+                }
+
+                scanScheduled = true;
+                Timer timer = new Timer();
+                timer.Interval = 60;
+                timer.Tick += delegate
+                {
+                    timer.Stop();
+                    timer.Dispose();
+                    scanScheduled = false;
+                    PatchVisibleToolStripTreeMenus(mainForm);
+                };
+                timer.Start();
+            }
+
+            private void TryPatchNativeTreeMenu(IntPtr menu)
+            {
+                if (menu == IntPtr.Zero || HasNativeMenuItem(menu, "乘系数") || !LooksLikeNativeTreeMenu(menu))
+                {
+                    return;
+                }
+
+                IntPtr submenu = CreatePopupMenu();
+                if (submenu == IntPtr.Zero)
+                {
+                    return;
+                }
+
+                AppendMenu(submenu, MF_STRING, new UIntPtr((uint)NativeQuantityCommand), "乘到原来的工程量");
+                AppendMenu(submenu, MF_STRING, new UIntPtr((uint)NativeQuotaCodeCommand), "乘到定额编号");
+
+                UIntPtr popupId = UIntPtr.Size == 8
+                    ? new UIntPtr((ulong)submenu.ToInt64())
+                    : new UIntPtr((uint)submenu.ToInt32());
+                int index = Math.Max(0, FindNativeInsertIndex(menu));
+                InsertMenu(menu, (uint)index, MF_BYPOSITION | MF_POPUP, popupId, "乘系数");
+                Log("Native tree multiplier inserted. index=" + index.ToString(CultureInfo.InvariantCulture) + ", visible=" + NativeMenuText(menu));
+            }
+
+            private static bool PatchVisibleToolStripTreeMenus(Form mainForm)
+            {
+                return FormPanel.PatchVisibleToolStripTreeMenus(mainForm);
+            }
+
+            private static bool LooksLikeNativeTreeMenu(IntPtr menu)
+            {
+                int matches = 0;
+                if (HasNativeMenuItem(menu, "计算参数设置")) matches++;
+                if (HasNativeMenuItem(menu, "删除条目")) matches++;
+                if (HasNativeMenuItem(menu, "整理清单编码")) matches++;
+                if (HasNativeMenuItem(menu, "复制数据(D)")) matches++;
+                if (HasNativeMenuItem(menu, "清空数据")) matches++;
+                if (HasNativeMenuItem(menu, "计算结果统计")) matches++;
+                if (HasNativeMenuItem(menu, "恢复章节") || HasNativeMenuItem(menu, "删除单项概算标识")) matches++;
+                return matches >= 2;
+            }
+
+            private static int FindNativeInsertIndex(IntPtr menu)
+            {
+                string[] anchors = new string[] { "计算参数设置", "删除单项概算标识", "删除条目", "恢复章节", "整理清单编码", "复制数据(D)", "计算结果统计" };
+                int count = GetMenuItemCount(menu);
+                for (int i = 0; i < count; i++)
+                {
+                    string text = NormalizeMenuText(GetNativeMenuItemText(menu, i));
+                    foreach (string anchor in anchors)
+                    {
+                        if (text == NormalizeMenuText(anchor))
+                        {
+                            return i + 1;
+                        }
+                    }
+                }
+
+                return count;
+            }
+
+            private static bool HasNativeMenuItem(IntPtr menu, string text)
+            {
+                int count = GetMenuItemCount(menu);
+                string expected = NormalizeMenuText(text);
+                for (int i = 0; i < count; i++)
+                {
+                    if (NormalizeMenuText(GetNativeMenuItemText(menu, i)) == expected)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            private static string NativeMenuText(IntPtr menu)
+            {
+                List<string> texts = new List<string>();
+                int count = GetMenuItemCount(menu);
+                for (int i = 0; i < count; i++)
+                {
+                    texts.Add(GetNativeMenuItemText(menu, i));
+                }
+
+                return String.Join("|", texts.ToArray());
+            }
+
+            private static string GetNativeMenuItemText(IntPtr menu, int index)
+            {
+                StringBuilder buffer = new StringBuilder(256);
+                int length = GetMenuString(menu, (uint)index, buffer, buffer.Capacity, MF_BYPOSITION);
+                return length > 0 ? buffer.ToString() : String.Empty;
+            }
+
+            [DllImport("user32.dll")]
+            private static extern int GetMenuItemCount(IntPtr hMenu);
+
+            [DllImport("user32.dll", CharSet = CharSet.Auto)]
+            private static extern int GetMenuString(IntPtr hMenu, uint uIDItem, StringBuilder lpString, int nMaxCount, uint uFlag);
+
+            [DllImport("user32.dll")]
+            private static extern IntPtr CreatePopupMenu();
+
+            [DllImport("user32.dll", CharSet = CharSet.Auto)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            private static extern bool AppendMenu(IntPtr hMenu, uint uFlags, UIntPtr uIDNewItem, string lpNewItem);
+
+            [DllImport("user32.dll", CharSet = CharSet.Auto)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            private static extern bool InsertMenu(IntPtr hMenu, uint uPosition, uint uFlags, UIntPtr uIDNewItem, string lpNewItem);
+        }
+
+        private delegate bool EnumThreadWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern bool EnumThreadWindows(uint dwThreadId, EnumThreadWindowsProc lpfn, IntPtr lParam);
+
+        [DllImport("kernel32.dll")]
+        private static extern uint GetCurrentThreadId();
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
 
         private static void ApplyMenuIcon(ToolStripMenuItem item, string iconName)
         {
@@ -515,7 +995,7 @@ namespace RecoNet
             }
         }
 
-        private static int FindInsertIndex(ContextMenuStrip menu, bool isTreeMenu)
+        private static int FindInsertIndex(ToolStrip menu, bool isTreeMenu)
         {
             string[] anchors = isTreeMenu
                 ? new string[] { "计算参数设置", "删除单项概算标识", "删除条目", "恢复章节", "整理清单编码", "复制数据(D)", "计算结果统计" }
@@ -536,7 +1016,7 @@ namespace RecoNet
             return -1;
         }
 
-        private static int FirstVisibleIndex(ContextMenuStrip menu)
+        private static int FirstVisibleIndex(ToolStrip menu)
         {
             for (int i = 0; i < menu.Items.Count; i++)
             {
@@ -549,7 +1029,7 @@ namespace RecoNet
             return -1;
         }
 
-        private static string VisibleItemText(ContextMenuStrip menu)
+        private static string VisibleItemText(ToolStrip menu)
         {
             List<string> texts = new List<string>();
             foreach (ToolStripItem item in menu.Items)
@@ -565,7 +1045,12 @@ namespace RecoNet
 
         private static void ApplyToTree(Form mainForm)
         {
-            string factor = PromptFactor(mainForm);
+            ApplyToTree(mainForm, "quantity");
+        }
+
+        private static void ApplyToTree(Form mainForm, string target)
+        {
+            FactorInfo factor = PromptFactor(mainForm);
             if (factor == null)
             {
                 return;
@@ -593,15 +1078,20 @@ namespace RecoNet
                 return;
             }
 
-            int changed = ApplyFactorByChapterNo(conn, itemNo, factor);
+            int changed = ApplyFactorByChapterNo(conn, itemNo, factor, target);
             RefreshCurrentQuotaGrid(mainForm);
-            Log("Tree multiply applied. ChapterNo=" + itemNo + ", Factor=" + factor + ", Changed=" + changed.ToString(CultureInfo.InvariantCulture));
+            Log("Tree factor applied. ChapterNo=" + itemNo + ", Target=" + target + ", Factor=" + factor.Suffix + ", Changed=" + changed.ToString(CultureInfo.InvariantCulture));
             MessageBox.Show(mainForm, "已处理 " + changed.ToString(CultureInfo.InvariantCulture) + " 条定额。", "乘系数", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private static void ApplyToSelectedQuotaRows(Form mainForm)
         {
-            string factor = PromptFactor(mainForm);
+            ApplyToSelectedQuotaRows(mainForm, "quantity");
+        }
+
+        private static void ApplyToSelectedQuotaRows(Form mainForm, string target)
+        {
+            FactorInfo factor = PromptFactor(mainForm);
             if (factor == null)
             {
                 return;
@@ -628,13 +1118,13 @@ namespace RecoNet
                 return;
             }
 
-            int changed = ApplyFactorByQuotaKeys(conn, keys, factor);
+            int changed = ApplyFactorByQuotaKeys(conn, keys, factor, target);
             RefreshCurrentQuotaGrid(mainForm);
-            Log("Grid multiply applied. Factor=" + factor + ", Changed=" + changed.ToString(CultureInfo.InvariantCulture));
+            Log("Grid factor applied. Target=" + target + ", Factor=" + factor.Suffix + ", Changed=" + changed.ToString(CultureInfo.InvariantCulture));
             MessageBox.Show(mainForm, "已处理 " + changed.ToString(CultureInfo.InvariantCulture) + " 条定额。", "乘系数", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
-        private static string PromptFactor(IWin32Window owner)
+        private static FactorInfo PromptFactor(IWin32Window owner)
         {
             using (Form dialog = new Form())
             using (Label label = new Label())
@@ -679,15 +1169,14 @@ namespace RecoNet
 
                 while (dialog.ShowDialog(owner) == DialogResult.OK)
                 {
-                    string factor = textBox.Text.Trim();
-                    decimal parsed;
-                    if (Decimal.TryParse(factor, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed) ||
-                        Decimal.TryParse(factor, NumberStyles.Float, CultureInfo.CurrentCulture, out parsed))
+                    FactorInfo factor;
+                    string error;
+                    if (TryParseFactor(textBox.Text, out factor, out error))
                     {
                         return factor;
                     }
 
-                    MessageBox.Show(owner, "系数格式不正确，请输入数字。", "乘系数", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show(owner, error, "乘系数", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     textBox.SelectAll();
                     textBox.Focus();
                 }
@@ -696,13 +1185,59 @@ namespace RecoNet
             return null;
         }
 
-        private static int ApplyFactorByChapterNo(SqlConnection conn, string chapterNo, string factor)
+        private static bool TryParseFactor(string input, out FactorInfo factor, out string error)
+        {
+            factor = null;
+            error = null;
+            string text = input == null ? String.Empty : input.Trim();
+            if (String.IsNullOrEmpty(text))
+            {
+                error = "请输入系数。";
+                return false;
+            }
+
+            string op = "*";
+            char first = text[0];
+            if (first == '*' || first == '×' || first == 'x' || first == 'X' || first == '＊')
+            {
+                op = "*";
+                text = text.Substring(1).Trim();
+            }
+            else if (first == '/' || first == '÷' || first == '／')
+            {
+                op = "/";
+                text = text.Substring(1).Trim();
+            }
+
+            decimal parsed;
+            if (!Decimal.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed) &&
+                !Decimal.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out parsed))
+            {
+                error = "系数格式不正确，请输入数字，或输入 *系数、/系数。";
+                return false;
+            }
+
+            if (op == "/" && parsed == 0m)
+            {
+                error = "除系数不能为 0。";
+                return false;
+            }
+
+            factor = new FactorInfo();
+            factor.Operator = op;
+            factor.Factor = parsed.ToString(CultureInfo.InvariantCulture);
+            return true;
+        }
+
+        private static int ApplyFactorByChapterNo(SqlConnection conn, string chapterNo, FactorInfo factor, string target)
         {
             EnsureOpen(conn);
             DataTable table = new DataTable();
             using (SqlCommand cmd = conn.CreateCommand())
             {
-                cmd.CommandText = "select 定额序号, 工程数量输入 from 定额输入 where 条目序号 in (select 条目序号 from 章节表 where 条目编号 like @bh) order by 定额序号";
+                cmd.CommandText = String.Equals(target, "quotaCode", StringComparison.OrdinalIgnoreCase)
+                    ? "select 定额序号, 定额编号 from 定额输入 where 条目序号 in (select 条目序号 from 章节表 where 条目编号 like @bh) order by 定额序号"
+                    : "select 定额序号, 工程数量输入 from 定额输入 where 条目序号 in (select 条目序号 from 章节表 where 条目编号 like @bh) order by 定额序号";
                 cmd.Parameters.AddWithValue("@bh", chapterNo + "%");
                 using (SqlDataAdapter adapter = new SqlDataAdapter(cmd))
                 {
@@ -710,10 +1245,10 @@ namespace RecoNet
                 }
             }
 
-            return UpdateRows(conn, table, factor);
+            return UpdateRows(conn, table, factor, target);
         }
 
-        private static int ApplyFactorByQuotaKeys(SqlConnection conn, IEnumerable<QuotaKey> quotaKeys, string factor)
+        private static int ApplyFactorByQuotaKeys(SqlConnection conn, IEnumerable<QuotaKey> quotaKeys, FactorInfo factor, string target)
         {
             EnsureOpen(conn);
             DataTable table = new DataTable();
@@ -721,7 +1256,9 @@ namespace RecoNet
             {
                 using (SqlCommand cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "select 定额序号, 工程数量输入 from 定额输入 where 总概算序号=@zgs and 条目序号=@tm and 顺号=@xh";
+                    cmd.CommandText = String.Equals(target, "quotaCode", StringComparison.OrdinalIgnoreCase)
+                        ? "select 定额序号, 定额编号 from 定额输入 where 总概算序号=@zgs and 条目序号=@tm and 顺号=@xh"
+                        : "select 定额序号, 工程数量输入 from 定额输入 where 总概算序号=@zgs and 条目序号=@tm and 顺号=@xh";
                     cmd.Parameters.AddWithValue("@zgs", key.TotalNo);
                     cmd.Parameters.AddWithValue("@tm", key.ChapterSeq);
                     cmd.Parameters.AddWithValue("@xh", key.OrderNo);
@@ -732,36 +1269,56 @@ namespace RecoNet
                 }
             }
 
-            return UpdateRows(conn, table, factor);
+            return UpdateRows(conn, table, factor, target);
         }
 
-        private static int UpdateRows(SqlConnection conn, DataTable table, string factor)
+        private static int UpdateRows(SqlConnection conn, DataTable table, FactorInfo factor, string target)
         {
             int changed = 0;
             using (SqlTransaction transaction = conn.BeginTransaction())
-            using (SqlCommand update = conn.CreateCommand())
+            using (SqlCommand quantityUpdate = conn.CreateCommand())
+            using (SqlCommand codeUpdate = conn.CreateCommand())
             {
-                update.Transaction = transaction;
-                update.CommandText = "update 定额输入 set 工程数量输入=@value, 工程数量=@quantity where 定额序号=@id";
-                update.Parameters.Add("@value", SqlDbType.NVarChar, 200);
-                update.Parameters.Add("@quantity", SqlDbType.Float);
-                update.Parameters.Add("@id", SqlDbType.BigInt);
+                quantityUpdate.Transaction = transaction;
+                quantityUpdate.CommandText = "update 定额输入 set 工程数量输入=@value, 工程数量=@quantity where 定额序号=@id";
+                quantityUpdate.Parameters.Add("@value", SqlDbType.NVarChar, 200);
+                quantityUpdate.Parameters.Add("@quantity", SqlDbType.Float);
+                quantityUpdate.Parameters.Add("@id", SqlDbType.BigInt);
+
+                codeUpdate.Transaction = transaction;
+                codeUpdate.CommandText = "update 定额输入 set 定额编号=@value where 定额序号=@id";
+                codeUpdate.Parameters.Add("@value", SqlDbType.NVarChar, 200);
+                codeUpdate.Parameters.Add("@id", SqlDbType.BigInt);
 
                 try
                 {
                     foreach (DataRow row in table.Rows)
                     {
-                        string oldValue = Convert.ToString(row["工程数量输入"]).Trim();
+                        string oldValue = String.Equals(target, "quotaCode", StringComparison.OrdinalIgnoreCase)
+                            ? Convert.ToString(row["定额编号"]).Trim()
+                            : Convert.ToString(row["工程数量输入"]).Trim();
                         if (String.IsNullOrEmpty(oldValue))
                         {
                             continue;
                         }
 
-                        string expression = BuildExpression(oldValue, factor);
-                        update.Parameters["@value"].Value = expression;
-                        update.Parameters["@quantity"].Value = Convert.ToDouble(EvaluateDecimal(expression), CultureInfo.InvariantCulture);
-                        update.Parameters["@id"].Value = Convert.ToInt64(row["定额序号"], CultureInfo.InvariantCulture);
-                        changed += update.ExecuteNonQuery();
+                        string expression = String.Equals(target, "quotaCode", StringComparison.OrdinalIgnoreCase)
+                            ? BuildExpression(oldValue, factor)
+                            : BuildExpression("(" + oldValue + ")", factor);
+                        long quotaSequence = Convert.ToInt64(row["定额序号"], CultureInfo.InvariantCulture);
+                        if (String.Equals(target, "quotaCode", StringComparison.OrdinalIgnoreCase))
+                        {
+                            codeUpdate.Parameters["@value"].Value = expression;
+                            codeUpdate.Parameters["@id"].Value = quotaSequence;
+                            changed += codeUpdate.ExecuteNonQuery();
+                        }
+                        else
+                        {
+                            quantityUpdate.Parameters["@value"].Value = expression;
+                            quantityUpdate.Parameters["@quantity"].Value = Convert.ToDouble(EvaluateDecimal(expression), CultureInfo.InvariantCulture);
+                            quantityUpdate.Parameters["@id"].Value = quotaSequence;
+                            changed += quantityUpdate.ExecuteNonQuery();
+                        }
                     }
 
                     transaction.Commit();
@@ -776,14 +1333,10 @@ namespace RecoNet
             return changed;
         }
 
-        private static string BuildExpression(string oldValue, string factor)
+        private static string BuildExpression(string oldValue, FactorInfo factor)
         {
             string cleanOld = oldValue.Trim();
-            string cleanFactor = factor.Trim();
-            decimal parsed;
-            bool pureNumber = Decimal.TryParse(cleanOld, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed) ||
-                              Decimal.TryParse(cleanOld, NumberStyles.Float, CultureInfo.CurrentCulture, out parsed);
-            return pureNumber ? cleanOld + "*" + cleanFactor : "(" + cleanOld + ")*" + cleanFactor;
+            return cleanOld + factor.Suffix;
         }
 
         private static decimal EvaluateDecimal(string expression)
@@ -2679,7 +3232,7 @@ namespace RecoNet
                     {
                         select.Parameters["@id"].Value = item.Link.QuotaSequence;
                         object oldValue = select.ExecuteScalar();
-                        if (oldValue == null || oldValue == DBNull.Value)
+                        if (oldValue == null)
                         {
                             item.Link.LastStatus = "定额行不存在";
                             summary.Skipped++;
