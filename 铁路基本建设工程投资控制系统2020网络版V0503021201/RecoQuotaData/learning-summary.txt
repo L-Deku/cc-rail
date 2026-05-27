@@ -1,8 +1,0 @@
-﻿Project: C:\Users\谢刚\Desktop\自动预算\阜阳北机务段新增股道工程
-ImportedAt: 2026-05-25 18:39:38
-ExcelFiles: 2
-BudgetQuotas: 20
-QuantityItems: 26
-LearningRecords: 20
-Jsonl: C:\Users\谢刚\Desktop\自动预算\RecoQuotaData\learning.jsonl
-Csv: C:\Users\谢刚\Desktop\自动预算\RecoQuotaData\learning.csv
