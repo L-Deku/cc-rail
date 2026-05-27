@@ -567,6 +567,11 @@ namespace RecoQuotaRecommend
 
         private static int ScoreRecord(LearningRecord record, ExcelQuantityItem item)
         {
+            if (TextMatcher.IsSteelOnlyAgainstConcrete(item.Name, record.QuantityName) || TextMatcher.IsSteelOnlyAgainstConcrete(item.Name, record.QuotaName))
+            {
+                return 0;
+            }
+
             string queryName = Normalize(item.Name);
             string context = Normalize(item.ContextText);
             string searchable = Normalize(String.Join(" ", new string[]
@@ -585,17 +590,19 @@ namespace RecoQuotaRecommend
             string recordQuantityName = Normalize(record.QuantityName);
             string recordSection = Normalize(record.QuantitySection);
             string recordBudgetGroup = Normalize(record.BudgetGroup);
-            bool textMatched = false;
+            bool textMatched = TextMatcher.HasStrongNamePairMatch(item.Name, record.QuantityName);
 
             if (!String.IsNullOrEmpty(queryName) && recordQuantityName == queryName)
             {
                 score += 95;
-                textMatched = true;
             }
             else if (!String.IsNullOrEmpty(queryName) && (recordQuantityName.Contains(queryName) || queryName.Contains(recordQuantityName)))
             {
                 score += 70;
-                textMatched = true;
+            }
+            else if (textMatched)
+            {
+                score += Math.Min(70, TextMatcher.NamePairScore(item.Name, record.QuantityName));
             }
 
             if (!String.IsNullOrEmpty(item.SectionName) && (recordSection.Contains(Normalize(item.SectionName)) || recordBudgetGroup.Contains(Normalize(item.SectionName))))
@@ -613,7 +620,6 @@ namespace RecoQuotaRecommend
                 if (token.Length >= 2 && searchable.Contains(token))
                 {
                     score += 12;
-                    textMatched = true;
                 }
             }
 
@@ -1725,6 +1731,11 @@ namespace RecoQuotaRecommend
                 return 0;
             }
 
+            if (IsSteelQuantity(query) && IsConcreteQuotaName(nameText))
+            {
+                return 0;
+            }
+
             int score = 0;
             int primaryMatches = 0;
             int coreMatches = 0;
@@ -1743,20 +1754,20 @@ namespace RecoQuotaRecommend
             int matched = 0;
             foreach (string token in tokens)
             {
-                if (token.Length < 2 || !searchable.Contains(token))
+                if (token.Length < 1 || !searchable.Contains(token))
                 {
                     continue;
                 }
 
                 matched++;
-                bool coreToken = TextMatcher.IsPureChinese(token);
+                bool coreToken = TextMatcher.IsPureChinese(token) && token.Length >= 2;
                 if (coreToken)
                 {
                     coreMatches++;
                 }
 
                 bool primaryHit = nameText.Contains(token) || workText.Contains(token);
-                if (primaryHit)
+                if (primaryHit && token.Length >= 2)
                 {
                     primaryMatches++;
                 }
@@ -1809,12 +1820,33 @@ namespace RecoQuotaRecommend
                 return mixed;
             }
 
+            if (token.Length == 1)
+            {
+                return Math.Max(1, shortChinese / 10);
+            }
+
             return token.Length == 2 ? shortChinese : longChinese;
         }
 
         private static bool IsSteelQuantity(string normalizedQuery)
         {
-            return normalizedQuery.Contains("钢筋") || normalizedQuery.Contains("hpb") || normalizedQuery.Contains("hrb");
+            return TextMatcher.IsSteelQuantityName(normalizedQuery);
+        }
+
+        private static bool IsConcreteQuotaName(string normalizedQuotaName)
+        {
+            if (!TextMatcher.IsConcreteQuantityName(normalizedQuotaName))
+            {
+                return false;
+            }
+
+            return !normalizedQuotaName.Contains("构件钢筋") &&
+                !normalizedQuotaName.Contains("圆钢筋") &&
+                !normalizedQuotaName.Contains("螺纹钢筋") &&
+                !normalizedQuotaName.Contains("箍筋") &&
+                !normalizedQuotaName.Contains("钢筋制作") &&
+                !normalizedQuotaName.Contains("钢筋制安") &&
+                !normalizedQuotaName.Contains("钢筋绑扎");
         }
 
         private static int SteelPreferenceScore(string query, string nameText, string workText, string quotaUnit)
@@ -2100,6 +2132,8 @@ namespace RecoQuotaRecommend
             }
 
             return best.Box.Targets
+                .OrderBy(t => TargetSortRank(t.TargetKind, t.Code))
+                .ThenBy(t => t.Code ?? "", StringComparer.OrdinalIgnoreCase)
                 .Select(t => t.ToRecommendation(item, best.Score, best.Box.BoxId))
                 .ToList();
         }
@@ -2204,7 +2238,8 @@ namespace RecoQuotaRecommend
                 })
                 .GroupBy(t => t.TargetKey, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.First())
-                .OrderBy(t => t.TargetKey, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(t => TargetSortRank(t.TargetKind, t.Code))
+                .ThenBy(t => t.Code ?? "", StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
             string boxId = BuildBoxId(normalized);
@@ -2317,7 +2352,9 @@ namespace RecoQuotaRecommend
                 foreach (MappingBox box in boxes)
                 {
                     box.TrimSamples(MaxSamplesPerBox);
-                    foreach (MappingTarget target in box.Targets)
+                    foreach (MappingTarget target in box.Targets
+                        .OrderBy(t => TargetSortRank(t.TargetKind, t.Code))
+                        .ThenBy(t => t.Code ?? "", StringComparer.OrdinalIgnoreCase))
                     {
                         foreach (MappingSample sample in box.Samples)
                         {
@@ -2350,8 +2387,17 @@ namespace RecoQuotaRecommend
 
         private static string BuildBoxId(List<MappingTarget> targets)
         {
-            string raw = String.Join("|", targets.Select(t => t.TargetKey).ToArray());
+            string raw = String.Join("|", targets
+                .OrderBy(t => t.TargetKey, StringComparer.OrdinalIgnoreCase)
+                .Select(t => t.TargetKey)
+                .ToArray());
             return "box-" + Math.Abs(raw.ToLowerInvariant().GetHashCode()).ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static int TargetSortRank(string targetKind, string code)
+        {
+            string kind = String.IsNullOrWhiteSpace(targetKind) ? QuotaEntry.GuessKind(code) : targetKind;
+            return String.Equals(kind, "quota", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
         }
 
         private static int ParseInt(string text, int fallback)
@@ -2383,7 +2429,17 @@ namespace RecoQuotaRecommend
             int best = 0;
             foreach (MappingSample sample in Samples)
             {
-                int similarity = TextMatcher.Similarity(item.Name, sample.QuantityName);
+                if (!TextMatcher.HasStrongNamePairMatch(item.Name, sample.QuantityName))
+                {
+                    continue;
+                }
+
+                if (TextMatcher.IsSteelOnlyAgainstConcrete(item.Name, sample.QuantityName))
+                {
+                    continue;
+                }
+
+                int similarity = TextMatcher.NamePairScore(item.Name, sample.QuantityName);
                 if (similarity <= 0)
                 {
                     continue;
@@ -2489,6 +2545,11 @@ namespace RecoQuotaRecommend
 
         public static int Similarity(string left, string right)
         {
+            return Math.Min(100, NamePairScore(left, right));
+        }
+
+        public static int NamePairScore(string left, string right)
+        {
             string l = Normalize(left).Replace(" ", "");
             string r = Normalize(right).Replace(" ", "");
             if (String.IsNullOrEmpty(l) || String.IsNullOrEmpty(r))
@@ -2498,22 +2559,128 @@ namespace RecoQuotaRecommend
 
             if (l == r)
             {
-                return 100;
+                return 120;
             }
             if (l.Contains(r) || r.Contains(l))
             {
-                return 78;
+                return 95;
             }
 
-            HashSet<string> leftTokens = new HashSet<string>(Keywords(l));
-            List<string> rightTokens = Keywords(r).ToList();
-            if (leftTokens.Count == 0 || rightTokens.Count == 0)
+            List<string> leftTokens = Keywords(l).Distinct().ToList();
+            if (leftTokens.Count == 0)
             {
                 return 0;
             }
 
-            int hits = rightTokens.Count(t => leftTokens.Contains(t));
-            return hits == 0 ? 0 : (int)Math.Round(70.0 * hits / Math.Max(leftTokens.Count, rightTokens.Count));
+            int score = 0;
+            int possible = 0;
+            int hits = 0;
+            foreach (string token in leftTokens)
+            {
+                int tokenScore = PairTokenScore(token);
+                possible += tokenScore;
+                if (r.Contains(token))
+                {
+                    hits++;
+                    score += tokenScore;
+                }
+            }
+
+            if (hits == 0)
+            {
+                return 0;
+            }
+
+            score += (int)Math.Round(18.0 * hits / leftTokens.Count);
+            return possible > 0 && score > 115 ? 115 : score;
+        }
+
+        public static bool HasStrongNamePairMatch(string left, string right)
+        {
+            string l = Normalize(left).Replace(" ", "");
+            string r = Normalize(right).Replace(" ", "");
+            if (String.IsNullOrEmpty(l) || String.IsNullOrEmpty(r))
+            {
+                return false;
+            }
+
+            if (l == r || l.Contains(r) || r.Contains(l))
+            {
+                return true;
+            }
+
+            bool steelConcreteBlocked = IsSteelOnlyAgainstConcrete(l, r);
+            foreach (string token in Keywords(l).Distinct())
+            {
+                if (token.Length < 2 || !r.Contains(token))
+                {
+                    continue;
+                }
+
+                if (steelConcreteBlocked && String.Equals(token, "钢筋", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+        public static bool IsSteelOnlyAgainstConcrete(string left, string right)
+        {
+            string l = Normalize(left);
+            string r = Normalize(right);
+            bool leftConcrete = IsConcreteQuantityName(l);
+            bool rightConcrete = IsConcreteQuantityName(r);
+            return (IsSteelQuantityName(l) && !leftConcrete && rightConcrete) ||
+                (IsSteelQuantityName(r) && !rightConcrete && leftConcrete);
+        }
+
+        public static bool IsSteelQuantityName(string text)
+        {
+            string value = Normalize(text);
+            return value.Contains("钢筋") ||
+                value.Contains("hpb") ||
+                value.Contains("hrb") ||
+                value.Contains("圆钢") ||
+                value.Contains("螺纹");
+        }
+
+        public static bool IsConcreteQuantityName(string text)
+        {
+            string value = Normalize(text);
+            return value.Contains("混凝土") ||
+                value.Contains("砼") ||
+                value.Contains("商品混凝土");
+        }
+
+        private static int PairTokenScore(string token)
+        {
+            if (String.IsNullOrWhiteSpace(token))
+            {
+                return 0;
+            }
+
+            if (HasAsciiOrDigit(token))
+            {
+                return token.Length >= 3 ? 28 : 8;
+            }
+
+            if (token.Length == 1)
+            {
+                return 4;
+            }
+            if (token.Length == 2)
+            {
+                return 24;
+            }
+            if (token.Length == 3)
+            {
+                return 38;
+            }
+            return 50;
         }
 
         public static IEnumerable<string> Keywords(string text)
@@ -2549,6 +2716,14 @@ namespace RecoQuotaRecommend
                     {
                         string gram = token.Substring(i, 3);
                         if (!IsNumberLike(gram))
+                        {
+                            yield return gram;
+                        }
+                    }
+                    for (int i = 0; i < token.Length; i++)
+                    {
+                        string gram = token.Substring(i, 1);
+                        if (IsPureChinese(gram))
                         {
                             yield return gram;
                         }
