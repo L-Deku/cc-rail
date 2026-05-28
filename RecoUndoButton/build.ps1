@@ -23,5 +23,12 @@ $source = Join-Path $PSScriptRoot "UndoButtonPlugin.cs"
 
 Copy-Item -LiteralPath $out -Destination $softwareDir -Force
 
+$iconSource = Join-Path $PSScriptRoot "icons"
+if (Test-Path -LiteralPath $iconSource) {
+  $iconTarget = Join-Path $softwareDir "RecoUndoButtonIcons"
+  New-Item -ItemType Directory -Path $iconTarget -Force | Out-Null
+  Copy-Item -Path (Join-Path $iconSource "*") -Destination $iconTarget -Force
+}
+
 Write-Host "Built $out"
 Write-Host "Deployed RecoUndoButton.dll to $softwareDir"

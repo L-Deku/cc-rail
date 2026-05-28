@@ -19,6 +19,7 @@ namespace RecoQuotaRecommend
         private static readonly HashSet<Form> InstalledForms = new HashSet<Form>();
         private static readonly Dictionary<ContextMenuStrip, MenuInfo> MenuInfos = new Dictionary<ContextMenuStrip, MenuInfo>();
         private static readonly Dictionary<Form, RecommendDialog> RecommendDialogs = new Dictionary<Form, RecommendDialog>();
+        private static Image recommendMenuIcon;
         private static bool idleHooked;
 
         private sealed class MenuInfo
@@ -145,6 +146,7 @@ namespace RecoQuotaRecommend
                 item.Visible = true;
                 item.Available = true;
                 item.Enabled = true;
+                ApplyRecommendMenuIcon(item);
                 return;
             }
 
@@ -153,8 +155,104 @@ namespace RecoQuotaRecommend
             item.Visible = true;
             item.Available = true;
             item.Enabled = true;
+            ApplyRecommendMenuIcon(item);
             item.Click += delegate { ShowRecommendDialog(mainForm); };
             menu.Items.Insert(insertIndex, item);
+        }
+
+        private static void ApplyRecommendMenuIcon(ToolStripMenuItem item)
+        {
+            if (item == null)
+            {
+                return;
+            }
+
+            Image icon = LoadRecommendMenuIcon();
+            if (icon != null)
+            {
+                item.Image = icon;
+                item.ImageScaling = ToolStripItemImageScaling.SizeToFit;
+            }
+        }
+
+        private static Image LoadRecommendMenuIcon()
+        {
+            if (recommendMenuIcon != null)
+            {
+                return recommendMenuIcon;
+            }
+
+            try
+            {
+                string dir = Path.GetDirectoryName(typeof(QuotaRecommendPanel).Assembly.Location);
+                string path = Path.Combine(dir, "RecoExpandPanelIcons", "recommend_quota.png");
+                if (File.Exists(path))
+                {
+                    using (Image image = Image.FromFile(path))
+                    {
+                        recommendMenuIcon = new Bitmap(image);
+                    }
+
+                    return recommendMenuIcon;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Load recommend menu icon failed: " + ex.Message);
+            }
+
+            recommendMenuIcon = DrawRecommendMenuIcon();
+            return recommendMenuIcon;
+        }
+
+        private static Image DrawRecommendMenuIcon()
+        {
+            Bitmap bitmap = new Bitmap(24, 24);
+            using (Graphics graphics = Graphics.FromImage(bitmap))
+            {
+                graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                graphics.Clear(Color.Transparent);
+                using (SolidBrush paper = new SolidBrush(Color.FromArgb(244, 248, 251)))
+                using (Pen border = new Pen(Color.FromArgb(104, 126, 144)))
+                using (Pen gridPen = new Pen(Color.FromArgb(168, 184, 196)))
+                using (SolidBrush excel = new SolidBrush(Color.FromArgb(70, 139, 73)))
+                using (Pen excelBorder = new Pen(Color.FromArgb(46, 96, 49)))
+                using (Pen xPen = new Pen(Color.White, 1.6f))
+                using (SolidBrush mark = new SolidBrush(Color.FromArgb(79, 144, 84)))
+                using (Pen markPen = new Pen(Color.FromArgb(57, 102, 61), 1.4f))
+                {
+                    graphics.FillRectangle(paper, 6, 2, 14, 18);
+                    graphics.DrawRectangle(border, 6, 2, 14, 18);
+                    graphics.DrawLine(gridPen, 9, 7, 17, 7);
+                    graphics.DrawLine(gridPen, 9, 11, 17, 11);
+                    graphics.DrawLine(gridPen, 9, 15, 17, 15);
+                    graphics.DrawLine(gridPen, 12, 5, 12, 18);
+                    graphics.DrawLine(gridPen, 16, 5, 16, 18);
+                    graphics.FillRectangle(excel, 1, 8, 9, 10);
+                    graphics.DrawRectangle(excelBorder, 1, 8, 9, 10);
+                    xPen.StartCap = System.Drawing.Drawing2D.LineCap.Round;
+                    xPen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+                    graphics.DrawLine(xPen, 3, 10, 8, 16);
+                    graphics.DrawLine(xPen, 8, 10, 3, 16);
+                    Point[] star = new Point[]
+                    {
+                        new Point(19, 3),
+                        new Point(21, 7),
+                        new Point(23, 8),
+                        new Point(21, 10),
+                        new Point(21, 13),
+                        new Point(18, 11),
+                        new Point(15, 12),
+                        new Point(16, 9),
+                        new Point(14, 6),
+                        new Point(17, 7)
+                    };
+                    graphics.FillPolygon(mark, star);
+                    graphics.DrawPolygon(markPen, star);
+                }
+            }
+
+            return bitmap;
         }
 
         private static void ShowRecommendDialog(Form mainForm)

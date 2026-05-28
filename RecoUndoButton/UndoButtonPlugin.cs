@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -87,11 +89,16 @@ namespace RecoUndoButton
             private const int MaxUndoSteps = 20;
             private readonly Form mainForm;
             private readonly List<GridSnapshot> undoStack = new List<GridSnapshot>();
+            private readonly List<GridSnapshot> redoStack = new List<GridSnapshot>();
             private readonly Timer settleTimer;
             private readonly List<ToolStripItem> undoItems = new List<ToolStripItem>();
+            private readonly List<ToolStripItem> redoItems = new List<ToolStripItem>();
             private DataGridView grid;
             private GridSnapshot lastStableSnapshot;
             private GridSnapshot pendingBeforeSnapshot;
+            private Image undoIcon;
+            private Image redoIcon;
+            private ToolStrip floatingToolbar;
             private bool restoring;
 
             public UndoRuntime(Form mainForm)
@@ -113,14 +120,14 @@ namespace RecoUndoButton
 
                 lastStableSnapshot = CaptureSnapshot();
                 HookGrid();
-                bool menuAdded = InstallTopMenuItem();
-                if (!menuAdded)
+                bool buttonsAdded = InstallToolbarItems();
+                if (!buttonsAdded)
                 {
-                    menuAdded = InstallContextMenuItem();
+                    buttonsAdded = InstallContextMenuItem();
                 }
 
                 UpdateUndoItems();
-                UndoButtonPlugin.Log("Undo runtime installed. topMenu=" + menuAdded.ToString(CultureInfo.InvariantCulture));
+                UndoButtonPlugin.Log("Undo runtime installed. buttons=" + buttonsAdded.ToString(CultureInfo.InvariantCulture));
                 return true;
             }
 
@@ -156,47 +163,163 @@ namespace RecoUndoButton
                 }
             }
 
-            private bool InstallTopMenuItem()
+            private bool InstallToolbarItems()
             {
+                RemoveExistingToolbarButtons(mainForm);
+                ToolStrip floating = CreateFloatingChapterToolbar();
+                if (floating != null)
+                {
+                    floatingToolbar = floating;
+                    return undoItems.Count > 0 && redoItems.Count > 0;
+                }
+
+                ToolStrip toolStrip = FindChapterToolStrip(mainForm);
+                if (toolStrip != null)
+                {
+                    if (FindNamedItem(toolStrip.Items, "RecoUndoButton_Undo") == null)
+                    {
+                        ToolStripButton undo = CreateUndoToolButton();
+                        ToolStripButton redo = CreateRedoToolButton();
+                        int insertIndex = FindToolbarInsertIndex(toolStrip);
+                        toolStrip.Items.Insert(Math.Min(insertIndex, toolStrip.Items.Count), redo);
+                        toolStrip.Items.Insert(Math.Min(insertIndex, toolStrip.Items.Count), undo);
+                        undoItems.Add(undo);
+                        redoItems.Add(redo);
+                    }
+
+                    return undoItems.Count > 0 && redoItems.Count > 0;
+                }
+
                 MenuStrip menuStrip = FindMenuStrip(mainForm);
                 if (menuStrip != null)
                 {
-                    ToolStripMenuItem item = CreateUndoMenuItem();
-                    ToolStripMenuItem editMenu = FindMenuItem(menuStrip.Items, "编辑");
-                    if (editMenu != null)
+                    RemoveOldUndoTextItem(menuStrip.Items);
+                    if (FindNamedItem(menuStrip.Items, "RecoUndoButton_Undo") == null)
                     {
-                        if (FindMenuItem(editMenu.DropDownItems, "撤回上一步") == null)
+                        ToolStripButton undo = CreateUndoToolButton();
+                        ToolStripButton redo = CreateRedoToolButton();
+                        int index = FindEditMenuIndex(menuStrip.Items);
+                        if (index < 0)
                         {
-                            editMenu.DropDownItems.Insert(Math.Min(1, editMenu.DropDownItems.Count), item);
-                            undoItems.Add(item);
+                            index = menuStrip.Items.Count;
                         }
-                    }
-                    else if (FindMenuItem(menuStrip.Items, "撤回上一步") == null)
-                    {
-                        menuStrip.Items.Add(item);
-                        undoItems.Add(item);
+                        else
+                        {
+                            index++;
+                        }
+
+                        menuStrip.Items.Insert(Math.Min(index, menuStrip.Items.Count), redo);
+                        menuStrip.Items.Insert(Math.Min(index, menuStrip.Items.Count), undo);
+                        undoItems.Add(undo);
+                        redoItems.Add(redo);
                     }
 
-                    return undoItems.Count > 0;
+                    return undoItems.Count > 0 && redoItems.Count > 0;
                 }
 
-                ToolStrip toolStrip = FindToolStrip(mainForm);
-                if (toolStrip != null)
-                {
-                    if (FindToolStripItem(toolStrip.Items, "撤回上一步") == null)
-                    {
-                        ToolStripButton button = new ToolStripButton("撤回上一步");
-                        button.DisplayStyle = ToolStripItemDisplayStyle.Text;
-                        button.Click += delegate { UndoLastStep(); };
-                        toolStrip.Items.Add(button);
-                        undoItems.Add(button);
-                    }
-
-                    return undoItems.Count > 0;
-                }
-
-                UndoButtonPlugin.Log("Top menu/toolbar not found, will try context menu fallback.");
+                UndoButtonPlugin.Log("Chapter toolbar/menu not found, will try context menu fallback.");
                 return false;
+            }
+
+            private ToolStrip CreateFloatingChapterToolbar()
+            {
+                TreeView tree = UndoButtonPlugin.GetField<TreeView>(mainForm, "Tv_tree");
+                if (tree == null || tree.IsDisposed)
+                {
+                    UndoButtonPlugin.Log("Tv_tree not found, cannot create floating toolbar.");
+                    return null;
+                }
+
+                ToolStrip toolbar = new ToolStrip();
+                toolbar.Name = "RecoUndoButton_FloatingToolbar";
+                toolbar.AutoSize = false;
+                toolbar.CanOverflow = false;
+                toolbar.GripStyle = ToolStripGripStyle.Hidden;
+                toolbar.RenderMode = ToolStripRenderMode.System;
+                toolbar.Dock = DockStyle.None;
+                toolbar.Padding = new Padding(0);
+                toolbar.Margin = new Padding(0);
+                toolbar.BackColor = SystemColors.Control;
+                toolbar.ImageScalingSize = new Size(28, 28);
+                toolbar.Size = new Size(64, 30);
+
+                ToolStripButton undo = CreateUndoToolButton();
+                ToolStripButton redo = CreateRedoToolButton();
+                toolbar.Items.Add(undo);
+                toolbar.Items.Add(redo);
+                undoItems.Add(undo);
+                redoItems.Add(redo);
+
+                mainForm.Controls.Add(toolbar);
+                PositionFloatingToolbar(tree, toolbar);
+                toolbar.BringToFront();
+                mainForm.Resize += delegate { PositionFloatingToolbar(tree, toolbar); };
+                mainForm.Layout += delegate { PositionFloatingToolbar(tree, toolbar); };
+                tree.ParentChanged += delegate { PositionFloatingToolbar(tree, toolbar); };
+                tree.VisibleChanged += delegate { PositionFloatingToolbar(tree, toolbar); };
+                try
+                {
+                    mainForm.BeginInvoke((MethodInvoker)delegate { PositionFloatingToolbar(tree, toolbar); });
+                }
+                catch
+                {
+                }
+
+                UndoButtonPlugin.Log("Floating chapter toolbar created.");
+                return toolbar;
+            }
+
+            private void PositionFloatingToolbar(TreeView tree, ToolStrip toolbar)
+            {
+                if (tree == null || toolbar == null || tree.IsDisposed || toolbar.IsDisposed)
+                {
+                    return;
+                }
+
+                try
+                {
+                    Rectangle treeBounds = ControlBoundsOnForm(mainForm, tree);
+                    Rectangle anchorBounds = FindRightIconAnchor(mainForm, tree, toolbar);
+                    int x;
+                    int y;
+                    if (!anchorBounds.IsEmpty)
+                    {
+                        x = anchorBounds.Left - toolbar.Width - 8;
+                        y = anchorBounds.Top + Math.Max(0, (anchorBounds.Height - toolbar.Height) / 2);
+                    }
+                    else
+                    {
+                        x = treeBounds.Left + 165;
+                        y = treeBounds.Top - 34;
+                    }
+
+                    int minimumX = treeBounds.Left + 130;
+                    if (x < minimumX)
+                    {
+                        x = minimumX;
+                    }
+                    if (x < 0)
+                    {
+                        x = 0;
+                    }
+                    if (y < 0)
+                    {
+                        y = 0;
+                    }
+
+                    Point targetLocation = new Point(x, y);
+                    if (toolbar.Location != targetLocation)
+                    {
+                        toolbar.Location = targetLocation;
+                    }
+                    toolbar.Visible = tree.Visible;
+                    toolbar.BringToFront();
+                    UndoButtonPlugin.Log("Floating toolbar positioned: x=" + x.ToString(CultureInfo.InvariantCulture) + " y=" + y.ToString(CultureInfo.InvariantCulture) + " anchor=" + RectangleToLog(anchorBounds));
+                }
+                catch (Exception ex)
+                {
+                    UndoButtonPlugin.Log("Position floating toolbar failed: " + ex.Message);
+                }
             }
 
             private bool InstallContextMenuItem()
@@ -213,22 +336,144 @@ namespace RecoUndoButton
                     return false;
                 }
 
-                if (FindMenuItem(menu.Items, "撤回上一步") != null)
+                RemoveOldUndoTextItem(menu.Items);
+                if (FindNamedItem(menu.Items, "RecoUndoButton_Undo") != null)
                 {
                     return true;
                 }
 
-                ToolStripMenuItem item = CreateUndoMenuItem();
-                menu.Items.Insert(Math.Min(1, menu.Items.Count), item);
-                undoItems.Add(item);
+                ToolStripMenuItem undo = CreateUndoMenuButton();
+                ToolStripMenuItem redo = CreateRedoMenuButton();
+                int insertIndex = Math.Min(1, menu.Items.Count);
+                menu.Items.Insert(insertIndex, redo);
+                menu.Items.Insert(insertIndex, undo);
+                undoItems.Add(undo);
+                redoItems.Add(redo);
                 return true;
             }
 
-            private ToolStripMenuItem CreateUndoMenuItem()
+            private ToolStripMenuItem CreateUndoMenuButton()
             {
-                ToolStripMenuItem item = new ToolStripMenuItem("撤回上一步");
+                ToolStripMenuItem item = new ToolStripMenuItem("");
+                item.Name = "RecoUndoButton_Undo";
+                item.ToolTipText = "撤回上一步";
+                ConfigureIconItem(item);
+                item.Image = GetArrowIcon(true);
                 item.Click += delegate { UndoLastStep(); };
                 return item;
+            }
+
+            private ToolStripMenuItem CreateRedoMenuButton()
+            {
+                ToolStripMenuItem item = new ToolStripMenuItem("");
+                item.Name = "RecoUndoButton_Redo";
+                item.ToolTipText = "恢复下一步";
+                ConfigureIconItem(item);
+                item.Image = GetArrowIcon(false);
+                item.Click += delegate { RedoLastStep(); };
+                return item;
+            }
+
+            private ToolStripButton CreateUndoToolButton()
+            {
+                ToolStripButton button = new ToolStripButton();
+                button.Name = "RecoUndoButton_Undo";
+                button.ToolTipText = "撤回上一步";
+                ConfigureIconItem(button);
+                button.Image = GetArrowIcon(true);
+                button.Click += delegate { UndoLastStep(); };
+                return button;
+            }
+
+            private ToolStripButton CreateRedoToolButton()
+            {
+                ToolStripButton button = new ToolStripButton();
+                button.Name = "RecoUndoButton_Redo";
+                button.ToolTipText = "恢复下一步";
+                ConfigureIconItem(button);
+                button.Image = GetArrowIcon(false);
+                button.Click += delegate { RedoLastStep(); };
+                return button;
+            }
+
+            private static void ConfigureIconItem(ToolStripItem item)
+            {
+                item.AutoSize = false;
+                item.DisplayStyle = ToolStripItemDisplayStyle.Image;
+                item.ImageScaling = ToolStripItemImageScaling.SizeToFit;
+                item.Margin = new Padding(1, 0, 1, 0);
+                item.Padding = new Padding(0);
+                item.Size = new Size(30, 30);
+            }
+
+            private Image GetArrowIcon(bool undo)
+            {
+                if (undo)
+                {
+                    return undoIcon ?? (undoIcon = LoadArrowIcon("undo.png") ?? CreateArrowIcon(true));
+                }
+
+                return redoIcon ?? (redoIcon = LoadArrowIcon("redo.png") ?? CreateArrowIcon(false));
+            }
+
+            private static Image LoadArrowIcon(string fileName)
+            {
+                try
+                {
+                    string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "RecoUndoButtonIcons", fileName);
+                    if (!File.Exists(path))
+                    {
+                        return null;
+                    }
+
+                    using (Image image = Image.FromFile(path))
+                    {
+                        return new Bitmap(image);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    UndoButtonPlugin.Log("Load arrow icon failed: " + fileName + " " + ex.Message);
+                    return null;
+                }
+            }
+
+            private static Bitmap CreateArrowIcon(bool undo)
+            {
+                Bitmap bitmap = new Bitmap(18, 18);
+                using (Graphics graphics = Graphics.FromImage(bitmap))
+                {
+                    graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                    graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    graphics.Clear(Color.Transparent);
+                    using (Pen pen = new Pen(Color.FromArgb(22, 25, 29), 1.9f))
+                    using (GraphicsPath path = new GraphicsPath())
+                    {
+                        pen.StartCap = LineCap.Round;
+                        pen.EndCap = LineCap.Round;
+                        pen.LineJoin = LineJoin.Round;
+                        if (undo)
+                        {
+                            graphics.DrawLine(pen, 5.9f, 5.4f, 2.9f, 5.4f);
+                            graphics.DrawLine(pen, 2.9f, 5.4f, 2.9f, 8.4f);
+                            path.StartFigure();
+                            path.AddBezier(3.2f, 5.8f, 6.3f, 3.0f, 13.8f, 4.8f, 13.8f, 10.0f);
+                            path.AddBezier(13.8f, 13.7f, 10.6f, 15.0f, 7.4f, 13.2f, 6.3f, 11.6f);
+                            graphics.DrawPath(pen, path);
+                        }
+                        else
+                        {
+                            graphics.DrawLine(pen, 12.1f, 5.4f, 15.1f, 5.4f);
+                            graphics.DrawLine(pen, 15.1f, 5.4f, 15.1f, 8.4f);
+                            path.StartFigure();
+                            path.AddBezier(14.8f, 5.8f, 11.7f, 3.0f, 4.2f, 4.8f, 4.2f, 10.0f);
+                            path.AddBezier(4.2f, 13.7f, 7.4f, 15.0f, 10.6f, 13.2f, 11.7f, 11.6f);
+                            graphics.DrawPath(pen, path);
+                        }
+                    }
+                }
+
+                return bitmap;
             }
 
             private void ScheduleChangeObserved()
@@ -259,6 +504,7 @@ namespace RecoUndoButton
                 if (!GridSnapshot.AreEquivalent(pendingBeforeSnapshot, current))
                 {
                     PushUndo(pendingBeforeSnapshot);
+                    redoStack.Clear();
                     lastStableSnapshot = current;
                 }
 
@@ -285,6 +531,25 @@ namespace RecoUndoButton
                 }
             }
 
+            private void PushRedo(GridSnapshot snapshot)
+            {
+                if (snapshot == null)
+                {
+                    return;
+                }
+
+                if (redoStack.Count > 0 && GridSnapshot.AreEquivalent(redoStack[redoStack.Count - 1], snapshot))
+                {
+                    return;
+                }
+
+                redoStack.Add(snapshot);
+                while (redoStack.Count > MaxUndoSteps)
+                {
+                    redoStack.RemoveAt(0);
+                }
+            }
+
             private void UndoLastStep()
             {
                 try
@@ -298,8 +563,10 @@ namespace RecoUndoButton
                         return;
                     }
 
+                    GridSnapshot current = CaptureSnapshot();
                     GridSnapshot target = undoStack[undoStack.Count - 1];
                     undoStack.RemoveAt(undoStack.Count - 1);
+                    PushRedo(current);
                     RestoreSnapshot(target);
                     lastStableSnapshot = CaptureSnapshot();
                     pendingBeforeSnapshot = null;
@@ -309,6 +576,35 @@ namespace RecoUndoButton
                 {
                     UndoButtonPlugin.Log("Undo failed: " + ex);
                     MessageBox.Show(mainForm, "撤回失败：" + ex.Message, "撤回上一步", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+
+            private void RedoLastStep()
+            {
+                try
+                {
+                    EndGridEdit();
+                    FlushPendingChange();
+                    if (redoStack.Count == 0)
+                    {
+                        MessageBox.Show(mainForm, "没有可恢复的操作。", "恢复下一步", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        UpdateUndoItems();
+                        return;
+                    }
+
+                    GridSnapshot current = CaptureSnapshot();
+                    GridSnapshot target = redoStack[redoStack.Count - 1];
+                    redoStack.RemoveAt(redoStack.Count - 1);
+                    PushUndo(current);
+                    RestoreSnapshot(target);
+                    lastStableSnapshot = CaptureSnapshot();
+                    pendingBeforeSnapshot = null;
+                    UpdateUndoItems();
+                }
+                catch (Exception ex)
+                {
+                    UndoButtonPlugin.Log("Redo failed: " + ex);
+                    MessageBox.Show(mainForm, "恢复失败：" + ex.Message, "恢复下一步", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
 
@@ -514,7 +810,7 @@ namespace RecoUndoButton
 
             private void UpdateUndoItems()
             {
-                bool enabled = undoStack.Count > 0;
+                bool undoEnabled = undoStack.Count > 0;
                 foreach (ToolStripItem item in undoItems.ToArray())
                 {
                     if (item == null || item.IsDisposed)
@@ -523,7 +819,21 @@ namespace RecoUndoButton
                         continue;
                     }
 
-                    item.Enabled = enabled;
+                    item.Enabled = true;
+                    item.ToolTipText = undoEnabled ? "撤回上一步" : "没有可撤回的操作";
+                }
+
+                bool redoEnabled = redoStack.Count > 0;
+                foreach (ToolStripItem item in redoItems.ToArray())
+                {
+                    if (item == null || item.IsDisposed)
+                    {
+                        redoItems.Remove(item);
+                        continue;
+                    }
+
+                    item.Enabled = true;
+                    item.ToolTipText = redoEnabled ? "恢复下一步" : "没有可恢复的操作";
                 }
             }
 
@@ -539,6 +849,33 @@ namespace RecoUndoButton
                 }
 
                 return FindControl<MenuStrip>(root);
+            }
+
+            private static void RemoveExistingToolbarButtons(Control root)
+            {
+                foreach (ToolStrip toolStrip in FindControls<ToolStrip>(root))
+                {
+                    if (toolStrip == null || toolStrip.IsDisposed)
+                    {
+                        continue;
+                    }
+
+                    RemoveNamedToolbarButton(toolStrip.Items, "RecoUndoButton_Undo");
+                    RemoveNamedToolbarButton(toolStrip.Items, "RecoUndoButton_Redo");
+                    RemoveOldUndoTextItem(toolStrip.Items);
+                }
+            }
+
+            private static void RemoveNamedToolbarButton(ToolStripItemCollection items, string name)
+            {
+                ToolStripItem item = FindNamedItem(items, name);
+                if (item == null)
+                {
+                    return;
+                }
+
+                items.Remove(item);
+                item.Dispose();
             }
 
             private static ToolStrip FindToolStrip(Control root)
@@ -561,6 +898,238 @@ namespace RecoUndoButton
                 }
 
                 return null;
+            }
+
+            private static ToolStrip FindChapterToolStrip(Form mainForm)
+            {
+                TreeView tree = UndoButtonPlugin.GetField<TreeView>(mainForm, "Tv_tree");
+                ToolStrip best = null;
+                int bestScore = Int32.MinValue;
+                foreach (ToolStrip toolStrip in FindControls<ToolStrip>(mainForm))
+                {
+                    if (toolStrip == null || toolStrip.IsDisposed || toolStrip is MenuStrip || toolStrip is StatusStrip)
+                    {
+                        continue;
+                    }
+
+                    int score = ScoreToolStrip(toolStrip, tree, mainForm);
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        best = toolStrip;
+                    }
+                }
+
+                if (best != null)
+                {
+                    UndoButtonPlugin.Log("Chapter toolbar selected: name=" + best.Name + " score=" + bestScore.ToString(CultureInfo.InvariantCulture) + " items=" + best.Items.Count.ToString(CultureInfo.InvariantCulture));
+                }
+
+                return best;
+            }
+
+            private static Rectangle FindRightIconAnchor(Form mainForm, TreeView tree, ToolStrip floatingToolbar)
+            {
+                if (mainForm == null || tree == null)
+                {
+                    return Rectangle.Empty;
+                }
+
+                Rectangle treeBounds = ControlBoundsOnForm(mainForm, tree);
+                int desiredTop = treeBounds.Top - 34;
+                Rectangle best = Rectangle.Empty;
+                int bestScore = Int32.MinValue;
+
+                foreach (ToolStrip toolStrip in FindControls<ToolStrip>(mainForm))
+                {
+                    if (toolStrip == null || toolStrip.IsDisposed || toolStrip == floatingToolbar || toolStrip is MenuStrip || toolStrip is StatusStrip)
+                    {
+                        continue;
+                    }
+
+                    Rectangle stripBounds = ControlBoundsOnForm(mainForm, toolStrip);
+                    for (int i = 0; i < toolStrip.Items.Count; i++)
+                    {
+                        ToolStripItem item = toolStrip.Items[i];
+                        if (item == null || !item.Visible || item.Image == null)
+                        {
+                            continue;
+                        }
+
+                        Rectangle itemBounds = new Rectangle(stripBounds.Left + item.Bounds.Left, stripBounds.Top + item.Bounds.Top, item.Bounds.Width, item.Bounds.Height);
+                        int score = 0;
+                        score += Math.Max(0, 180 - Math.Abs(itemBounds.Top - desiredTop) * 8);
+                        if (itemBounds.Left >= treeBounds.Left + 220)
+                        {
+                            score += 120;
+                        }
+                        else if (itemBounds.Left >= treeBounds.Left + 170)
+                        {
+                            score += 70;
+                        }
+                        else if (itemBounds.Left < treeBounds.Left + 90)
+                        {
+                            score -= 150;
+                        }
+
+                        if (itemBounds.Left < treeBounds.Right + 40)
+                        {
+                            score += 30;
+                        }
+                        if (itemBounds.Top < treeBounds.Top - 65 || itemBounds.Top > treeBounds.Top + 5)
+                        {
+                            score -= 120;
+                        }
+
+                        if (score > bestScore || (score == bestScore && !best.IsEmpty && itemBounds.Left < best.Left))
+                        {
+                            bestScore = score;
+                            best = itemBounds;
+                        }
+                    }
+                }
+
+                if (!best.IsEmpty)
+                {
+                    UndoButtonPlugin.Log("Right icon anchor selected: score=" + bestScore.ToString(CultureInfo.InvariantCulture) + " bounds=" + RectangleToLog(best));
+                }
+
+                return best;
+            }
+
+            private static int FindToolbarInsertIndex(ToolStrip toolStrip)
+            {
+                if (toolStrip == null)
+                {
+                    return 0;
+                }
+
+                for (int i = 0; i < toolStrip.Items.Count; i++)
+                {
+                    ToolStripItem item = toolStrip.Items[i];
+                    if (item == null || !item.Visible)
+                    {
+                        continue;
+                    }
+
+                    string text = (item.Text ?? "").Trim();
+                    if (text.IndexOf("章节", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        int indexAfterChapterLabel = Math.Min(i + 1, toolStrip.Items.Count);
+                        UndoButtonPlugin.Log("Toolbar insert after chapter label: index=" + indexAfterChapterLabel.ToString(CultureInfo.InvariantCulture) + " text=" + text);
+                        return indexAfterChapterLabel;
+                    }
+                }
+
+                for (int i = 0; i < toolStrip.Items.Count; i++)
+                {
+                    ToolStripItem item = toolStrip.Items[i];
+                    if (item != null && item.Visible && item.Image != null)
+                    {
+                        UndoButtonPlugin.Log("Toolbar insert before first image item: index=" + i.ToString(CultureInfo.InvariantCulture) + " name=" + item.Name);
+                        return i;
+                    }
+                }
+
+                for (int i = 0; i < toolStrip.Items.Count; i++)
+                {
+                    if (toolStrip.Items[i].Visible)
+                    {
+                        return i;
+                    }
+                }
+
+                return 0;
+            }
+
+            private static string RectangleToLog(Rectangle rectangle)
+            {
+                if (rectangle.IsEmpty)
+                {
+                    return "empty";
+                }
+
+                return rectangle.Left.ToString(CultureInfo.InvariantCulture) + "," + rectangle.Top.ToString(CultureInfo.InvariantCulture) + "," + rectangle.Width.ToString(CultureInfo.InvariantCulture) + "," + rectangle.Height.ToString(CultureInfo.InvariantCulture);
+            }
+
+            private static int ScoreToolStrip(ToolStrip toolStrip, TreeView tree, Form mainForm)
+            {
+                int score = 0;
+                if (toolStrip.Items.Count > 0)
+                {
+                    score += Math.Min(20, toolStrip.Items.Count * 2);
+                }
+                foreach (ToolStripItem item in toolStrip.Items)
+                {
+                    if (item is ToolStripButton)
+                    {
+                        score += 4;
+                    }
+                    if (item.Image != null)
+                    {
+                        score += 4;
+                    }
+                }
+
+                if (tree != null)
+                {
+                    Rectangle stripBounds = ControlBoundsOnForm(mainForm, toolStrip);
+                    Rectangle treeBounds = ControlBoundsOnForm(mainForm, tree);
+
+                    int desiredTop = treeBounds.Top - 34;
+                    int verticalDistance = Math.Abs(stripBounds.Top - desiredTop);
+                    score += Math.Max(0, 140 - verticalDistance * 5);
+
+                    if (stripBounds.Top < treeBounds.Top - 65)
+                    {
+                        score -= 120;
+                    }
+                    if (stripBounds.Top > treeBounds.Top + 5)
+                    {
+                        score -= 80;
+                    }
+
+                    bool horizontallyNearRightIconRow = stripBounds.Right > treeBounds.Left + 220 && stripBounds.Left < treeBounds.Right + 80;
+                    if (horizontallyNearRightIconRow)
+                    {
+                        score += 55;
+                    }
+                    if (stripBounds.Left >= treeBounds.Left + 120 && stripBounds.Left <= treeBounds.Right)
+                    {
+                        score += 45;
+                    }
+                    if (stripBounds.Width >= 120)
+                    {
+                        score += 10;
+                    }
+                }
+
+                string name = (toolStrip.Name ?? "").ToLowerInvariant();
+                if (name.Contains("tree") || name.Contains("chapter") || name.Contains("tool"))
+                {
+                    score += 12;
+                }
+
+                return score;
+            }
+
+            private static Rectangle ControlBoundsOnForm(Form mainForm, Control control)
+            {
+                if (mainForm == null || control == null)
+                {
+                    return Rectangle.Empty;
+                }
+
+                try
+                {
+                    Rectangle screenBounds = control.RectangleToScreen(control.ClientRectangle);
+                    Point location = mainForm.PointToClient(screenBounds.Location);
+                    return new Rectangle(location, screenBounds.Size);
+                }
+                catch
+                {
+                    return control.Bounds;
+                }
             }
 
             private static T FindControl<T>(Control root) where T : Control
@@ -607,6 +1176,42 @@ namespace RecoUndoButton
                 }
 
                 return null;
+            }
+
+            private static ToolStripItem FindNamedItem(ToolStripItemCollection items, string name)
+            {
+                foreach (ToolStripItem item in items)
+                {
+                    if (String.Equals(item.Name, name, StringComparison.Ordinal))
+                    {
+                        return item;
+                    }
+                }
+
+                return null;
+            }
+
+            private static int FindEditMenuIndex(ToolStripItemCollection items)
+            {
+                for (int i = 0; i < items.Count; i++)
+                {
+                    if (NormalizeMenuText(items[i].Text) == "编辑")
+                    {
+                        return i;
+                    }
+                }
+
+                return -1;
+            }
+
+            private static void RemoveOldUndoTextItem(ToolStripItemCollection items)
+            {
+                ToolStripItem oldItem = FindToolStripItem(items, "撤回上一步");
+                if (oldItem != null && String.IsNullOrEmpty(oldItem.Name))
+                {
+                    items.Remove(oldItem);
+                    oldItem.Dispose();
+                }
             }
 
             private static ToolStripItem FindToolStripItem(ToolStripItemCollection items, string text)
