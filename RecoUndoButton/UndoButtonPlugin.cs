@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Collections.Generic;
 using System.Data;
 using System.Drawing;
@@ -7,6 +8,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Windows.Forms;
 
@@ -86,16 +88,17 @@ namespace RecoUndoButton
 
         private sealed class UndoRuntime
         {
-            private const int MaxUndoSteps = 20;
+            private const int MaxUndoSteps = 10;
             private readonly Form mainForm;
-            private readonly List<GridSnapshot> undoStack = new List<GridSnapshot>();
-            private readonly List<GridSnapshot> redoStack = new List<GridSnapshot>();
+            private readonly Dictionary<string, ContextHistory> histories = new Dictionary<string, ContextHistory>();
             private readonly Timer settleTimer;
             private readonly List<ToolStripItem> undoItems = new List<ToolStripItem>();
             private readonly List<ToolStripItem> redoItems = new List<ToolStripItem>();
             private DataGridView grid;
-            private GridSnapshot lastStableSnapshot;
-            private GridSnapshot pendingBeforeSnapshot;
+            private string pendingContextKey;
+            private BindingSource observedBindingSource;
+            private DataTable observedTable;
+            private TreeView observedTree;
             private Image undoIcon;
             private Image redoIcon;
             private ToolStrip floatingToolbar;
@@ -118,7 +121,7 @@ namespace RecoUndoButton
                     return false;
                 }
 
-                lastStableSnapshot = CaptureSnapshot();
+                ResetCurrentContextSnapshot();
                 HookGrid();
                 bool buttonsAdded = InstallToolbarItems();
                 if (!buttonsAdded)
@@ -141,8 +144,12 @@ namespace RecoUndoButton
                 grid.RowsRemoved += GridChanged;
                 grid.DataBindingComplete -= GridDataBindingComplete;
                 grid.DataBindingComplete += GridDataBindingComplete;
+                grid.DataSourceChanged -= GridDataSourceChanged;
+                grid.DataSourceChanged += GridDataSourceChanged;
                 grid.KeyDown -= GridKeyDown;
                 grid.KeyDown += GridKeyDown;
+                HookDataSourceEvents();
+                HookTreeEvents();
             }
 
             private void GridChanged(object sender, EventArgs e)
@@ -152,7 +159,21 @@ namespace RecoUndoButton
 
             private void GridDataBindingComplete(object sender, DataGridViewBindingCompleteEventArgs e)
             {
-                ScheduleChangeObserved();
+                HookDataSourceEvents();
+                EnsureCurrentContextSnapshot();
+                UpdateUndoItems();
+            }
+
+            private void GridDataSourceChanged(object sender, EventArgs e)
+            {
+                HookDataSourceEvents();
+                ResetCurrentContextSnapshot();
+            }
+
+            private void TreeAfterSelect(object sender, TreeViewEventArgs e)
+            {
+                EnsureCurrentContextSnapshot();
+                UpdateUndoItems();
             }
 
             private void GridKeyDown(object sender, KeyEventArgs e)
@@ -161,6 +182,128 @@ namespace RecoUndoButton
                 {
                     ScheduleChangeObserved();
                 }
+            }
+
+            private void HookTreeEvents()
+            {
+                TreeView tree = UndoButtonPlugin.GetField<TreeView>(mainForm, "Tv_tree");
+                if (observedTree == tree)
+                {
+                    return;
+                }
+
+                if (observedTree != null)
+                {
+                    observedTree.AfterSelect -= TreeAfterSelect;
+                }
+
+                observedTree = tree;
+                if (observedTree != null)
+                {
+                    observedTree.AfterSelect -= TreeAfterSelect;
+                    observedTree.AfterSelect += TreeAfterSelect;
+                }
+            }
+
+            private void HookDataSourceEvents()
+            {
+                BindingSource bindingSource = grid == null ? null : grid.DataSource as BindingSource;
+                DataView view = grid == null ? null : ResolveDataView(grid.DataSource);
+                DataTable table = view == null ? ResolveDataTable(grid == null ? null : grid.DataSource) : view.Table;
+
+                if (observedBindingSource != bindingSource)
+                {
+                    if (observedBindingSource != null)
+                    {
+                        observedBindingSource.ListChanged -= BindingSourceListChanged;
+                    }
+
+                    observedBindingSource = bindingSource;
+                    if (observedBindingSource != null)
+                    {
+                        observedBindingSource.ListChanged -= BindingSourceListChanged;
+                        observedBindingSource.ListChanged += BindingSourceListChanged;
+                    }
+                }
+
+                if (observedTable != table)
+                {
+                    UnhookTableEvents(observedTable);
+                    observedTable = table;
+                    HookTableEvents(observedTable);
+                }
+            }
+
+            private void HookTableEvents(DataTable table)
+            {
+                if (table == null)
+                {
+                    return;
+                }
+
+                table.ColumnChanging -= TableColumnChanging;
+                table.ColumnChanging += TableColumnChanging;
+                table.ColumnChanged -= TableColumnChanged;
+                table.ColumnChanged += TableColumnChanged;
+                table.RowChanging -= TableRowChanging;
+                table.RowChanging += TableRowChanging;
+                table.RowChanged -= TableRowChanged;
+                table.RowChanged += TableRowChanged;
+                table.RowDeleting -= TableRowDeleting;
+                table.RowDeleting += TableRowDeleting;
+                table.RowDeleted -= TableRowDeleted;
+                table.RowDeleted += TableRowDeleted;
+            }
+
+            private void UnhookTableEvents(DataTable table)
+            {
+                if (table == null)
+                {
+                    return;
+                }
+
+                table.ColumnChanging -= TableColumnChanging;
+                table.ColumnChanged -= TableColumnChanged;
+                table.RowChanging -= TableRowChanging;
+                table.RowChanged -= TableRowChanged;
+                table.RowDeleting -= TableRowDeleting;
+                table.RowDeleted -= TableRowDeleted;
+            }
+
+            private void TableColumnChanging(object sender, DataColumnChangeEventArgs e)
+            {
+                ScheduleChangeObserved();
+            }
+
+            private void TableColumnChanged(object sender, DataColumnChangeEventArgs e)
+            {
+                ScheduleChangeObserved();
+            }
+
+            private void TableRowChanging(object sender, DataRowChangeEventArgs e)
+            {
+                ScheduleChangeObserved();
+            }
+
+            private void TableRowChanged(object sender, DataRowChangeEventArgs e)
+            {
+                ScheduleChangeObserved();
+            }
+
+            private void TableRowDeleting(object sender, DataRowChangeEventArgs e)
+            {
+                ScheduleChangeObserved();
+            }
+
+            private void TableRowDeleted(object sender, DataRowChangeEventArgs e)
+            {
+                ScheduleChangeObserved();
+            }
+
+            private void BindingSourceListChanged(object sender, ListChangedEventArgs e)
+            {
+                HookDataSourceEvents();
+                ScheduleChangeObserved();
             }
 
             private bool InstallToolbarItems()
@@ -483,11 +626,19 @@ namespace RecoUndoButton
                     return;
                 }
 
-                if (pendingBeforeSnapshot == null)
+                string contextKey = GetCurrentContextKey();
+                ContextHistory history = GetHistory(contextKey, true);
+                if (history.LastStableSnapshot == null)
                 {
-                    pendingBeforeSnapshot = lastStableSnapshot ?? CaptureSnapshot();
+                    history.LastStableSnapshot = CaptureSnapshot(contextKey);
                 }
 
+                if (history.PendingBeforeSnapshot == null)
+                {
+                    history.PendingBeforeSnapshot = history.LastStableSnapshot ?? CaptureSnapshot(contextKey);
+                }
+
+                pendingContextKey = contextKey;
                 settleTimer.Stop();
                 settleTimer.Start();
             }
@@ -495,59 +646,169 @@ namespace RecoUndoButton
             private void FlushPendingChange()
             {
                 settleTimer.Stop();
-                if (restoring || pendingBeforeSnapshot == null)
+                if (restoring || String.IsNullOrEmpty(pendingContextKey))
                 {
                     return;
                 }
 
-                GridSnapshot current = CaptureSnapshot();
-                if (!GridSnapshot.AreEquivalent(pendingBeforeSnapshot, current))
+                string currentContextKey = GetCurrentContextKey();
+                ContextHistory history = GetHistory(pendingContextKey, false);
+                if (history == null || history.PendingBeforeSnapshot == null)
                 {
-                    PushUndo(pendingBeforeSnapshot);
-                    redoStack.Clear();
-                    lastStableSnapshot = current;
+                    pendingContextKey = null;
+                    return;
                 }
 
-                pendingBeforeSnapshot = null;
+                if (!String.Equals(currentContextKey, pendingContextKey, StringComparison.Ordinal))
+                {
+                    history.PendingBeforeSnapshot = null;
+                    pendingContextKey = null;
+                    UpdateUndoItems();
+                    return;
+                }
+
+                GridSnapshot current = CaptureSnapshot(currentContextKey);
+                if (!GridSnapshot.AreEquivalent(history.PendingBeforeSnapshot, current))
+                {
+                    PushUndo(history, history.PendingBeforeSnapshot);
+                    history.RedoStack.Clear();
+                    history.LastStableSnapshot = current;
+                }
+
+                history.PendingBeforeSnapshot = null;
+                pendingContextKey = null;
                 UpdateUndoItems();
             }
 
-            private void PushUndo(GridSnapshot snapshot)
+            private void PushUndo(ContextHistory history, GridSnapshot snapshot)
             {
-                if (snapshot == null)
+                if (history == null || snapshot == null)
                 {
                     return;
                 }
 
-                if (undoStack.Count > 0 && GridSnapshot.AreEquivalent(undoStack[undoStack.Count - 1], snapshot))
+                if (history.UndoStack.Count > 0 && GridSnapshot.AreEquivalent(history.UndoStack[history.UndoStack.Count - 1], snapshot))
                 {
                     return;
                 }
 
-                undoStack.Add(snapshot);
-                while (undoStack.Count > MaxUndoSteps)
+                history.UndoStack.Add(snapshot);
+                while (history.UndoStack.Count > MaxUndoSteps)
                 {
-                    undoStack.RemoveAt(0);
+                    history.UndoStack.RemoveAt(0);
                 }
             }
 
-            private void PushRedo(GridSnapshot snapshot)
+            private void PushRedo(ContextHistory history, GridSnapshot snapshot)
             {
-                if (snapshot == null)
+                if (history == null || snapshot == null)
                 {
                     return;
                 }
 
-                if (redoStack.Count > 0 && GridSnapshot.AreEquivalent(redoStack[redoStack.Count - 1], snapshot))
+                if (history.RedoStack.Count > 0 && GridSnapshot.AreEquivalent(history.RedoStack[history.RedoStack.Count - 1], snapshot))
                 {
                     return;
                 }
 
-                redoStack.Add(snapshot);
-                while (redoStack.Count > MaxUndoSteps)
+                history.RedoStack.Add(snapshot);
+                while (history.RedoStack.Count > MaxUndoSteps)
                 {
-                    redoStack.RemoveAt(0);
+                    history.RedoStack.RemoveAt(0);
                 }
+            }
+
+            private void ResetCurrentContextSnapshot()
+            {
+                if (restoring || grid == null || grid.IsDisposed)
+                {
+                    return;
+                }
+
+                string contextKey = GetCurrentContextKey();
+                ContextHistory history = GetHistory(contextKey, true);
+                history.LastStableSnapshot = CaptureSnapshot(contextKey);
+                history.PendingBeforeSnapshot = null;
+                if (String.Equals(pendingContextKey, contextKey, StringComparison.Ordinal))
+                {
+                    pendingContextKey = null;
+                    settleTimer.Stop();
+                }
+
+                UpdateUndoItems();
+            }
+
+            private void EnsureCurrentContextSnapshot()
+            {
+                if (restoring || grid == null || grid.IsDisposed)
+                {
+                    return;
+                }
+
+                string contextKey = GetCurrentContextKey();
+                ContextHistory history = GetHistory(contextKey, true);
+                if (history.LastStableSnapshot == null)
+                {
+                    history.LastStableSnapshot = CaptureSnapshot(contextKey);
+                }
+            }
+
+            private ContextHistory GetHistory(string contextKey, bool create)
+            {
+                if (String.IsNullOrEmpty(contextKey))
+                {
+                    contextKey = "unknown";
+                }
+
+                ContextHistory history;
+                if (!histories.TryGetValue(contextKey, out history) && create)
+                {
+                    history = new ContextHistory();
+                    histories[contextKey] = history;
+                }
+
+                return history;
+            }
+
+            private string GetCurrentContextKey()
+            {
+                string chapterKey = GetCurrentChapterKey();
+                string sourceKey = GetCurrentDataSourceKey();
+                return chapterKey + "|" + sourceKey;
+            }
+
+            private string GetCurrentChapterKey()
+            {
+                TreeView tree = UndoButtonPlugin.GetField<TreeView>(mainForm, "Tv_tree");
+                if (tree == null || tree.SelectedNode == null)
+                {
+                    return "chapter:none";
+                }
+
+                return "chapter:" + tree.SelectedNode.FullPath;
+            }
+
+            private string GetCurrentDataSourceKey()
+            {
+                if (grid == null)
+                {
+                    return "source:none";
+                }
+
+                object source = grid.DataSource;
+                DataView view = ResolveDataView(source);
+                DataTable table = view == null ? ResolveDataTable(source) : view.Table;
+                if (table != null)
+                {
+                    return "table:" + RuntimeHelpers.GetHashCode(table).ToString(CultureInfo.InvariantCulture) + ":" + table.TableName;
+                }
+
+                if (source != null)
+                {
+                    return "source:" + RuntimeHelpers.GetHashCode(source).ToString(CultureInfo.InvariantCulture) + ":" + source.GetType().FullName;
+                }
+
+                return "grid:" + RuntimeHelpers.GetHashCode(grid).ToString(CultureInfo.InvariantCulture);
             }
 
             private void UndoLastStep()
@@ -556,20 +817,31 @@ namespace RecoUndoButton
                 {
                     EndGridEdit();
                     FlushPendingChange();
-                    if (undoStack.Count == 0)
+                    string contextKey = GetCurrentContextKey();
+                    ContextHistory history = GetHistory(contextKey, true);
+                    if (history.UndoStack.Count == 0)
                     {
                         MessageBox.Show(mainForm, "没有可撤回的操作。", "撤回上一步", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         UpdateUndoItems();
                         return;
                     }
 
-                    GridSnapshot current = CaptureSnapshot();
-                    GridSnapshot target = undoStack[undoStack.Count - 1];
-                    undoStack.RemoveAt(undoStack.Count - 1);
-                    PushRedo(current);
+                    GridSnapshot current = CaptureSnapshot(contextKey);
+                    GridSnapshot target = history.UndoStack[history.UndoStack.Count - 1];
+                    if (!String.Equals(target.ContextKey, contextKey, StringComparison.Ordinal))
+                    {
+                        history.UndoStack.Clear();
+                        UpdateUndoItems();
+                        MessageBox.Show(mainForm, "当前条目与撤回记录不一致，已阻止跨条目撤回。", "撤回上一步", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+
+                    history.UndoStack.RemoveAt(history.UndoStack.Count - 1);
+                    PushRedo(history, current);
                     RestoreSnapshot(target);
-                    lastStableSnapshot = CaptureSnapshot();
-                    pendingBeforeSnapshot = null;
+                    history.LastStableSnapshot = CaptureSnapshot(contextKey);
+                    history.PendingBeforeSnapshot = null;
+                    pendingContextKey = null;
                     UpdateUndoItems();
                 }
                 catch (Exception ex)
@@ -585,20 +857,31 @@ namespace RecoUndoButton
                 {
                     EndGridEdit();
                     FlushPendingChange();
-                    if (redoStack.Count == 0)
+                    string contextKey = GetCurrentContextKey();
+                    ContextHistory history = GetHistory(contextKey, true);
+                    if (history.RedoStack.Count == 0)
                     {
                         MessageBox.Show(mainForm, "没有可恢复的操作。", "恢复下一步", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         UpdateUndoItems();
                         return;
                     }
 
-                    GridSnapshot current = CaptureSnapshot();
-                    GridSnapshot target = redoStack[redoStack.Count - 1];
-                    redoStack.RemoveAt(redoStack.Count - 1);
-                    PushUndo(current);
+                    GridSnapshot current = CaptureSnapshot(contextKey);
+                    GridSnapshot target = history.RedoStack[history.RedoStack.Count - 1];
+                    if (!String.Equals(target.ContextKey, contextKey, StringComparison.Ordinal))
+                    {
+                        history.RedoStack.Clear();
+                        UpdateUndoItems();
+                        MessageBox.Show(mainForm, "当前条目与恢复记录不一致，已阻止跨条目恢复。", "恢复下一步", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+
+                    history.RedoStack.RemoveAt(history.RedoStack.Count - 1);
+                    PushUndo(history, current);
                     RestoreSnapshot(target);
-                    lastStableSnapshot = CaptureSnapshot();
-                    pendingBeforeSnapshot = null;
+                    history.LastStableSnapshot = CaptureSnapshot(contextKey);
+                    history.PendingBeforeSnapshot = null;
+                    pendingContextKey = null;
                     UpdateUndoItems();
                 }
                 catch (Exception ex)
@@ -626,7 +909,13 @@ namespace RecoUndoButton
 
             private GridSnapshot CaptureSnapshot()
             {
+                return CaptureSnapshot(GetCurrentContextKey());
+            }
+
+            private GridSnapshot CaptureSnapshot(string contextKey)
+            {
                 GridSnapshot snapshot = new GridSnapshot();
+                snapshot.ContextKey = contextKey;
                 snapshot.CurrentRowIndex = grid.CurrentCell == null ? -1 : grid.CurrentCell.RowIndex;
                 snapshot.CurrentColumnIndex = grid.CurrentCell == null ? -1 : grid.CurrentCell.ColumnIndex;
 
@@ -644,14 +933,26 @@ namespace RecoUndoButton
                     {
                         foreach (DataRowView rowView in view)
                         {
-                            snapshot.Rows.Add(rowView.Row.ItemArray.ToArray());
+                            object[] values;
+                            if (!TryCopyDataRowValues(rowView.Row, out values))
+                            {
+                                continue;
+                            }
+
+                            snapshot.Rows.Add(values);
                         }
                     }
                     else
                     {
                         foreach (DataRow row in table.Rows)
                         {
-                            snapshot.Rows.Add(row.ItemArray.ToArray());
+                            object[] values;
+                            if (!TryCopyDataRowValues(row, out values))
+                            {
+                                continue;
+                            }
+
+                            snapshot.Rows.Add(values);
                         }
                     }
 
@@ -716,18 +1017,13 @@ namespace RecoUndoButton
                     throw new InvalidOperationException("当前表格列结构已经变化，不能安全撤回。");
                 }
 
-                if (view != null && view.Count == snapshot.Rows.Count)
+                CommitDeletedRows(table);
+                List<DataRow> liveRows = GetLiveRows(view, table);
+                if (liveRows.Count == snapshot.Rows.Count)
                 {
                     for (int rowIndex = 0; rowIndex < snapshot.Rows.Count; rowIndex++)
                     {
-                        ApplyValuesToDataRow(view[rowIndex].Row, snapshot.Rows[rowIndex]);
-                    }
-                }
-                else if (table.Rows.Count == snapshot.Rows.Count)
-                {
-                    for (int rowIndex = 0; rowIndex < snapshot.Rows.Count; rowIndex++)
-                    {
-                        ApplyValuesToDataRow(table.Rows[rowIndex], snapshot.Rows[rowIndex]);
+                        ApplyValuesToDataRow(liveRows[rowIndex], snapshot.Rows[rowIndex]);
                     }
                 }
                 else
@@ -748,6 +1044,86 @@ namespace RecoUndoButton
                 }
 
                 grid.Refresh();
+            }
+
+            private static bool TryCopyDataRowValues(DataRow row, out object[] values)
+            {
+                values = null;
+                if (!IsLiveDataRow(row))
+                {
+                    return false;
+                }
+
+                try
+                {
+                    values = row.ItemArray.ToArray();
+                    return true;
+                }
+                catch (DeletedRowInaccessibleException)
+                {
+                    return false;
+                }
+                catch (RowNotInTableException)
+                {
+                    return false;
+                }
+            }
+
+            private static bool IsLiveDataRow(DataRow row)
+            {
+                return row != null && row.RowState != DataRowState.Deleted && row.RowState != DataRowState.Detached;
+            }
+
+            private static List<DataRow> GetLiveRows(DataView view, DataTable table)
+            {
+                List<DataRow> rows = new List<DataRow>();
+                if (view != null)
+                {
+                    foreach (DataRowView rowView in view)
+                    {
+                        try
+                        {
+                            if (IsLiveDataRow(rowView.Row))
+                            {
+                                rows.Add(rowView.Row);
+                            }
+                        }
+                        catch (DeletedRowInaccessibleException)
+                        {
+                        }
+                        catch (RowNotInTableException)
+                        {
+                        }
+                    }
+
+                    return rows;
+                }
+
+                foreach (DataRow row in table.Rows)
+                {
+                    if (IsLiveDataRow(row))
+                    {
+                        rows.Add(row);
+                    }
+                }
+
+                return rows;
+            }
+
+            private static void CommitDeletedRows(DataTable table)
+            {
+                if (table == null)
+                {
+                    return;
+                }
+
+                foreach (DataRow row in table.Rows.Cast<DataRow>().ToArray())
+                {
+                    if (row.RowState == DataRowState.Deleted)
+                    {
+                        row.AcceptChanges();
+                    }
+                }
             }
 
             private void ApplyValuesToDataRow(DataRow row, object[] values)
@@ -810,7 +1186,8 @@ namespace RecoUndoButton
 
             private void UpdateUndoItems()
             {
-                bool undoEnabled = undoStack.Count > 0;
+                ContextHistory history = GetHistory(GetCurrentContextKey(), true);
+                bool undoEnabled = history.UndoStack.Count > 0;
                 foreach (ToolStripItem item in undoItems.ToArray())
                 {
                     if (item == null || item.IsDisposed)
@@ -819,11 +1196,11 @@ namespace RecoUndoButton
                         continue;
                     }
 
-                    item.Enabled = true;
+                    item.Enabled = undoEnabled;
                     item.ToolTipText = undoEnabled ? "撤回上一步" : "没有可撤回的操作";
                 }
 
-                bool redoEnabled = redoStack.Count > 0;
+                bool redoEnabled = history.RedoStack.Count > 0;
                 foreach (ToolStripItem item in redoItems.ToArray())
                 {
                     if (item == null || item.IsDisposed)
@@ -832,7 +1209,7 @@ namespace RecoUndoButton
                         continue;
                     }
 
-                    item.Enabled = true;
+                    item.Enabled = redoEnabled;
                     item.ToolTipText = redoEnabled ? "恢复下一步" : "没有可恢复的操作";
                 }
             }
@@ -1273,8 +1650,17 @@ namespace RecoUndoButton
             }
         }
 
+        private sealed class ContextHistory
+        {
+            public readonly List<GridSnapshot> UndoStack = new List<GridSnapshot>();
+            public readonly List<GridSnapshot> RedoStack = new List<GridSnapshot>();
+            public GridSnapshot LastStableSnapshot;
+            public GridSnapshot PendingBeforeSnapshot;
+        }
+
         private sealed class GridSnapshot
         {
+            public string ContextKey;
             public string Mode;
             public readonly List<string> Columns = new List<string>();
             public readonly List<object[]> Rows = new List<object[]>();
