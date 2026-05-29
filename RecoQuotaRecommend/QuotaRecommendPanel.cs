@@ -7,9 +7,11 @@ using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
 namespace RecoQuotaRecommend
@@ -495,29 +497,31 @@ namespace RecoQuotaRecommend
             DataGridViewCheckBoxColumn check = new DataGridViewCheckBoxColumn();
             check.Name = "Checked";
             check.HeaderText = "\u5199\u5165";
-            check.Width = 45;
+            check.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            check.Width = 48;
             resultGrid.Columns.Add(check);
             DataGridViewButtonColumn correct = new DataGridViewButtonColumn();
             correct.Name = "Correct";
             correct.HeaderText = "\u6276\u6b63";
             correct.Text = "\u6276\u6b63";
             correct.UseColumnTextForButtonValue = false;
-            correct.Width = 55;
+            correct.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            correct.Width = 48;
             resultGrid.Columns.Add(correct);
             resultGrid.Columns.Add("QuantityName", "\u5de5\u7a0b\u91cf\u540d\u79f0");
             resultGrid.Columns.Add("QuantityUnit", "\u5355\u4f4d");
             resultGrid.Columns.Add("QuantityValue", "Excel\u5de5\u7a0b\u91cf");
-            resultGrid.Columns.Add("QuotaQuantity", "\u5b9a\u989d\u5de5\u7a0b\u91cf");
             resultGrid.Columns.Add("QuotaCode", "\u63a8\u8350\u5b9a\u989d");
             resultGrid.Columns.Add("QuotaName", "\u5b9a\u989d\u540d\u79f0");
             resultGrid.Columns.Add("QuotaUnit", "\u5b9a\u989d\u5355\u4f4d");
+            resultGrid.Columns.Add("QuotaQuantity", "\u5b9a\u989d\u5de5\u7a0b\u91cf");
             resultGrid.Columns["QuantityName"].FillWeight = 180;
             resultGrid.Columns["QuantityUnit"].FillWeight = 50;
             resultGrid.Columns["QuantityValue"].FillWeight = 80;
-            resultGrid.Columns["QuotaQuantity"].FillWeight = 85;
             resultGrid.Columns["QuotaCode"].FillWeight = 80;
             resultGrid.Columns["QuotaName"].FillWeight = 210;
             resultGrid.Columns["QuotaUnit"].FillWeight = 60;
+            resultGrid.Columns["QuotaQuantity"].FillWeight = 85;
 
             foreach (DataGridViewColumn column in resultGrid.Columns)
             {
@@ -607,10 +611,10 @@ namespace RecoQuotaRecommend
                             isContinuation ? "" : item.Name,
                             item.Unit,
                             item.ValueText,
-                            recommendation.ConvertedValueText,
                             recommendation.QuotaCode,
                             recommendation.QuotaName,
-                            recommendation.QuotaUnit);
+                            recommendation.QuotaUnit,
+                            recommendation.ConvertedValueText);
                         if (isContinuation)
                         {
                             DataGridViewRow gridRow = resultGrid.Rows[gridRowIndex];
@@ -1230,16 +1234,10 @@ namespace RecoQuotaRecommend
                 selection.WorkbookPath = Convert.ToString(workbook.FullName, CultureInfo.InvariantCulture);
                 selection.WorksheetName = Convert.ToString(sheet.Name, CultureInfo.InvariantCulture);
 
-                int rowCount = Convert.ToInt32(range.Rows.Count, CultureInfo.InvariantCulture);
-                int columnCount = Convert.ToInt32(range.Columns.Count, CultureInfo.InvariantCulture);
-                for (int r = 1; r <= rowCount; r++)
-                {
-                    ExcelQuantityItem item = BuildQuantityItemFromRangeRow(range, selection.WorksheetName, r, columnCount);
-                    if (item != null)
-                    {
-                        selection.Items.Add(item);
-                    }
-                }
+                selection.Items.AddRange(BuildQuantityItemsFromRange(range, selection.WorksheetName));
+                ApplyActiveLeftGroups(selection);
+                NormalizeSelectionItems(selection);
+                LogSelectionSummary("Excel selection", selection);
 
                 if (selection.Items.Count == 0)
                 {
@@ -1282,18 +1280,45 @@ namespace RecoQuotaRecommend
                     return false;
                 }
 
-                selection = new ExcelSelection();
-                selection.WorksheetName = "\u526a\u8d34\u677f";
                 string[] lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split(new char[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                for (int i = 0; i < lines.Length; i++)
+                ExcelSelection textSelection = BuildSelectionFromClipboardLines(lines);
+
+                ExcelSelection activeSelection;
+                if (TryReadActiveExcelSelectionForClipboard(lines.Length, out activeSelection))
                 {
-                    string[] cells = lines[i].Split('\t');
-                    ExcelQuantityItem item = BuildQuantityItemFromTextRow(cells, i + 1);
-                    if (item != null)
+                    if (textSelection.Items.Count > 0 && SelectionGroupScore(textSelection) > SelectionGroupScore(activeSelection))
                     {
-                        selection.Items.Add(item);
+                        selection = textSelection;
+                        ApplyActiveLeftGroups(selection);
+                        NormalizeSelectionItems(selection);
+                        LogSelectionSummary("Clipboard text selection preferred over active selection", selection);
+                        return true;
                     }
+
+                    selection = activeSelection;
+                    LogSelectionSummary("Clipboard backed by active Excel selection", selection);
+                    return true;
                 }
+
+                if (textSelection.Items.Count > 0)
+                {
+                    selection = textSelection;
+                    ApplyActiveLeftGroups(selection);
+                    NormalizeSelectionItems(selection);
+                    LogSelectionSummary("Clipboard text selection", selection);
+                    return true;
+                }
+
+                if (TryReadClipboardHtmlSelection(out selection))
+                {
+                    ApplyActiveLeftGroups(selection);
+                    NormalizeSelectionItems(selection);
+                    LogSelectionSummary("Clipboard HTML selection", selection);
+                    return true;
+                }
+
+                selection = textSelection;
+                LogSelectionSummary("Clipboard text selection", selection);
 
                 if (selection.Items.Count == 0)
                 {
@@ -1310,9 +1335,575 @@ namespace RecoQuotaRecommend
             }
         }
 
-        private static ExcelQuantityItem BuildQuantityItemFromRangeRow(dynamic range, string worksheetName, int relativeRow, int columnCount)
+        private static bool TryReadActiveExcelSelectionForClipboard(int expectedRows, out ExcelSelection selection)
         {
-            ExcelQuantityItem fixedItem = TryBuildThreeColumnRangeItem(range, worksheetName, relativeRow, columnCount);
+            selection = null;
+            try
+            {
+                dynamic excel = GetActiveSpreadsheetApplication();
+                if (excel == null)
+                {
+                    return false;
+                }
+
+                dynamic workbook = excel.ActiveWorkbook;
+                dynamic sheet = excel.ActiveSheet;
+                dynamic range = excel.Selection;
+                if (workbook == null || sheet == null || range == null)
+                {
+                    return false;
+                }
+
+                int rowCount = Convert.ToInt32(range.Rows.Count, CultureInfo.InvariantCulture);
+                bool rowCountDiffers = expectedRows > 0 && rowCount != expectedRows;
+
+                selection = new ExcelSelection();
+                selection.WorkbookPath = Convert.ToString(workbook.FullName, CultureInfo.InvariantCulture);
+                selection.WorksheetName = Convert.ToString(sheet.Name, CultureInfo.InvariantCulture);
+
+                selection.Items.AddRange(BuildQuantityItemsFromRange(range, selection.WorksheetName));
+                ApplyActiveLeftGroups(selection);
+                NormalizeSelectionItems(selection);
+                if (selection.Items.Count == 0)
+                {
+                    return false;
+                }
+
+                if (rowCountDiffers)
+                {
+                    QuotaRecommendPanel.Log("Clipboard line count differs from active selection rows. textLines="
+                        + expectedRows.ToString(CultureInfo.InvariantCulture)
+                        + ", selectionRows=" + rowCount.ToString(CultureInfo.InvariantCulture)
+                        + ", parsedItems=" + selection.Items.Count.ToString(CultureInfo.InvariantCulture));
+                    if (rowCount < expectedRows)
+                    {
+                        return true;
+                    }
+
+                    return selection.Items.Count <= expectedRows;
+                }
+
+                return true;
+            }
+            catch
+            {
+                selection = null;
+                return false;
+            }
+        }
+
+        private static ExcelSelection BuildSelectionFromClipboardLines(string[] lines)
+        {
+            ExcelSelection selection = new ExcelSelection();
+            selection.WorksheetName = "\u526a\u8d34\u677f";
+            List<List<string>> textTable = new List<List<string>>();
+            for (int i = 0; i < lines.Length; i++)
+            {
+                textTable.Add(lines[i].Split('\t').ToList());
+            }
+
+            selection.Items.AddRange(BuildQuantityItemsFromTextTable(textTable, selection.WorksheetName));
+            NormalizeSelectionItems(selection);
+            return selection;
+        }
+
+        private static int SelectionGroupScore(ExcelSelection selection)
+        {
+            if (selection == null || selection.Items.Count == 0)
+            {
+                return 0;
+            }
+
+            int score = 0;
+            foreach (ExcelQuantityItem item in selection.Items)
+            {
+                if (item == null)
+                {
+                    continue;
+                }
+
+                string name = (item.Name ?? "").Trim();
+                string section = (item.SectionName ?? "").Trim();
+                if (LooksLikeGroupText(section)
+                    && !String.Equals(section, name, StringComparison.Ordinal)
+                    && name.IndexOf(section, StringComparison.Ordinal) >= 0)
+                {
+                    score += 2;
+                }
+                else if (name.IndexOf(' ') >= 0)
+                {
+                    score += 1;
+                }
+            }
+
+            return score;
+        }
+
+        private static bool TryReadClipboardHtmlSelection(out ExcelSelection selection)
+        {
+            selection = null;
+            try
+            {
+                if (!Clipboard.ContainsText(TextDataFormat.Html))
+                {
+                    return false;
+                }
+
+                string html = Clipboard.GetText(TextDataFormat.Html);
+                if (String.IsNullOrWhiteSpace(html))
+                {
+                    return false;
+                }
+
+                List<List<string>> table = ParseHtmlTable(html);
+                if (table.Count == 0)
+                {
+                    return false;
+                }
+
+                selection = new ExcelSelection();
+                selection.WorksheetName = "\u526a\u8d34\u677fHTML";
+                selection.Items.AddRange(BuildQuantityItemsFromTextTable(table, selection.WorksheetName));
+
+                NormalizeSelectionItems(selection);
+
+                if (selection.Items.Count == 0)
+                {
+                    selection = null;
+                    return false;
+                }
+
+                QuotaRecommendPanel.Log("Clipboard HTML parsed. htmlRows=" + table.Count.ToString(CultureInfo.InvariantCulture) + ", items=" + selection.Items.Count.ToString(CultureInfo.InvariantCulture));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                QuotaRecommendPanel.Log("Clipboard HTML parse failed: " + ex.Message);
+                selection = null;
+                return false;
+            }
+        }
+
+        private static List<List<string>> ParseHtmlTable(string html)
+        {
+            List<List<string>> result = new List<List<string>>();
+            Dictionary<int, CarryCell> carries = new Dictionary<int, CarryCell>();
+            MatchCollection rowMatches = Regex.Matches(html, @"<tr\b[\s\S]*?</tr>", RegexOptions.IgnoreCase);
+            foreach (Match rowMatch in rowMatches)
+            {
+                string rowHtml = rowMatch.Value;
+                MatchCollection cellMatches = Regex.Matches(rowHtml, @"<t[dh]\b[^>]*>[\s\S]*?</t[dh]>", RegexOptions.IgnoreCase);
+                if (cellMatches.Count == 0)
+                {
+                    continue;
+                }
+
+                List<string> row = new List<string>();
+                int col = 0;
+                foreach (Match cellMatch in cellMatches)
+                {
+                    FillCarriedCells(row, carries, ref col);
+
+                    string cellHtml = cellMatch.Value;
+                    int rowSpan = Math.Max(1, ParseSpan(cellHtml, "rowspan"));
+                    int colSpan = Math.Max(1, ParseSpan(cellHtml, "colspan"));
+                    string text = HtmlCellText(cellHtml);
+                    for (int i = 0; i < colSpan; i++)
+                    {
+                        SetListValue(row, col + i, text);
+                        if (rowSpan > 1)
+                        {
+                            carries[col + i] = new CarryCell { Text = text, RemainingRows = rowSpan - 1 };
+                        }
+                    }
+
+                    col += colSpan;
+                }
+
+                FillCarriedCells(row, carries, ref col);
+                if (row.Any(v => !String.IsNullOrWhiteSpace(v)))
+                {
+                    result.Add(row);
+                }
+            }
+
+            return result;
+        }
+
+        private static void FillCarriedCells(List<string> row, Dictionary<int, CarryCell> carries, ref int col)
+        {
+            while (carries.ContainsKey(col))
+            {
+                CarryCell carry = carries[col];
+                SetListValue(row, col, carry.Text);
+                carry.RemainingRows--;
+                if (carry.RemainingRows <= 0)
+                {
+                    carries.Remove(col);
+                }
+                else
+                {
+                    carries[col] = carry;
+                }
+
+                col++;
+            }
+        }
+
+        private static int ParseSpan(string html, string name)
+        {
+            Match match = Regex.Match(html, name + "\\s*=\\s*[\"']?(\\d+)", RegexOptions.IgnoreCase);
+            if (!match.Success)
+            {
+                return 1;
+            }
+
+            int value;
+            return Int32.TryParse(match.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out value) ? value : 1;
+        }
+
+        private static string HtmlCellText(string cellHtml)
+        {
+            string text = Regex.Replace(cellHtml, @"<br\s*/?>", "\n", RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"<[^>]+>", "");
+            return NormalizeCellText(WebUtility.HtmlDecode(text));
+        }
+
+        private static void SetListValue(List<string> row, int index, string value)
+        {
+            while (row.Count <= index)
+            {
+                row.Add("");
+            }
+
+            row[index] = value;
+        }
+
+        private static List<ExcelQuantityItem> BuildQuantityItemsFromRange(dynamic range, string worksheetName)
+        {
+            List<List<CellValue>> rows = new List<List<CellValue>>();
+            int rowCount = Convert.ToInt32(range.Rows.Count, CultureInfo.InvariantCulture);
+            int columnCount = Convert.ToInt32(range.Columns.Count, CultureInfo.InvariantCulture);
+            for (int r = 1; r <= rowCount; r++)
+            {
+                List<CellValue> row = new List<CellValue>();
+                string leftGroup = TryReadLeftGroupFromRangeRow(range, r);
+                if (LooksLikeGroupText(leftGroup))
+                {
+                    CellValue value = new CellValue();
+                    value.Text = leftGroup;
+                    value.Formula = "";
+                    value.Address = "LEFT" + r.ToString(CultureInfo.InvariantCulture);
+                    value.RowNumber = r;
+                    value.SourceIndex = 0;
+                    row.Add(value);
+                }
+
+                for (int c = 1; c <= columnCount; c++)
+                {
+                    dynamic cell = range.Cells[r, c];
+                    string text = ReadCellTextWithMerge(cell);
+                    string formula = "";
+                    try
+                    {
+                        formula = Convert.ToString(cell.Formula, CultureInfo.InvariantCulture);
+                    }
+                    catch
+                    {
+                    }
+
+                    if (!String.IsNullOrWhiteSpace(text) || !String.IsNullOrWhiteSpace(formula))
+                    {
+                        CellValue value = new CellValue();
+                        value.Text = text;
+                        value.Formula = formula;
+                        value.Address = Convert.ToString(cell.Address(false, false), CultureInfo.InvariantCulture);
+                        value.RowNumber = Convert.ToInt32(cell.Row, CultureInfo.InvariantCulture);
+                        value.SourceIndex = c;
+                        row.Add(value);
+                    }
+                }
+
+                rows.Add(row);
+            }
+
+            return BuildQuantityItemsFromCellRows(rows, worksheetName);
+        }
+
+        private static List<ExcelQuantityItem> BuildQuantityItemsFromTextTable(List<List<string>> table, string worksheetName)
+        {
+            List<List<CellValue>> rows = new List<List<CellValue>>();
+            for (int r = 0; r < table.Count; r++)
+            {
+                List<CellValue> row = new List<CellValue>();
+                List<string> source = table[r] ?? new List<string>();
+                for (int c = 0; c < source.Count; c++)
+                {
+                    string text = NormalizeCellText(source[c]);
+                    if (String.IsNullOrWhiteSpace(text))
+                    {
+                        continue;
+                    }
+
+                    CellValue value = new CellValue();
+                    value.Text = text;
+                    value.Formula = text.StartsWith("=", StringComparison.Ordinal) ? text : "";
+                    value.Address = "R" + (r + 1).ToString(CultureInfo.InvariantCulture) + "C" + (c + 1).ToString(CultureInfo.InvariantCulture);
+                    value.RowNumber = r + 1;
+                    value.SourceIndex = c + 1;
+                    row.Add(value);
+                }
+
+                rows.Add(row);
+            }
+
+            return BuildQuantityItemsFromCellRows(rows, worksheetName);
+        }
+
+        private static List<ExcelQuantityItem> BuildQuantityItemsFromCellRows(List<List<CellValue>> rows, string worksheetName)
+        {
+            List<ExcelQuantityItem> result = new List<ExcelQuantityItem>();
+            if (rows == null || rows.Count == 0)
+            {
+                return result;
+            }
+
+            int quantityColumn = FindQuantityColumn(rows);
+            if (quantityColumn < 0)
+            {
+                return result;
+            }
+
+            int unitColumn = FindUnitColumn(rows, quantityColumn);
+            int detailColumn = FindDetailColumn(rows, quantityColumn, unitColumn);
+            if (detailColumn < 0)
+            {
+                return result;
+            }
+
+            int groupColumn = FindGroupColumn(rows, detailColumn, unitColumn, quantityColumn);
+            string[] units = BuildUnitsByRow(rows, unitColumn);
+            string currentGroup = "";
+            for (int i = 0; i < rows.Count; i++)
+            {
+                List<CellValue> row = rows[i] ?? new List<CellValue>();
+                CellValue quantityCell = GetCell(row, quantityColumn);
+                if (quantityCell == null || !IsQuantityLike(quantityCell.Text))
+                {
+                    continue;
+                }
+
+                string detail = GetCellText(row, detailColumn);
+                if (String.IsNullOrWhiteSpace(detail) || LooksLikeOrderOrHeader(detail) || LooksLikeUnit(detail))
+                {
+                    detail = PickQuantityName(row, quantityCell, unitColumn >= 0 ? GetCell(row, unitColumn) : null);
+                }
+
+                if (String.IsNullOrWhiteSpace(detail) || LooksLikeOrderOrHeader(detail))
+                {
+                    continue;
+                }
+
+                string group = groupColumn >= 0 ? GetCellText(row, groupColumn) : "";
+                if (LooksLikeGroupText(group))
+                {
+                    currentGroup = group;
+                }
+                else
+                {
+                    group = currentGroup;
+                }
+
+                if (String.Equals(group, detail, StringComparison.Ordinal))
+                {
+                    group = "";
+                }
+
+                string name = CombineQuantityName(group, detail);
+                if (String.IsNullOrWhiteSpace(name))
+                {
+                    continue;
+                }
+
+                ExcelQuantityItem item = new ExcelQuantityItem();
+                item.WorksheetName = worksheetName;
+                item.RowNumber = quantityCell.RowNumber;
+                item.CellAddress = quantityCell.Address;
+                item.Name = name;
+                item.Unit = i < units.Length ? units[i] : "";
+                item.ValueText = quantityCell.Text;
+                item.Formula = quantityCell.Formula;
+                item.ContextText = name + " " + item.Unit + " " + item.ValueText;
+                item.SectionName = String.IsNullOrWhiteSpace(group) ? detail : group;
+                result.Add(item);
+            }
+
+            QuotaRecommendPanel.Log("Grid parser: rows=" + rows.Count.ToString(CultureInfo.InvariantCulture)
+                + ", qtyCol=" + quantityColumn.ToString(CultureInfo.InvariantCulture)
+                + ", unitCol=" + unitColumn.ToString(CultureInfo.InvariantCulture)
+                + ", detailCol=" + detailColumn.ToString(CultureInfo.InvariantCulture)
+                + ", groupCol=" + groupColumn.ToString(CultureInfo.InvariantCulture)
+                + ", items=" + result.Count.ToString(CultureInfo.InvariantCulture));
+            return result;
+        }
+
+        private static int FindQuantityColumn(List<List<CellValue>> rows)
+        {
+            var candidates = rows.SelectMany(r => r)
+                .Where(c => c != null && IsQuantityLike(c.Text) && !LooksLikeUnit(c.Text))
+                .GroupBy(c => c.SourceIndex)
+                .Select(g => new { Column = g.Key, Count = g.Count() })
+                .OrderByDescending(x => x.Count)
+                .ThenByDescending(x => x.Column)
+                .ToList();
+            return candidates.Count == 0 ? -1 : candidates[0].Column;
+        }
+
+        private static int FindUnitColumn(List<List<CellValue>> rows, int quantityColumn)
+        {
+            var candidates = rows.SelectMany(r => r)
+                .Where(c => c != null && c.SourceIndex != quantityColumn && LooksLikeUnit(c.Text))
+                .GroupBy(c => c.SourceIndex)
+                .Select(g => new { Column = g.Key, Count = g.Count() })
+                .OrderByDescending(x => x.Column < quantityColumn)
+                .ThenByDescending(x => x.Count)
+                .ThenBy(x => Math.Abs(quantityColumn - x.Column))
+                .ToList();
+            return candidates.Count == 0 ? -1 : candidates[0].Column;
+        }
+
+        private static int FindDetailColumn(List<List<CellValue>> rows, int quantityColumn, int unitColumn)
+        {
+            int rightLimit = unitColumn >= 0 && unitColumn < quantityColumn ? unitColumn : quantityColumn;
+            var candidates = rows.SelectMany(r => r)
+                .Where(c => c != null
+                    && c.SourceIndex < rightLimit
+                    && c.SourceIndex != unitColumn
+                    && LooksLikeGroupText(c.Text))
+                .GroupBy(c => c.SourceIndex)
+                .Select(g => new { Column = g.Key, Count = g.Count() })
+                .OrderByDescending(x => x.Column)
+                .ThenByDescending(x => x.Count)
+                .ToList();
+            return candidates.Count == 0 ? -1 : candidates[0].Column;
+        }
+
+        private static int FindGroupColumn(List<List<CellValue>> rows, int detailColumn, int unitColumn, int quantityColumn)
+        {
+            var candidates = rows.SelectMany(r => r)
+                .Where(c => c != null
+                    && c.SourceIndex < detailColumn
+                    && c.SourceIndex != unitColumn
+                    && c.SourceIndex != quantityColumn
+                    && !String.IsNullOrWhiteSpace(c.Text)
+                    && !LooksLikeUnit(c.Text)
+                    && !IsQuantityLike(c.Text)
+                    && !LooksLikeOrderOrHeader(c.Text))
+                .GroupBy(c => c.SourceIndex)
+                .Select(g => new { Column = g.Key, Count = g.Count() })
+                .OrderByDescending(x => x.Column)
+                .ThenByDescending(x => x.Count)
+                .ToList();
+            return candidates.Count == 0 ? -1 : candidates[0].Column;
+        }
+
+        private static string[] BuildUnitsByRow(List<List<CellValue>> rows, int unitColumn)
+        {
+            string[] units = new string[rows.Count];
+            for (int i = 0; i < rows.Count; i++)
+            {
+                CellValue cell = unitColumn >= 0 ? GetCell(rows[i], unitColumn) : null;
+                if (cell != null && LooksLikeUnit(cell.Text))
+                {
+                    units[i] = cell.Text.Trim();
+                }
+            }
+
+            List<string> knownUnits = units.Where(u => !String.IsNullOrWhiteSpace(u)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (knownUnits.Count == 1)
+            {
+                for (int i = 0; i < units.Length; i++)
+                {
+                    units[i] = knownUnits[0];
+                }
+
+                return units;
+            }
+
+            string lastUnit = "";
+            for (int i = 0; i < units.Length; i++)
+            {
+                if (!String.IsNullOrWhiteSpace(units[i]))
+                {
+                    lastUnit = units[i];
+                }
+                else if (!String.IsNullOrWhiteSpace(lastUnit))
+                {
+                    units[i] = lastUnit;
+                }
+            }
+
+            string nextUnit = "";
+            for (int i = units.Length - 1; i >= 0; i--)
+            {
+                if (!String.IsNullOrWhiteSpace(units[i]))
+                {
+                    nextUnit = units[i];
+                }
+                else if (!String.IsNullOrWhiteSpace(nextUnit))
+                {
+                    units[i] = nextUnit;
+                }
+            }
+
+            return units;
+        }
+
+        private static CellValue GetCell(List<CellValue> row, int sourceIndex)
+        {
+            if (row == null)
+            {
+                return null;
+            }
+
+            return row.FirstOrDefault(c => c.SourceIndex == sourceIndex);
+        }
+
+        private static string GetCellText(List<CellValue> row, int sourceIndex)
+        {
+            CellValue cell = GetCell(row, sourceIndex);
+            return cell == null ? "" : (cell.Text ?? "").Trim();
+        }
+
+        private static ExcelQuantityItem BuildQuantityItemFromHtmlRow(List<string> cells, int rowNumber, ref string lastGroupName, ref string lastUnit)
+        {
+            string[] raw = cells.ToArray();
+            ExcelQuantityItem four = TryBuildFourColumnClipboardItem(raw, rowNumber, ref lastGroupName, ref lastUnit);
+            if (four != null)
+            {
+                four.WorksheetName = "\u526a\u8d34\u677fHTML";
+                return four;
+            }
+
+            ExcelQuantityItem three = TryBuildThreeColumnClipboardItem(raw, rowNumber, ref lastUnit);
+            if (three != null)
+            {
+                three.WorksheetName = "\u526a\u8d34\u677fHTML";
+                return three;
+            }
+
+            return null;
+        }
+
+        private static ExcelQuantityItem BuildQuantityItemFromRangeRow(dynamic range, string worksheetName, int relativeRow, int columnCount, ref string lastGroupName, ref string lastUnit)
+        {
+            ExcelQuantityItem fourColumnItem = TryBuildFourColumnRangeItem(range, worksheetName, relativeRow, columnCount, ref lastGroupName, ref lastUnit);
+            if (fourColumnItem != null)
+            {
+                return fourColumnItem;
+            }
+
+            ExcelQuantityItem fixedItem = TryBuildThreeColumnRangeItem(range, worksheetName, relativeRow, columnCount, ref lastUnit);
             if (fixedItem != null)
             {
                 return fixedItem;
@@ -1347,7 +1938,72 @@ namespace RecoQuotaRecommend
             return BuildQuantityItemFromCells(cells, worksheetName);
         }
 
-        private static ExcelQuantityItem TryBuildThreeColumnRangeItem(dynamic range, string worksheetName, int relativeRow, int columnCount)
+        private static ExcelQuantityItem TryBuildFourColumnRangeItem(dynamic range, string worksheetName, int relativeRow, int columnCount, ref string lastGroupName, ref string lastUnit)
+        {
+            if (columnCount < 4)
+            {
+                return null;
+            }
+
+            dynamic groupCell = range.Cells[relativeRow, 1];
+            dynamic detailCell = range.Cells[relativeRow, 2];
+            dynamic unitCell = range.Cells[relativeRow, 3];
+            dynamic quantityCell = range.Cells[relativeRow, 4];
+            string group = ReadCellTextWithMerge(groupCell);
+            string detail = ReadCellTextWithMerge(detailCell);
+            string unit = ReadCellTextWithMerge(unitCell);
+            string quantity = ExcelValueToText(quantityCell.Value2);
+
+            if (!String.IsNullOrWhiteSpace(group) && !LooksLikeOrderOrHeader(group))
+            {
+                lastGroupName = group;
+            }
+            else
+            {
+                group = lastGroupName;
+            }
+
+            if (!String.IsNullOrWhiteSpace(unit) && !LooksLikeOrderOrHeader(unit))
+            {
+                lastUnit = unit;
+            }
+            else
+            {
+                unit = lastUnit;
+            }
+
+            string name = CombineQuantityName(group, detail);
+            if (String.IsNullOrWhiteSpace(name) || String.IsNullOrWhiteSpace(quantity))
+            {
+                return null;
+            }
+
+            if (LooksLikeOrderOrHeader(name) || LooksLikeOrderOrHeader(detail) || !IsQuantityLike(quantity))
+            {
+                return null;
+            }
+
+            ExcelQuantityItem item = new ExcelQuantityItem();
+            item.WorksheetName = worksheetName;
+            item.RowNumber = Convert.ToInt32(quantityCell.Row, CultureInfo.InvariantCulture);
+            item.CellAddress = Convert.ToString(quantityCell.Address(false, false), CultureInfo.InvariantCulture);
+            item.Name = name;
+            item.Unit = unit;
+            item.ValueText = quantity;
+            try
+            {
+                item.Formula = Convert.ToString(quantityCell.Formula, CultureInfo.InvariantCulture);
+            }
+            catch
+            {
+                item.Formula = "";
+            }
+            item.ContextText = name + " " + unit + " " + quantity;
+            item.SectionName = group;
+            return item;
+        }
+
+        private static ExcelQuantityItem TryBuildThreeColumnRangeItem(dynamic range, string worksheetName, int relativeRow, int columnCount, ref string lastUnit)
         {
             if (columnCount < 3)
             {
@@ -1357,9 +2013,23 @@ namespace RecoQuotaRecommend
             dynamic nameCell = range.Cells[relativeRow, 1];
             dynamic unitCell = range.Cells[relativeRow, 2];
             dynamic quantityCell = range.Cells[relativeRow, 3];
-            string name = ExcelValueToText(nameCell.Value2);
-            string unit = ExcelValueToText(unitCell.Value2);
+            string name = ReadCellTextWithMerge(nameCell);
+            string unit = ReadCellTextWithMerge(unitCell);
             string quantity = ExcelValueToText(quantityCell.Value2);
+            string group = TryReadLeftGroupFromRangeRow(range, relativeRow);
+            if (!String.IsNullOrWhiteSpace(group) && !LooksLikeOrderOrHeader(group))
+            {
+                name = CombineQuantityName(group, name);
+            }
+
+            if (!String.IsNullOrWhiteSpace(unit) && !LooksLikeOrderOrHeader(unit))
+            {
+                lastUnit = unit;
+            }
+            else
+            {
+                unit = lastUnit;
+            }
             if (String.IsNullOrWhiteSpace(name) || String.IsNullOrWhiteSpace(quantity))
             {
                 return null;
@@ -1386,13 +2056,165 @@ namespace RecoQuotaRecommend
                 item.Formula = "";
             }
             item.ContextText = name + " " + unit + " " + quantity;
-            item.SectionName = name;
+            item.SectionName = String.IsNullOrWhiteSpace(group) ? name : group;
             return item;
         }
 
-        private static ExcelQuantityItem BuildQuantityItemFromTextRow(string[] rawCells, int rowNumber)
+        private static List<string> TryReadActiveSelectionLeftGroups(int expectedRows)
         {
-            ExcelQuantityItem fixedItem = TryBuildThreeColumnClipboardItem(rawCells, rowNumber);
+            List<string> result = new List<string>();
+            try
+            {
+                dynamic excel = GetActiveSpreadsheetApplication();
+                if (excel == null)
+                {
+                    return result;
+                }
+
+                dynamic range = excel.Selection;
+                if (range == null)
+                {
+                    return result;
+                }
+
+                int rowCount = Convert.ToInt32(range.Rows.Count, CultureInfo.InvariantCulture);
+                int count = expectedRows > 0 ? Math.Min(expectedRows, rowCount) : rowCount;
+                string lastGroup = "";
+                for (int row = 1; row <= count; row++)
+                {
+                    string group = TryReadLeftGroupFromRangeRow(range, row);
+                    if (LooksLikeGroupText(group))
+                    {
+                        lastGroup = group;
+                    }
+                    else
+                    {
+                        group = lastGroup;
+                    }
+
+                    result.Add(group);
+                }
+            }
+            catch
+            {
+            }
+
+            return result;
+        }
+
+        private static string TryReadLeftGroupFromRangeRow(dynamic range, int relativeRow)
+        {
+            try
+            {
+                dynamic firstCell = range.Cells[relativeRow, 1];
+                int row = TryReadInt(firstCell, "Row");
+                int column = TryReadInt(firstCell, "Column");
+                dynamic worksheet = null;
+                try
+                {
+                    worksheet = firstCell.Worksheet;
+                }
+                catch
+                {
+                }
+
+                int maxOffset = column > 1 ? Math.Min(8, column - 1) : 8;
+                for (int offset = 1; offset <= maxOffset; offset++)
+                {
+                    string text = "";
+                    if (worksheet != null && row > 0 && column > offset)
+                    {
+                        try
+                        {
+                            dynamic sheetCell = worksheet.Cells[row, column - offset];
+                            text = ReadCellTextWithMerge(sheetCell);
+                        }
+                        catch
+                        {
+                            text = "";
+                        }
+                    }
+
+                    if (!LooksLikeGroupText(text))
+                    {
+                        try
+                        {
+                            dynamic offsetCell = firstCell.Offset[0, -offset];
+                            text = ReadCellTextWithMerge(offsetCell);
+                        }
+                        catch
+                        {
+                            text = "";
+                        }
+                    }
+
+                    if (LooksLikeGroupText(text))
+                    {
+                        return text;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return "";
+        }
+
+        private static int TryReadInt(dynamic source, string propertyName)
+        {
+            try
+            {
+                object value = source.GetType().InvokeMember(propertyName, BindingFlags.GetProperty, null, source, null, CultureInfo.InvariantCulture);
+                return Convert.ToInt32(value, CultureInfo.InvariantCulture);
+            }
+            catch
+            {
+                try
+                {
+                    object value = propertyName == "Row" ? source.Row : source.Column;
+                    return Convert.ToInt32(value, CultureInfo.InvariantCulture);
+                }
+                catch
+                {
+                    return 0;
+                }
+            }
+        }
+
+        private static string ReadCellTextWithMerge(dynamic cell)
+        {
+            try
+            {
+                string text = ExcelValueToText(cell.Value2);
+                if (!String.IsNullOrWhiteSpace(text))
+                {
+                    return text;
+                }
+
+                dynamic mergeArea = cell.MergeArea;
+                if (mergeArea != null)
+                {
+                    dynamic first = mergeArea.Cells[1, 1];
+                    return ExcelValueToText(first.Value2);
+                }
+            }
+            catch
+            {
+            }
+
+            return "";
+        }
+
+        private static ExcelQuantityItem BuildQuantityItemFromTextRow(string[] rawCells, int rowNumber, ref string lastGroupName, ref string lastUnit)
+        {
+            ExcelQuantityItem fourColumnItem = TryBuildFourColumnClipboardItem(rawCells, rowNumber, ref lastGroupName, ref lastUnit);
+            if (fourColumnItem != null)
+            {
+                return fourColumnItem;
+            }
+
+            ExcelQuantityItem fixedItem = TryBuildThreeColumnClipboardItem(rawCells, rowNumber, ref lastUnit);
             if (fixedItem != null)
             {
                 return fixedItem;
@@ -1417,16 +2239,255 @@ namespace RecoQuotaRecommend
             return BuildQuantityItemFromCells(cells, "\u526a\u8d34\u677f");
         }
 
-        private static ExcelQuantityItem TryBuildThreeColumnClipboardItem(string[] rawCells, int rowNumber)
+        private static ExcelQuantityItem TryBuildFourColumnClipboardItem(string[] rawCells, int rowNumber, ref string lastGroupName, ref string lastUnit)
+        {
+            if (rawCells == null || rawCells.Length < 4)
+            {
+                return null;
+            }
+
+            string group = NormalizeCellText(rawCells[0]);
+            string detail = NormalizeCellText(rawCells[1]);
+            string unit = NormalizeCellText(rawCells[2]);
+            string quantity = NormalizeCellText(rawCells[3]);
+
+                if (LooksLikeGroupText(group))
+            {
+                lastGroupName = group;
+            }
+            else
+            {
+                group = lastGroupName;
+            }
+
+            if (!String.IsNullOrWhiteSpace(unit) && !LooksLikeOrderOrHeader(unit))
+            {
+                lastUnit = unit;
+            }
+            else
+            {
+                unit = lastUnit;
+            }
+
+            string name = CombineQuantityName(group, detail);
+            if (String.IsNullOrWhiteSpace(name) || String.IsNullOrWhiteSpace(quantity))
+            {
+                return null;
+            }
+
+            if (LooksLikeOrderOrHeader(name) || LooksLikeOrderOrHeader(detail) || !IsQuantityLike(quantity))
+            {
+                return null;
+            }
+
+            ExcelQuantityItem item = new ExcelQuantityItem();
+            item.WorksheetName = "\u526a\u8d34\u677f";
+            item.RowNumber = rowNumber;
+            item.CellAddress = "R" + rowNumber.ToString(CultureInfo.InvariantCulture) + "C4";
+            item.Name = name;
+            item.Unit = unit;
+            item.ValueText = quantity;
+            item.Formula = quantity.StartsWith("=", StringComparison.Ordinal) ? quantity : "";
+            item.ContextText = name + " " + unit + " " + quantity;
+            item.SectionName = group;
+            return item;
+        }
+
+        private static string CombineQuantityName(string group, string detail)
+        {
+            string left = (group ?? "").Trim();
+            string right = (detail ?? "").Trim();
+            if (String.IsNullOrWhiteSpace(left))
+            {
+                return right;
+            }
+
+            if (String.IsNullOrWhiteSpace(right))
+            {
+                return left;
+            }
+
+            if (right.IndexOf(left, StringComparison.Ordinal) >= 0)
+            {
+                return right;
+            }
+
+            return left + " " + right;
+        }
+
+        private static void ApplyActiveLeftGroups(ExcelSelection selection)
+        {
+            if (selection == null || selection.Items.Count == 0)
+            {
+                return;
+            }
+
+            List<string> groups = TryReadActiveSelectionLeftGroups(selection.Items.Count);
+            if (groups.Count == 0)
+            {
+                return;
+            }
+
+            int groupHits = groups.Count(g => LooksLikeGroupText(g));
+            string sampleGroup = groups.FirstOrDefault(g => LooksLikeGroupText(g)) ?? "";
+            QuotaRecommendPanel.Log("Active left group scan: rows="
+                + groups.Count.ToString(CultureInfo.InvariantCulture)
+                + ", groups=" + groupHits.ToString(CultureInfo.InvariantCulture)
+                + ", sample=" + sampleGroup);
+
+            int count = Math.Min(selection.Items.Count, groups.Count);
+            for (int i = 0; i < count; i++)
+            {
+                ExcelQuantityItem item = selection.Items[i];
+                string group = (groups[i] ?? "").Trim();
+                if (item == null || String.IsNullOrWhiteSpace(group) || LooksLikeOrderOrHeader(group))
+                {
+                    continue;
+                }
+
+                string section = (item.SectionName ?? "").Trim();
+                bool alreadyHasGroup = (item.Name ?? "").IndexOf(group, StringComparison.Ordinal) >= 0;
+                bool appearsUngrouped = String.IsNullOrWhiteSpace(section) || String.Equals(section, item.Name, StringComparison.Ordinal);
+                if (alreadyHasGroup || !appearsUngrouped)
+                {
+                    continue;
+                }
+
+                item.Name = CombineQuantityName(group, item.Name);
+                item.SectionName = group;
+                item.ContextText = item.Name + " " + item.Unit + " " + item.ValueText;
+            }
+        }
+
+        private static void NormalizeSelectionItems(ExcelSelection selection)
+        {
+            if (selection == null || selection.Items.Count == 0)
+            {
+                return;
+            }
+
+            string lastUnit = "";
+            foreach (ExcelQuantityItem item in selection.Items)
+            {
+                if (item == null)
+                {
+                    continue;
+                }
+
+                item.Name = (item.Name ?? "").Trim();
+                item.Unit = (item.Unit ?? "").Trim();
+                item.ValueText = (item.ValueText ?? "").Trim();
+                if (!String.IsNullOrWhiteSpace(item.Unit))
+                {
+                    lastUnit = item.Unit;
+                }
+                else if (!String.IsNullOrWhiteSpace(lastUnit))
+                {
+                    item.Unit = lastUnit;
+                }
+            }
+
+            string nextUnit = "";
+            for (int i = selection.Items.Count - 1; i >= 0; i--)
+            {
+                ExcelQuantityItem item = selection.Items[i];
+                if (item == null)
+                {
+                    continue;
+                }
+
+                if (!String.IsNullOrWhiteSpace(item.Unit))
+                {
+                    nextUnit = item.Unit;
+                }
+                else if (!String.IsNullOrWhiteSpace(nextUnit))
+                {
+                    item.Unit = nextUnit;
+                }
+            }
+
+            List<string> knownUnits = selection.Items
+                .Where(i => i != null && !String.IsNullOrWhiteSpace(i.Unit))
+                .Select(i => i.Unit.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (knownUnits.Count == 1)
+            {
+                foreach (ExcelQuantityItem item in selection.Items)
+                {
+                    if (item != null && String.IsNullOrWhiteSpace(item.Unit))
+                    {
+                        item.Unit = knownUnits[0];
+                    }
+                }
+            }
+
+            foreach (ExcelQuantityItem item in selection.Items)
+            {
+                if (item != null)
+                {
+                    item.ContextText = item.Name + " " + item.Unit + " " + item.ValueText;
+                }
+            }
+        }
+
+        private static void LogSelectionSummary(string source, ExcelSelection selection)
+        {
+            try
+            {
+                if (selection == null)
+                {
+                    QuotaRecommendPanel.Log(source + ": no selection");
+                    return;
+                }
+
+                StringBuilder builder = new StringBuilder();
+                int take = Math.Min(5, selection.Items.Count);
+                for (int i = 0; i < take; i++)
+                {
+                    ExcelQuantityItem item = selection.Items[i];
+                    if (item == null)
+                    {
+                        continue;
+                    }
+
+                    if (builder.Length > 0)
+                    {
+                        builder.Append(" | ");
+                    }
+
+                    builder.Append(item.Name);
+                    builder.Append("/");
+                    builder.Append(item.Unit);
+                    builder.Append("/");
+                    builder.Append(item.ValueText);
+                }
+
+                QuotaRecommendPanel.Log(source + ": items=" + selection.Items.Count.ToString(CultureInfo.InvariantCulture) + ", sample=" + builder.ToString());
+            }
+            catch
+            {
+            }
+        }
+
+        private static ExcelQuantityItem TryBuildThreeColumnClipboardItem(string[] rawCells, int rowNumber, ref string lastUnit)
         {
             if (rawCells == null || rawCells.Length < 3)
             {
                 return null;
             }
 
-            string name = (rawCells[0] ?? "").Trim();
-            string unit = (rawCells[1] ?? "").Trim();
-            string quantity = (rawCells[2] ?? "").Trim();
+            string name = NormalizeCellText(rawCells[0]);
+            string unit = NormalizeCellText(rawCells[1]);
+            string quantity = NormalizeCellText(rawCells[2]);
+            if (!String.IsNullOrWhiteSpace(unit) && !LooksLikeOrderOrHeader(unit))
+            {
+                lastUnit = unit;
+            }
+            else
+            {
+                unit = lastUnit;
+            }
             if (String.IsNullOrWhiteSpace(name) || String.IsNullOrWhiteSpace(quantity))
             {
                 return null;
@@ -1590,19 +2651,24 @@ namespace RecoQuotaRecommend
             }
             if (value is double || value is float)
             {
-                return Convert.ToDouble(value, CultureInfo.InvariantCulture).ToString("0.########", CultureInfo.InvariantCulture);
+                return NormalizeCellText(Convert.ToDouble(value, CultureInfo.InvariantCulture).ToString("0.########", CultureInfo.InvariantCulture));
             }
             if (value is decimal)
             {
-                return ((decimal)value).ToString("0.########", CultureInfo.InvariantCulture);
+                return NormalizeCellText(((decimal)value).ToString("0.########", CultureInfo.InvariantCulture));
             }
-            return Convert.ToString(value, CultureInfo.CurrentCulture).Trim();
+            return NormalizeCellText(Convert.ToString(value, CultureInfo.CurrentCulture));
+        }
+
+        private static string NormalizeCellText(string text)
+        {
+            return Regex.Replace((text ?? "").Replace("\r", " ").Replace("\n", " "), @"\s+", " ").Trim();
         }
 
         private static bool LooksLikeUnit(string text)
         {
-            string unit = Normalize(text);
-            string[] units = new string[] { "m", "m2", "m3", "kg", "t", "吨", "米", "平方米", "立方米", "处", "个", "座", "项", "根", "孔", "延米" };
+            string unit = NormalizeRawUnit(text);
+            string[] units = new string[] { "m", "m2", "m3", "kg", "t", "处", "个", "座", "项", "根", "孔", "环", "组" };
             return units.Contains(unit);
         }
 
@@ -1620,14 +2686,11 @@ namespace RecoQuotaRecommend
 
         private static string NormalizeUnit(string unit)
         {
-            return Normalize(unit)
+            return NormalizeRawUnit(unit)
                 .Replace("100", "")
                 .Replace("10", "")
-                .Replace("立方米", "m3")
-                .Replace("平方米", "m2")
-                .Replace("米", "m")
-                .Replace("吨", "t")
                 .Replace("㎡", "m2")
+                .Replace("㎥", "m3")
                 .Replace("m²", "m2")
                 .Replace("m³", "m3");
         }
@@ -1647,6 +2710,11 @@ namespace RecoQuotaRecommend
             }
 
             string value = (text ?? "").Trim();
+            if (CountChineseLikeChars(value) > 0)
+            {
+                return false;
+            }
+
             bool hasDigit = value.Any(Char.IsDigit);
             bool hasOperator = value.IndexOfAny(new char[] { '+', '-', '*', '/', '×', '(', ')', '（', '）' }) >= 0;
             return hasDigit && hasOperator;
@@ -1661,6 +2729,14 @@ namespace RecoQuotaRecommend
                 || value == "\u5de5\u7a0b\u91cf"
                 || value == "\u5de5\u7a0b\u9879\u76ee"
                 || IsNumberLike(value);
+        }
+
+        private static bool LooksLikeGroupText(string text)
+        {
+            return !String.IsNullOrWhiteSpace(text)
+                && !LooksLikeOrderOrHeader(text)
+                && !LooksLikeUnit(text)
+                && !IsQuantityLike(text);
         }
 
         private static int CountChineseLikeChars(string text)
@@ -1724,6 +2800,12 @@ namespace RecoQuotaRecommend
             public string Address;
             public int RowNumber;
             public int SourceIndex;
+        }
+
+        private struct CarryCell
+        {
+            public string Text;
+            public int RemainingRows;
         }
     }
 

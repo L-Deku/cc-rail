@@ -101,7 +101,10 @@ namespace RecoUndoButton
             private TreeView observedTree;
             private Image undoIcon;
             private Image redoIcon;
-            private ToolStrip floatingToolbar;
+            private DateTime suppressChangesUntilUtc;
+            private GridSnapshot lastRestoredSnapshot;
+            private string lastRestoredChapterKey;
+            private bool replayingRestoredSnapshot;
             private bool restoring;
 
             public UndoRuntime(Form mainForm)
@@ -160,6 +163,7 @@ namespace RecoUndoButton
             private void GridDataBindingComplete(object sender, DataGridViewBindingCompleteEventArgs e)
             {
                 HookDataSourceEvents();
+                ScheduleRestoredSnapshotReplay("DataBindingComplete");
                 EnsureCurrentContextSnapshot();
                 UpdateUndoItems();
             }
@@ -167,11 +171,13 @@ namespace RecoUndoButton
             private void GridDataSourceChanged(object sender, EventArgs e)
             {
                 HookDataSourceEvents();
+                ScheduleRestoredSnapshotReplay("DataSourceChanged");
                 ResetCurrentContextSnapshot();
             }
 
             private void TreeAfterSelect(object sender, TreeViewEventArgs e)
             {
+                ScheduleRestoredSnapshotReplay("TreeAfterSelect");
                 EnsureCurrentContextSnapshot();
                 UpdateUndoItems();
             }
@@ -309,12 +315,7 @@ namespace RecoUndoButton
             private bool InstallToolbarItems()
             {
                 RemoveExistingToolbarButtons(mainForm);
-                ToolStrip floating = CreateFloatingChapterToolbar();
-                if (floating != null)
-                {
-                    floatingToolbar = floating;
-                    return undoItems.Count > 0 && redoItems.Count > 0;
-                }
+                RemoveFloatingToolbar(mainForm);
 
                 ToolStrip toolStrip = FindChapterToolStrip(mainForm);
                 if (toolStrip != null)
@@ -621,7 +622,7 @@ namespace RecoUndoButton
 
             private void ScheduleChangeObserved()
             {
-                if (restoring || grid == null || grid.IsDisposed)
+                if (restoring || DateTime.UtcNow < suppressChangesUntilUtc || grid == null || grid.IsDisposed)
                 {
                     return;
                 }
@@ -673,6 +674,7 @@ namespace RecoUndoButton
                     PushUndo(history, history.PendingBeforeSnapshot);
                     history.RedoStack.Clear();
                     history.LastStableSnapshot = current;
+                    ClearLastRestoredSnapshot();
                 }
 
                 history.PendingBeforeSnapshot = null;
@@ -988,7 +990,7 @@ namespace RecoUndoButton
 
             private void RestoreSnapshot(GridSnapshot snapshot)
             {
-                restoring = true;
+                BeginRestoreEventSuppression();
                 try
                 {
                     DataView view = ResolveDataView(grid.DataSource);
@@ -1003,44 +1005,296 @@ namespace RecoUndoButton
                     }
 
                     RestoreCurrentCell(snapshot);
+                    RememberRestoredSnapshot(snapshot);
+                    ClearPendingChange();
                 }
                 finally
+                {
+                    EndRestoreEventSuppression();
+                }
+            }
+
+            private void BeginRestoreEventSuppression()
+            {
+                restoring = true;
+                suppressChangesUntilUtc = DateTime.UtcNow.AddMilliseconds(900);
+                ClearPendingChange();
+            }
+
+            private void EndRestoreEventSuppression()
+            {
+                ClearPendingChange();
+                try
+                {
+                    mainForm.BeginInvoke((MethodInvoker)delegate
+                    {
+                        ClearPendingChange();
+                        suppressChangesUntilUtc = DateTime.UtcNow.AddMilliseconds(250);
+                        try
+                        {
+                            mainForm.BeginInvoke((MethodInvoker)delegate
+                            {
+                                ClearPendingChange();
+                                restoring = false;
+                            });
+                        }
+                        catch
+                        {
+                            restoring = false;
+                        }
+                    });
+                }
+                catch
                 {
                     restoring = false;
                 }
             }
 
+            private void ClearPendingChange()
+            {
+                settleTimer.Stop();
+                if (!String.IsNullOrEmpty(pendingContextKey))
+                {
+                    ContextHistory pendingHistory = GetHistory(pendingContextKey, false);
+                    if (pendingHistory != null)
+                    {
+                        pendingHistory.PendingBeforeSnapshot = null;
+                    }
+                }
+
+                pendingContextKey = null;
+            }
+
+            private void RememberRestoredSnapshot(GridSnapshot snapshot)
+            {
+                if (snapshot == null)
+                {
+                    return;
+                }
+
+                lastRestoredSnapshot = snapshot.Clone();
+                lastRestoredChapterKey = GetCurrentChapterKey();
+            }
+
+            private void ClearLastRestoredSnapshot()
+            {
+                lastRestoredSnapshot = null;
+                lastRestoredChapterKey = null;
+            }
+
+            private void ScheduleRestoredSnapshotReplay(string reason)
+            {
+                if (lastRestoredSnapshot == null || mainForm == null || mainForm.IsDisposed)
+                {
+                    return;
+                }
+
+                try
+                {
+                    mainForm.BeginInvoke((MethodInvoker)delegate { ReplayRestoredSnapshotIfNeeded(reason); });
+                }
+                catch
+                {
+                }
+            }
+
+            private void ReplayRestoredSnapshotIfNeeded(string reason)
+            {
+                if (lastRestoredSnapshot == null || restoring || replayingRestoredSnapshot || grid == null || grid.IsDisposed)
+                {
+                    return;
+                }
+
+                if (!String.Equals(lastRestoredChapterKey, GetCurrentChapterKey(), StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                GridSnapshot current = CaptureSnapshot(GetCurrentContextKey());
+                if (GridSnapshot.AreEquivalent(lastRestoredSnapshot, current))
+                {
+                    return;
+                }
+
+                replayingRestoredSnapshot = true;
+                try
+                {
+                    UndoButtonPlugin.Log("Replay restored snapshot after " + reason + ".");
+                    RestoreSnapshot(lastRestoredSnapshot);
+                    ContextHistory history = GetHistory(GetCurrentContextKey(), true);
+                    history.LastStableSnapshot = CaptureSnapshot(GetCurrentContextKey());
+                    history.PendingBeforeSnapshot = null;
+                }
+                finally
+                {
+                    replayingRestoredSnapshot = false;
+                }
+            }
+
             private void RestoreTableSnapshot(DataView view, DataTable table, GridSnapshot snapshot)
             {
-                if (table.Columns.Count != snapshot.Columns.Count)
+                if (!IsSchemaCompatible(table, snapshot))
                 {
                     throw new InvalidOperationException("当前表格列结构已经变化，不能安全撤回。");
                 }
 
-                CommitDeletedRows(table);
-                List<DataRow> liveRows = GetLiveRows(view, table);
-                if (liveRows.Count == snapshot.Rows.Count)
+                RestoreRowsToTable(view, table, snapshot, grid.DataSource as BindingSource);
+                SyncHostDeInputTable(snapshot, table);
+                StabilizeRestoredTable(table);
+                RefreshGridBinding();
+            }
+
+            private void RestoreRowsToTable(DataView view, DataTable table, GridSnapshot snapshot, BindingSource bindingSource)
+            {
+                bool restoreListChanged = false;
+                bool oldRaiseListChanged = true;
+                if (bindingSource != null)
                 {
-                    for (int rowIndex = 0; rowIndex < snapshot.Rows.Count; rowIndex++)
+                    oldRaiseListChanged = bindingSource.RaiseListChangedEvents;
+                    bindingSource.RaiseListChangedEvents = false;
+                    restoreListChanged = true;
+                }
+
+                try
+                {
+                    table.BeginLoadData();
+                    CommitDeletedRows(table);
+                    List<DataRow> liveRows = GetLiveRows(view, table);
+                    if (liveRows.Count == snapshot.Rows.Count)
                     {
-                        ApplyValuesToDataRow(liveRows[rowIndex], snapshot.Rows[rowIndex]);
+                        for (int rowIndex = 0; rowIndex < snapshot.Rows.Count; rowIndex++)
+                        {
+                            ApplyValuesToDataRow(liveRows[rowIndex], snapshot.Rows[rowIndex]);
+                        }
+                    }
+                    else
+                    {
+                        table.Rows.Clear();
+                        foreach (object[] values in snapshot.Rows)
+                        {
+                            DataRow row = table.NewRow();
+                            ApplyValuesToDataRow(row, values);
+                            table.Rows.Add(row);
+                        }
                     }
                 }
-                else
+                finally
                 {
-                    table.Rows.Clear();
-                    foreach (object[] values in snapshot.Rows)
+                    try
                     {
-                        DataRow row = table.NewRow();
-                        ApplyValuesToDataRow(row, values);
-                        table.Rows.Add(row);
+                        table.EndLoadData();
+                    }
+                    catch
+                    {
+                    }
+
+                    if (restoreListChanged)
+                    {
+                        bindingSource.RaiseListChangedEvents = oldRaiseListChanged;
+                    }
+                }
+            }
+
+            private void SyncHostDeInputTable(GridSnapshot snapshot, DataTable restoredTable)
+            {
+                if (snapshot == null)
+                {
+                    return;
+                }
+
+                try
+                {
+                    FieldInfo field = mainForm.GetType().GetField("m_dtDeInput", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    if (field == null)
+                    {
+                        return;
+                    }
+
+                    DataTable hostTable = field.GetValue(mainForm) as DataTable;
+                    if (hostTable == null || Object.ReferenceEquals(hostTable, restoredTable))
+                    {
+                        return;
+                    }
+
+                    if (!IsSchemaCompatible(hostTable, snapshot))
+                    {
+                        UndoButtonPlugin.Log("Skip host m_dtDeInput sync: schema differs.");
+                        return;
+                    }
+
+                    RestoreRowsToTable(null, hostTable, snapshot, null);
+                    StabilizeRestoredTable(hostTable);
+                    UndoButtonPlugin.Log("Synced host m_dtDeInput rows from restored snapshot.");
+                }
+                catch (Exception ex)
+                {
+                    UndoButtonPlugin.Log("Sync host m_dtDeInput failed: " + ex.Message);
+                }
+            }
+
+            private static bool IsSchemaCompatible(DataTable table, GridSnapshot snapshot)
+            {
+                if (table == null || snapshot == null || table.Columns.Count != snapshot.Columns.Count)
+                {
+                    return false;
+                }
+
+                for (int i = 0; i < snapshot.Columns.Count; i++)
+                {
+                    if (!String.Equals(table.Columns[i].ColumnName, snapshot.Columns[i], StringComparison.OrdinalIgnoreCase))
+                    {
+                        return false;
                     }
                 }
 
+                return true;
+            }
+
+            private void StabilizeRestoredTable(DataTable table)
+            {
+                if (table == null)
+                {
+                    return;
+                }
+
+                try
+                {
+                    table.AcceptChanges();
+                }
+                catch (Exception ex)
+                {
+                    UndoButtonPlugin.Log("Accept restored table failed: " + ex.Message);
+                }
+            }
+
+            private void RefreshGridBinding()
+            {
                 CurrencyManager manager = mainForm.BindingContext[grid.DataSource] as CurrencyManager;
                 if (manager != null)
                 {
-                    manager.Refresh();
+                    try
+                    {
+                        manager.EndCurrentEdit();
+                        manager.Refresh();
+                    }
+                    catch (Exception ex)
+                    {
+                        UndoButtonPlugin.Log("Refresh currency manager failed: " + ex.Message);
+                    }
+                }
+
+                BindingSource bindingSource = grid.DataSource as BindingSource;
+                if (bindingSource != null)
+                {
+                    try
+                    {
+                        bindingSource.EndEdit();
+                        bindingSource.ResetBindings(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        UndoButtonPlugin.Log("Refresh binding source failed: " + ex.Message);
+                    }
                 }
 
                 grid.Refresh();
@@ -1177,7 +1431,14 @@ namespace RecoUndoButton
 
                 try
                 {
-                    grid.CurrentCell = grid.Rows[snapshot.CurrentRowIndex].Cells[snapshot.CurrentColumnIndex];
+                    DataGridViewRow row = grid.Rows[snapshot.CurrentRowIndex];
+                    DataGridViewColumn column = grid.Columns[snapshot.CurrentColumnIndex];
+                    if (row == null || column == null || !row.Visible || !column.Visible)
+                    {
+                        return;
+                    }
+
+                    grid.CurrentCell = row.Cells[snapshot.CurrentColumnIndex];
                 }
                 catch
                 {
@@ -1240,6 +1501,30 @@ namespace RecoUndoButton
                     RemoveNamedToolbarButton(toolStrip.Items, "RecoUndoButton_Undo");
                     RemoveNamedToolbarButton(toolStrip.Items, "RecoUndoButton_Redo");
                     RemoveOldUndoTextItem(toolStrip.Items);
+                }
+            }
+
+            private static void RemoveFloatingToolbar(Control root)
+            {
+                foreach (ToolStrip toolStrip in FindControls<ToolStrip>(root).ToArray())
+                {
+                    if (toolStrip == null || toolStrip.IsDisposed)
+                    {
+                        continue;
+                    }
+
+                    if (!String.Equals(toolStrip.Name, "RecoUndoButton_FloatingToolbar", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    Control parent = toolStrip.Parent;
+                    if (parent != null)
+                    {
+                        parent.Controls.Remove(toolStrip);
+                    }
+
+                    toolStrip.Dispose();
                 }
             }
 
@@ -1676,6 +1961,23 @@ namespace RecoUndoButton
                 }
 
                 return String.Equals(left.Signature, right.Signature, StringComparison.Ordinal);
+            }
+
+            public GridSnapshot Clone()
+            {
+                GridSnapshot clone = new GridSnapshot();
+                clone.ContextKey = ContextKey;
+                clone.Mode = Mode;
+                clone.CurrentRowIndex = CurrentRowIndex;
+                clone.CurrentColumnIndex = CurrentColumnIndex;
+                clone.Signature = Signature;
+                clone.Columns.AddRange(Columns);
+                foreach (object[] row in Rows)
+                {
+                    clone.Rows.Add(row == null ? null : row.ToArray());
+                }
+
+                return clone;
             }
 
             public string BuildSignature()

@@ -97,6 +97,14 @@ function Ensure-TargetConfigs {
   }
 }
 
+function Assert-NativeSuccess {
+  param([string]$Step)
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "$Step failed with exit code $LASTEXITCODE"
+  }
+}
+
 $targets = New-Object System.Collections.ArrayList
 Get-ChildItem -LiteralPath $root -Directory -Recurse |
   Where-Object {
@@ -130,6 +138,9 @@ $npoiOoxml = Join-Path $referenceDir "NPOI.OOXML.dll"
 $npoiOpenXml4Net = Join-Path $referenceDir "NPOI.OpenXml4Net.dll"
 $npoiOpenXmlFormats = Join-Path $referenceDir "NPOI.OpenXmlFormats.dll"
 $sharpZipLib = Join-Path $referenceDir "ICSharpCode.SharpZipLib.dll"
+$expandSources = Get-ChildItem -LiteralPath (Join-Path $root "tools\RecoExpandPanel") -Filter "*.cs" |
+  Sort-Object Name |
+  ForEach-Object { $_.FullName }
 
 & $csc /nologo /target:exe /out:$importerOut `
   /reference:$npoi `
@@ -137,15 +148,18 @@ $sharpZipLib = Join-Path $referenceDir "ICSharpCode.SharpZipLib.dll"
   /reference:$npoiOpenXml4Net `
   /reference:$npoiOpenXmlFormats `
   (Join-Path $PSScriptRoot "QuotaLearningImporter.cs")
+Assert-NativeSuccess "Build QuotaLearningImporter"
 
 & $csc /nologo /target:library /out:$quotaOut `
   /reference:System.Windows.Forms.dll `
   /reference:System.Drawing.dll `
   /reference:System.Data.dll `
   (Join-Path $PSScriptRoot "QuotaRecommendPanel.cs")
+Assert-NativeSuccess "Build RecoQuotaRecommend"
 
 & $csc /nologo /target:library /out:$loaderOut `
   (Join-Path $root "RecoPluginLoader\AutoLoadDomainManager.cs")
+Assert-NativeSuccess "Build RecoPluginLoader"
 
 & $csc /nologo /target:library /out:$expandOut `
   /reference:System.Windows.Forms.dll `
@@ -161,7 +175,8 @@ $sharpZipLib = Join-Path $referenceDir "ICSharpCode.SharpZipLib.dll"
   /reference:$npoiOpenXml4Net `
   /reference:$npoiOpenXmlFormats `
   /reference:$sharpZipLib `
-  (Join-Path $root "tools\RecoExpandPanel\FormPanel.cs")
+  $expandSources
+Assert-NativeSuccess "Build RecoExpandPanel"
 
 Copy-Item -LiteralPath $npoi -Destination $outDir -Force
 Copy-Item -LiteralPath $npoiOoxml -Destination $outDir -Force

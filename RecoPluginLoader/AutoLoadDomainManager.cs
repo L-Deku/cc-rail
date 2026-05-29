@@ -12,7 +12,6 @@ namespace RecoPluginLoader
             base.InitializeNewDomain(appDomainInfo);
             LoadPlugin("RecoExpandPanel.dll", "RecoNet.FormPanel", "InstallOnIdle");
             LoadPlugin("RecoQuotaRecommend.dll", "RecoQuotaRecommend.QuotaRecommendPanel", "InstallOnIdle");
-            LoadPlugin("RecoUndoButton.dll", "RecoUndoButton.UndoButtonPlugin", "InstallOnIdle");
         }
 
         private static void LoadPlugin(string assemblyFileName, string typeName, string methodName)
