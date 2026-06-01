@@ -154,6 +154,7 @@ Assert-NativeSuccess "Build QuotaLearningImporter"
   /reference:System.Windows.Forms.dll `
   /reference:System.Drawing.dll `
   /reference:System.Data.dll `
+  /reference:System.Web.Extensions.dll `
   (Join-Path $PSScriptRoot "QuotaRecommendPanel.cs")
 Assert-NativeSuccess "Build RecoQuotaRecommend"
 

@@ -1219,7 +1219,12 @@ namespace RecoNet
                     return false;
                 }
 
-                quantity = EvaluateDecimal(valueText);
+                if (!TryEvaluateDecimal(valueText, out quantity, out error))
+                {
+                    error = "Excel 单元格值无法计算：" + error;
+                    return false;
+                }
+
                 return true;
             }
             catch (COMException ex)
@@ -1292,7 +1297,12 @@ namespace RecoNet
                     return false;
                 }
 
-                quantity = EvaluateDecimal(cellValue);
+                if (!TryEvaluateDecimal(cellValue, out quantity, out error))
+                {
+                    error = normalized + " 单元格值无法计算：" + error;
+                    return false;
+                }
+
                 valueText = cellValue;
                 return true;
             }
@@ -1303,9 +1313,31 @@ namespace RecoNet
                 return false;
             }
 
-            quantity = EvaluateDecimal(resolved);
+            if (!TryEvaluateDecimal(resolved, out quantity, out error))
+            {
+                error = "表达式计算失败：" + error;
+                return false;
+            }
+
             valueText = quantity.ToString(CultureInfo.InvariantCulture);
             return true;
+        }
+
+        private static bool TryEvaluateDecimal(string expression, out decimal value, out string error)
+        {
+            value = 0;
+            error = null;
+
+            try
+            {
+                value = EvaluateDecimal(expression);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
         }
 
         private static string ResolveWorkbookExpression(string path, string sheetName, string expression, out string error)
@@ -1342,7 +1374,14 @@ namespace RecoNet
                         return null;
                     }
 
-                    decimal parsed = EvaluateDecimal(cellValue);
+                    decimal parsed;
+                    string parseError;
+                    if (!TryEvaluateDecimal(cellValue, out parsed, out parseError))
+                    {
+                        error = token + " 单元格值无法计算：" + parseError;
+                        return null;
+                    }
+
                     builder.Append(parsed.ToString(CultureInfo.InvariantCulture));
                     continue;
                 }
@@ -2099,7 +2138,7 @@ namespace RecoNet
 
         private static string ExcelValueToText(object value)
         {
-            if (value == null)
+            if (value == null || value == DBNull.Value)
             {
                 return "";
             }
@@ -2819,10 +2858,22 @@ namespace RecoNet
                         return;
                     }
 
-                    string displayValue;
-                    string readError;
-                    decimal quantity;
-                    if (!TryEvaluateWorkbookExpression(cell.WorkbookPath, cell.WorksheetName, expression, out displayValue, out quantity, out readError))
+                    string displayValue = null;
+                    string readError = null;
+                    decimal quantity = 0;
+                    bool evaluated = false;
+                    if (simpleMode.Checked &&
+                        String.Equals(NormalizeCellAddress(expression), NormalizeCellAddress(cell.CellAddress), StringComparison.OrdinalIgnoreCase) &&
+                        !String.IsNullOrWhiteSpace(cell.DisplayValue))
+                    {
+                        evaluated = TryEvaluateDecimal(cell.DisplayValue, out quantity, out readError);
+                        if (evaluated)
+                        {
+                            displayValue = cell.DisplayValue;
+                        }
+                    }
+
+                    if (!evaluated && !TryEvaluateWorkbookExpression(cell.WorkbookPath, cell.WorksheetName, expression, out displayValue, out quantity, out readError))
                     {
                         status.Text = "表达式无法读取或计算：" + readError;
                         return;

@@ -273,6 +273,11 @@ namespace RecoNet
 
         private static decimal EvaluateDecimal(string expression)
         {
+            if (String.IsNullOrWhiteSpace(expression))
+            {
+                throw new InvalidOperationException("表达式为空。");
+            }
+
             string normalized = expression.Trim()
                 .Replace("×", "*")
                 .Replace("X", "*")
@@ -289,6 +294,11 @@ namespace RecoNet
 
             DataTable computeTable = new DataTable();
             object value = computeTable.Compute(normalized, String.Empty);
+            if (value == null || value == DBNull.Value)
+            {
+                throw new InvalidOperationException("表达式没有计算结果。");
+            }
+
             return Convert.ToDecimal(value, CultureInfo.InvariantCulture);
         }
 
