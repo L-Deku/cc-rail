@@ -383,6 +383,7 @@ namespace RecoQuotaRecommend
         private readonly DataGridView resultGrid;
         private readonly Label statusLabel;
         private readonly ComboBox quotaCategoryCombo;
+        private readonly CheckBox aiNameCheckBox;
         private readonly List<LearningRecord> records;
         private readonly SearchIndexStore searchIndex;
         private readonly MappingStore mappingStore;
@@ -406,12 +407,19 @@ namespace RecoQuotaRecommend
             mappingStore = MappingStore.Load(records);
             deepSeekSettings = DeepSeekSettings.Load();
 
-            Button readButton = new Button();
-            readButton.Text = "\u91cd\u65b0\u8bfb\u53d6Excel\u6846\u9009";
-            readButton.Left = 12;
-            readButton.Top = 10;
-            readButton.Width = 150;
-            readButton.Click += delegate { ReadExcelSelectionAndRecommend(); };
+            aiNameCheckBox = new CheckBox();
+            aiNameCheckBox.Text = "AI\u8bc6\u522b\u5de5\u7a0b\u91cf";
+            aiNameCheckBox.Left = 12;
+            aiNameCheckBox.Top = 13;
+            aiNameCheckBox.Width = 150;
+            aiNameCheckBox.Checked = false;
+            aiNameCheckBox.CheckedChanged += delegate
+            {
+                if (currentSelection != null)
+                {
+                    FillRecommendations(currentSelection);
+                }
+            };
 
             Button clipboardButton = new Button();
             clipboardButton.Text = "\u8bfb\u53d6\u526a\u8d34\u677f\u6846\u9009";
@@ -492,7 +500,7 @@ namespace RecoQuotaRecommend
             statusLabel.Height = 36;
             statusLabel.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
 
-            Controls.Add(readButton);
+            Controls.Add(aiNameCheckBox);
             Controls.Add(clipboardButton);
             Controls.Add(selectAllButton);
             Controls.Add(clearButton);
@@ -589,10 +597,23 @@ namespace RecoQuotaRecommend
 
         private void FillRecommendations(ExcelSelection selection)
         {
+            FillRecommendations(selection, aiNameCheckBox != null && aiNameCheckBox.Checked);
+        }
+
+        private void FillRecommendations(ExcelSelection selection, bool normalizeNames)
+        {
             Stopwatch stopwatch = Stopwatch.StartNew();
             currentSelection = selection;
             recommendations.Clear();
             resultGrid.Rows.Clear();
+            if (normalizeNames)
+            {
+                NormalizeQuantityNamesWithDeepSeek(selection, true);
+            }
+            else
+            {
+                RestoreOriginalQuantityNames(selection);
+            }
             int requestVersion = ++aiRequestVersion;
             string categoryFilter = SelectedQuotaCategory;
             RecommendationBatchStats stats = new RecommendationBatchStats();
@@ -636,6 +657,13 @@ namespace RecoQuotaRecommend
                             RecommendationStatusText(recommendation));
                         recommendation.GridRowIndex = gridRowIndex;
                         resultGrid.Rows[gridRowIndex].Cells["SourceStatus"].ToolTipText = recommendation.Reason ?? "";
+                        if (!String.IsNullOrWhiteSpace(item.OriginalName) || !String.IsNullOrWhiteSpace(item.RawRowText) || !String.IsNullOrWhiteSpace(item.AiNameReason))
+                        {
+                            resultGrid.Rows[gridRowIndex].Cells["QuantityName"].ToolTipText =
+                                "\u539f\u59cb\u540d\u79f0\uff1a" + (item.OriginalName ?? "") +
+                                "\r\nAI\u7406\u7531\uff1a" + (item.AiNameReason ?? "") +
+                                "\r\n\u539f\u59cb\u884c\uff1a" + (item.RawRowText ?? "");
+                        }
                         if (isContinuation)
                         {
                             DataGridViewRow gridRow = resultGrid.Rows[gridRowIndex];
@@ -655,7 +683,8 @@ namespace RecoQuotaRecommend
                                 {
                                     RowId = recommendation.AiRowId,
                                     Item = item,
-                                    Candidates = recommendation.AiCandidates
+                                    Candidates = recommendation.AiCandidates,
+                                    MappingCandidates = recommendation.AiMappingCandidates
                                 }
                             });
                             resultGrid.Rows[gridRowIndex].Cells["SourceStatus"].Value = "\u0041\u0049\u8865\u63a8\u4e2d";
@@ -702,6 +731,117 @@ namespace RecoQuotaRecommend
             return TextMatcher.Normalize(item == null ? "" : item.Name) + "|" + TextMatcher.Normalize(item == null ? "" : item.Unit) + "|" + TextMatcher.Normalize(categoryFilter);
         }
 
+        private static void RestoreOriginalQuantityNames(ExcelSelection selection)
+        {
+            if (selection == null)
+            {
+                return;
+            }
+
+            foreach (ExcelQuantityItem item in selection.Items)
+            {
+                if (item == null || String.IsNullOrWhiteSpace(item.OriginalName) || String.Equals(item.Name, item.OriginalName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                item.Name = item.OriginalName;
+                item.SectionName = item.OriginalName;
+                item.ContextText = item.Name + " " + item.Unit + " " + item.ValueText + " " + item.RawRowText;
+            }
+        }
+
+        private void NormalizeQuantityNamesWithDeepSeek(ExcelSelection selection, bool force)
+        {
+            if (selection == null || selection.Items.Count == 0 || !deepSeekSettings.CanNormalizeNames)
+            {
+                return;
+            }
+
+            List<DeepSeekNameRequestRow> rows = new List<DeepSeekNameRequestRow>();
+            for (int i = 0; i < selection.Items.Count; i++)
+            {
+                ExcelQuantityItem item = selection.Items[i];
+                if (item == null)
+                {
+                    continue;
+                }
+
+                if (String.IsNullOrWhiteSpace(item.OriginalName))
+                {
+                    item.OriginalName = item.Name;
+                }
+                if (item.SkipAiNameNormalization && !force)
+                {
+                    continue;
+                }
+                rows.Add(new DeepSeekNameRequestRow
+                {
+                    RowId = "n" + i.ToString(CultureInfo.InvariantCulture),
+                    Item = item
+                });
+            }
+
+            if (rows.Count == 0)
+            {
+                return;
+            }
+
+            statusLabel.Text = "DeepSeek\u6b63\u5728\u8bc6\u522b\u5de5\u7a0b\u91cf\u540d\u79f0...";
+            statusLabel.Refresh();
+            try
+            {
+                DeepSeekClient client = new DeepSeekClient(deepSeekSettings);
+                int batchSize = Math.Max(1, deepSeekSettings.MaxRowsPerBatch);
+                int changed = 0;
+                for (int i = 0; i < rows.Count; i += batchSize)
+                {
+                    List<DeepSeekNameRequestRow> batch = rows.Skip(i).Take(batchSize).ToList();
+                    Dictionary<string, DeepSeekNameResult> byRow = client.NormalizeQuantityNames(batch)
+                        .Where(r => r != null && !String.IsNullOrWhiteSpace(r.RowId))
+                        .GroupBy(r => r.RowId, StringComparer.OrdinalIgnoreCase)
+                        .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+                    foreach (DeepSeekNameRequestRow request in batch)
+                    {
+                        DeepSeekNameResult result;
+                        if (!byRow.TryGetValue(request.RowId, out result) || String.IsNullOrWhiteSpace(result.QuantityName) || result.Confidence < 50)
+                        {
+                            continue;
+                        }
+
+                        ExcelQuantityItem item = request.Item;
+                        item.AiName = CleanAiQuantityName(result.QuantityName);
+                        if (String.IsNullOrWhiteSpace(item.AiName))
+                        {
+                            continue;
+                        }
+
+                        item.AiNameConfidence = result.Confidence;
+                        item.AiNameReason = result.Reason;
+                        item.Name = item.AiName;
+                        item.SectionName = item.AiName;
+                        item.ContextText = item.AiName + " " + item.Unit + " " + item.ValueText + " " + item.RawRowText;
+                        changed++;
+                    }
+                }
+
+                if (changed > 0)
+                {
+                    QuotaRecommendPanel.Log("DeepSeek normalized quantity names. changed=" + changed.ToString(CultureInfo.InvariantCulture));
+                }
+            }
+            catch (Exception ex)
+            {
+                QuotaRecommendPanel.Log("DeepSeek quantity name normalization failed: " + ex.Message);
+            }
+        }
+
+        private static string CleanAiQuantityName(string name)
+        {
+            string value = (name ?? "").Replace("\r", " ").Replace("\n", " ").Replace("\t", " ").Trim();
+            return value.Length > 80 ? value.Substring(0, 80).Trim() : value;
+        }
+
         private static List<RecommendationRow> CloneRecommendationsForItem(ExcelQuantityItem item, List<RecommendationRow> source)
         {
             List<RecommendationRow> rows = new List<RecommendationRow>();
@@ -722,6 +862,7 @@ namespace RecoQuotaRecommend
                 row.TargetKind = original.TargetKind;
                 row.BoxId = original.BoxId;
                 row.AiCandidates = original.AiCandidates;
+                row.AiMappingCandidates = original.AiMappingCandidates;
                 rows.Add(row);
             }
             return rows;
@@ -737,6 +878,9 @@ namespace RecoQuotaRecommend
                 return mapped;
             }
 
+            List<AiMappingCandidate> mappingCandidates = deepSeekSettings.CanDetectMapping
+                ? mappingStore.BuildDeepSeekCandidates(item, categoryFilter, searchIndex, deepSeekSettings.MaxCandidatesPerRow)
+                : new List<AiMappingCandidate>();
             stats.IndexSearches++;
             foreach (AiQuotaCandidate candidate in searchIndex.BuildDeepSeekCandidates(item, categoryFilter, deepSeekSettings.MaxCandidatesPerRow))
             {
@@ -750,11 +894,12 @@ namespace RecoQuotaRecommend
             row.Item = item;
             row.ConvertedValueText = item.ValueText;
             row.Score = 0;
-            row.Reason = deepSeekSettings.IsAvailable
+            row.Reason = deepSeekSettings.CanRecommendQuota
                 ? "AI\u63a8\u8350\u7b49\u5f85\u8fd4\u56de"
                 : "DeepSeek AI\u672a\u542f\u7528\uff0c\u8bf7\u5728AI\u8bbe\u7f6e\u4e2d\u914d\u7f6e";
             row.Source = "empty";
             row.TargetKind = "quota";
+            row.AiMappingCandidates = mappingCandidates;
             row.AiCandidates = aiCandidates
                 .Where(c => c != null && c.Quota != null)
                 .GroupBy(c => c.Quota.QuotaCode, StringComparer.OrdinalIgnoreCase)
@@ -762,21 +907,53 @@ namespace RecoQuotaRecommend
                 .OrderByDescending(c => c.LocalScore)
                 .Take(deepSeekSettings.MaxCandidatesPerRow)
                 .ToList();
-            if (row.AiCandidates.Count == 0)
+            if (row.AiCandidates.Count == 0 && row.AiMappingCandidates.Count == 0)
             {
-                row.Reason = "\u672a\u627e\u5230AI\u5019\u9009\u5b9a\u989d\uff0c\u8bf7\u4eba\u5de5\u6276\u6b63";
+                row.Reason = "AI\u65e0\u6709\u6548\u5019\u9009\uff0c\u8bf7\u4eba\u5de5\u6276\u6b63";
                 stats.EmptyRows++;
             }
 
             return new List<RecommendationRow> { row };
         }
 
+        private List<RecommendationRow> FindMappingWithDeepSeek(ExcelQuantityItem item, string categoryFilter)
+        {
+            if (item == null || !deepSeekSettings.CanDetectMapping)
+            {
+                return new List<RecommendationRow>();
+            }
+
+            List<AiMappingCandidate> candidates = mappingStore.BuildDeepSeekCandidates(item, categoryFilter, searchIndex, Math.Max(3, deepSeekSettings.MaxCandidatesPerRow));
+            if (candidates.Count == 0)
+            {
+                return new List<RecommendationRow>();
+            }
+
+            try
+            {
+                DeepSeekClient client = new DeepSeekClient(deepSeekSettings);
+                DeepSeekMappingSelection selection = client.SelectMappingBox(item, candidates);
+                if (selection == null || String.IsNullOrWhiteSpace(selection.BoxId) || selection.Confidence < deepSeekSettings.DisplayConfidence)
+                {
+                    return new List<RecommendationRow>();
+                }
+
+                AiMappingCandidate candidate = candidates.FirstOrDefault(c => String.Equals(c.BoxId, selection.BoxId, StringComparison.OrdinalIgnoreCase));
+                return candidate == null ? new List<RecommendationRow>() : candidate.ToRecommendations(item, selection.Confidence, selection.Reason);
+            }
+            catch (Exception ex)
+            {
+                QuotaRecommendPanel.Log("DeepSeek mapping detection failed: " + ex.Message);
+                return new List<RecommendationRow>();
+            }
+        }
+
         private bool ShouldQueueDeepSeek(RecommendationRow row)
         {
             return row != null &&
-                deepSeekSettings.IsAvailable &&
-                row.AiCandidates != null &&
-                row.AiCandidates.Count > 0;
+                (deepSeekSettings.CanRecommendQuota || deepSeekSettings.CanDetectMapping) &&
+                ((row.AiCandidates != null && row.AiCandidates.Count > 0) ||
+                    (row.AiMappingCandidates != null && row.AiMappingCandidates.Count > 0));
         }
 
         private static string RecommendationStatusText(RecommendationRow row)
@@ -813,10 +990,8 @@ namespace RecoQuotaRecommend
                 return;
             }
 
-            int batchSize = Math.Max(1, deepSeekSettings.MaxRowsPerBatch);
-            for (int i = 0; i < pending.Count; i += batchSize)
+            foreach (List<AiPendingRecommendation> batch in BuildDeepSeekBatches(pending))
             {
-                List<AiPendingRecommendation> batch = pending.Skip(i).Take(batchSize).ToList();
                 ThreadPool.QueueUserWorkItem(delegate
                 {
                     List<DeepSeekSelection> selections = new List<DeepSeekSelection>();
@@ -830,6 +1005,14 @@ namespace RecoQuotaRecommend
                     {
                         error = ex.Message;
                         QuotaRecommendPanel.Log("DeepSeek recommendation failed: " + ex.Message);
+                        if (!IsNonRetryableDeepSeekError(error))
+                        {
+                            selections = RetryDeepSeekOneByOne(batch);
+                            if (selections.Count > 0)
+                            {
+                                error = "";
+                            }
+                        }
                     }
 
                     try
@@ -849,6 +1032,51 @@ namespace RecoQuotaRecommend
             }
         }
 
+        private static List<List<AiPendingRecommendation>> BuildDeepSeekBatches(List<AiPendingRecommendation> pending)
+        {
+            List<List<AiPendingRecommendation>> batches = new List<List<AiPendingRecommendation>>();
+            List<AiPendingRecommendation> current = new List<AiPendingRecommendation>();
+            int currentCost = 0;
+            foreach (AiPendingRecommendation item in pending ?? new List<AiPendingRecommendation>())
+            {
+                int cost = EstimateDeepSeekRowCost(item);
+                if (current.Count > 0 && (current.Count >= 12 || currentCost + cost > 90))
+                {
+                    batches.Add(current);
+                    current = new List<AiPendingRecommendation>();
+                    currentCost = 0;
+                }
+
+                current.Add(item);
+                currentCost += cost;
+            }
+
+            if (current.Count > 0)
+            {
+                batches.Add(current);
+            }
+
+            return batches;
+        }
+
+        private static int EstimateDeepSeekRowCost(AiPendingRecommendation pending)
+        {
+            if (pending == null || pending.Request == null)
+            {
+                return 1;
+            }
+
+            int quotaCount = pending.Request.Candidates == null ? 0 : pending.Request.Candidates.Count;
+            int mappingCount = pending.Request.MappingCandidates == null ? 0 : pending.Request.MappingCandidates.Count;
+            int textCost = 0;
+            if (pending.Request.Item != null)
+            {
+                textCost = Math.Min(8, ((pending.Request.Item.RawRowText ?? "").Length + (pending.Request.Item.Name ?? "").Length) / 40);
+            }
+
+            return 2 + quotaCount + mappingCount * 2 + textCost;
+        }
+
         private void ApplyDeepSeekResults(List<AiPendingRecommendation> batch, List<DeepSeekSelection> selections, string error, int requestVersion)
         {
             if (requestVersion != aiRequestVersion || batch == null)
@@ -866,7 +1094,7 @@ namespace RecoQuotaRecommend
             }
 
             int applied = 0;
-            foreach (AiPendingRecommendation pending in batch)
+            foreach (AiPendingRecommendation pending in (batch ?? new List<AiPendingRecommendation>()).OrderByDescending(p => p.GridRowIndex))
             {
                 RecommendationRow row = pending.Row;
                 if (row == null || pending.GridRowIndex < 0 || pending.GridRowIndex >= resultGrid.Rows.Count || pending.GridRowIndex >= recommendations.Count)
@@ -880,17 +1108,42 @@ namespace RecoQuotaRecommend
 
                 row.AiPending = false;
                 DeepSeekSelection selection;
-                if (!String.IsNullOrWhiteSpace(error) || !byRow.TryGetValue(row.AiRowId, out selection))
+                if (!String.IsNullOrWhiteSpace(error))
                 {
-                    SetRecommendationStatus(pending.GridRowIndex, String.IsNullOrWhiteSpace(error) ? "AI\u65e0\u7ed3\u679c" : "AI\u5931\u8d25", error);
+                    SetRecommendationStatus(pending.GridRowIndex, DeepSeekFailureStatus(error), error);
                     continue;
+                }
+
+                if (!byRow.TryGetValue(row.AiRowId, out selection))
+                {
+                    SetRecommendationStatus(pending.GridRowIndex, selections == null || selections.Count == 0 ? "AI\u8fd4\u56de\u4e3a\u7a7a" : "AI\u65e0\u7ed3\u679c", "");
+                    continue;
+                }
+
+                if (!String.IsNullOrWhiteSpace(selection.ErrorText))
+                {
+                    SetRecommendationStatus(pending.GridRowIndex, DeepSeekFailureStatus(selection.ErrorText), selection.ErrorText);
+                    continue;
+                }
+
+                AiMappingCandidate mappingCandidate = (pending.Request.MappingCandidates ?? new List<AiMappingCandidate>())
+                    .FirstOrDefault(c => c != null && String.Equals(c.BoxId, selection.BoxId, StringComparison.OrdinalIgnoreCase));
+                if (mappingCandidate != null && selection.Confidence >= 65)
+                {
+                    List<RecommendationRow> mappedRows = mappingCandidate.ToRecommendations(row.Item, selection.Confidence, selection.Reason);
+                    if (mappedRows.Count > 0)
+                    {
+                        ApplyMappedRowsFromDeepSeek(pending.GridRowIndex, row, mappedRows);
+                        applied += mappedRows.Count;
+                        continue;
+                    }
                 }
 
                 AiQuotaCandidate candidate = (pending.Request.Candidates ?? new List<AiQuotaCandidate>())
                     .FirstOrDefault(c => c != null && c.Quota != null && String.Equals(c.Quota.QuotaCode, selection.SelectedCode, StringComparison.OrdinalIgnoreCase));
                 if (candidate == null)
                 {
-                    SetRecommendationStatus(pending.GridRowIndex, "AI\u5df2\u5ffd\u7565", "\u8fd4\u56de\u7f16\u53f7\u4e0d\u5728\u672c\u5730\u5019\u9009\u4e2d");
+                    SetRecommendationStatus(pending.GridRowIndex, String.IsNullOrWhiteSpace(selection.SelectedCode) ? "AI\u65e0\u7ed3\u679c" : "AI\u8fd4\u56de\u65e0\u6548", String.IsNullOrWhiteSpace(selection.SelectedCode) ? selection.Reason : "\u8fd4\u56de\u7f16\u53f7\u4e0d\u5728\u672c\u5730\u5019\u9009\u4e2d");
                     continue;
                 }
 
@@ -928,6 +1181,127 @@ namespace RecoQuotaRecommend
             if (applied > 0)
             {
                 statusLabel.Text = statusLabel.Text + " AI\u5df2\u8865\u63a8 " + applied.ToString(CultureInfo.InvariantCulture) + " \u884c\u3002";
+            }
+        }
+
+        private List<DeepSeekSelection> RetryDeepSeekOneByOne(List<AiPendingRecommendation> batch)
+        {
+            List<DeepSeekSelection> selections = new List<DeepSeekSelection>();
+            foreach (AiPendingRecommendation pending in batch ?? new List<AiPendingRecommendation>())
+            {
+                if (pending == null || pending.Request == null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    DeepSeekClient client = new DeepSeekClient(deepSeekSettings);
+                    List<DeepSeekSelection> result = client.Rank(new List<DeepSeekRequestRow> { pending.Request });
+                    if (result != null && result.Count > 0)
+                    {
+                        selections.AddRange(result);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    QuotaRecommendPanel.Log("DeepSeek single-row retry failed: " + ex.Message);
+                    selections.Add(new DeepSeekSelection
+                    {
+                        RowId = pending.Request.RowId,
+                        Confidence = 0,
+                        ErrorText = ex.Message
+                    });
+                }
+            }
+
+            return selections;
+        }
+
+        private static bool IsNonRetryableDeepSeekError(string error)
+        {
+            string value = (error ?? "").ToLowerInvariant();
+            return value.Contains("401") ||
+                value.Contains("402") ||
+                value.Contains("authentication") ||
+                value.Contains("api key") ||
+                value.Contains("balance") ||
+                value.Contains("insufficient") ||
+                value.Contains("422");
+        }
+
+        private static string DeepSeekFailureStatus(string error)
+        {
+            string value = (error ?? "").ToLowerInvariant();
+            if (value.Contains("401") || value.Contains("authentication") || value.Contains("api key"))
+            {
+                return "AI Key\u5f02\u5e38";
+            }
+            if (value.Contains("402") || value.Contains("balance") || value.Contains("insufficient"))
+            {
+                return "AI\u4f59\u989d\u4e0d\u8db3";
+            }
+            if (value.Contains("429") || value.Contains("rate limit"))
+            {
+                return "AI\u9650\u6d41";
+            }
+            if (value.Contains("timeout") || value.Contains("timed out") || value.Contains("\u8d85\u65f6"))
+            {
+                return "AI\u8d85\u65f6";
+            }
+            if (value.Contains("500") || value.Contains("503") || value.Contains("server") || value.Contains("overload"))
+            {
+                return "AI\u670d\u52a1\u5f02\u5e38";
+            }
+            if (value.Contains("json") || value.Contains("invalid") || value.Contains("format") || value.Contains("422"))
+            {
+                return "AI\u8fd4\u56de\u65e0\u6548";
+            }
+            if (value.Contains("connect") || value.Contains("network") || value.Contains("name resolution") || value.Contains("remote") || value.Contains("\u7f51\u7edc"))
+            {
+                return "AI\u7f51\u7edc\u5931\u8d25";
+            }
+
+            return "AI\u5931\u8d25";
+        }
+
+        private void ApplyMappedRowsFromDeepSeek(int gridRowIndex, RecommendationRow oldRow, List<RecommendationRow> mappedRows)
+        {
+            if (mappedRows == null || mappedRows.Count == 0 || gridRowIndex < 0 || gridRowIndex >= recommendations.Count || gridRowIndex >= resultGrid.Rows.Count)
+            {
+                return;
+            }
+
+            RecommendationRow first = mappedRows[0];
+            recommendations[gridRowIndex] = first;
+            first.GridRowIndex = gridRowIndex;
+            DataGridViewRow gridRow = resultGrid.Rows[gridRowIndex];
+            gridRow.Cells["Checked"].Value = first.Score >= 60;
+            gridRow.Cells["QuotaCode"].Value = first.QuotaCode;
+            gridRow.Cells["QuotaName"].Value = first.QuotaName;
+            gridRow.Cells["QuotaUnit"].Value = first.QuotaUnit;
+            gridRow.Cells["QuotaQuantity"].Value = first.ConvertedValueText;
+            gridRow.Cells["SourceStatus"].Value = "AI\u5bf9\u5e94\u6846";
+            gridRow.Cells["SourceStatus"].ToolTipText = first.Reason ?? "";
+
+            int insertAt = gridRowIndex + 1;
+            for (int i = 1; i < mappedRows.Count; i++)
+            {
+                RecommendationRow mapped = mappedRows[i];
+                mapped.GridRowIndex = insertAt;
+                recommendations.Insert(insertAt, mapped);
+                resultGrid.Rows.Insert(insertAt, mapped.Score >= 60, "", "", mapped.Item.Unit, mapped.Item.ValueText, mapped.QuotaCode, mapped.QuotaName, mapped.QuotaUnit, mapped.ConvertedValueText, "AI\u5bf9\u5e94\u6846");
+                DataGridViewRow continuation = resultGrid.Rows[insertAt];
+                continuation.Cells["Correct"] = new DataGridViewTextBoxCell();
+                continuation.Cells["Correct"].Value = "";
+                continuation.Cells["Correct"].ReadOnly = true;
+                continuation.Cells["SourceStatus"].ToolTipText = mapped.Reason ?? "";
+                insertAt++;
+            }
+
+            for (int i = 0; i < recommendations.Count; i++)
+            {
+                recommendations[i].GridRowIndex = i;
             }
         }
 
@@ -1984,6 +2358,8 @@ namespace RecoQuotaRecommend
                 item.Formula = quantityCell.Formula;
                 item.ContextText = name + " " + item.Unit + " " + item.ValueText;
                 item.SectionName = String.IsNullOrWhiteSpace(group) ? detail : group;
+                item.OriginalName = name;
+                item.RawRowText = BuildRawRowText(row);
                 result.Add(item);
             }
 
@@ -2124,6 +2500,15 @@ namespace RecoQuotaRecommend
             return cell == null ? "" : (cell.Text ?? "").Trim();
         }
 
+        private static string BuildRawRowText(List<CellValue> row)
+        {
+            return String.Join(" ", (row ?? new List<CellValue>())
+                .OrderBy(c => c.SourceIndex)
+                .Select(c => c == null ? "" : c.Text)
+                .Where(t => !String.IsNullOrWhiteSpace(t))
+                .ToArray());
+        }
+
         private static ExcelQuantityItem BuildQuantityItemFromHtmlRow(List<string> cells, int rowNumber, ref string lastGroupName, ref string lastUnit)
         {
             string[] raw = cells.ToArray();
@@ -2249,6 +2634,9 @@ namespace RecoQuotaRecommend
             }
             item.ContextText = name + " " + unit + " " + quantity;
             item.SectionName = group;
+            item.OriginalName = name;
+            item.RawRowText = item.ContextText;
+            item.SkipAiNameNormalization = true;
             return item;
         }
 
@@ -2306,6 +2694,9 @@ namespace RecoQuotaRecommend
             }
             item.ContextText = name + " " + unit + " " + quantity;
             item.SectionName = String.IsNullOrWhiteSpace(group) ? name : group;
+            item.OriginalName = name;
+            item.RawRowText = item.ContextText;
+            item.SkipAiNameNormalization = true;
             return item;
         }
 
@@ -2539,6 +2930,9 @@ namespace RecoQuotaRecommend
             item.Formula = quantity.StartsWith("=", StringComparison.Ordinal) ? quantity : "";
             item.ContextText = name + " " + unit + " " + quantity;
             item.SectionName = group;
+            item.OriginalName = name;
+            item.RawRowText = item.ContextText;
+            item.SkipAiNameNormalization = true;
             return item;
         }
 
@@ -2675,7 +3069,20 @@ namespace RecoQuotaRecommend
             {
                 if (item != null)
                 {
-                    item.ContextText = item.Name + " " + item.Unit + " " + item.ValueText;
+                    item.Name = (item.Name ?? "").Trim();
+                    if (String.IsNullOrWhiteSpace(item.OriginalName))
+                    {
+                        item.OriginalName = item.Name;
+                    }
+                    if (String.IsNullOrWhiteSpace(item.RawRowText))
+                    {
+                        item.RawRowText = item.ContextText;
+                    }
+                    if (String.IsNullOrWhiteSpace(item.RawRowText))
+                    {
+                        item.RawRowText = item.Name + " " + item.Unit + " " + item.ValueText;
+                    }
+                    item.ContextText = item.Name + " " + item.Unit + " " + item.ValueText + " " + item.RawRowText;
                 }
             }
         }
@@ -2757,6 +3164,9 @@ namespace RecoQuotaRecommend
             item.Formula = quantity.StartsWith("=", StringComparison.Ordinal) ? quantity : "";
             item.ContextText = name + " " + unit + " " + quantity;
             item.SectionName = name;
+            item.OriginalName = name;
+            item.RawRowText = item.ContextText;
+            item.SkipAiNameNormalization = true;
             return item;
         }
 
@@ -2770,7 +3180,8 @@ namespace RecoQuotaRecommend
             CellValue nameCell = null;
             CellValue unitCell = null;
             CellValue quantityCell = null;
-            if (!TryPickByKnownLayout(cells, out nameCell, out unitCell, out quantityCell))
+            bool knownLayout = TryPickByKnownLayout(cells, out nameCell, out unitCell, out quantityCell);
+            if (!knownLayout)
             {
                 quantityCell = cells.LastOrDefault(c => IsQuantityLike(c.Text));
                 if (quantityCell == null)
@@ -2807,6 +3218,9 @@ namespace RecoQuotaRecommend
             item.Formula = quantityCell.Formula;
             item.ContextText = String.Join(" ", cells.Select(c => c.Text).Where(t => !String.IsNullOrWhiteSpace(t)).ToArray());
             item.SectionName = GuessSectionName(cells);
+            item.OriginalName = name;
+            item.RawRowText = item.ContextText;
+            item.SkipAiNameNormalization = knownLayout;
             return item;
         }
 
@@ -3072,11 +3486,17 @@ namespace RecoQuotaRecommend
         public int RowNumber;
         public string CellAddress;
         public string Name;
+        public string OriginalName;
+        public string AiName;
+        public int AiNameConfidence;
+        public string AiNameReason;
+        public bool SkipAiNameNormalization;
         public string SectionName;
         public string Unit;
         public string ValueText;
         public string Formula;
         public string ContextText;
+        public string RawRowText;
     }
 
     internal sealed class RecommendationRow
@@ -3096,6 +3516,7 @@ namespace RecoQuotaRecommend
         public string AiRowId;
         public bool AiPending;
         public List<AiQuotaCandidate> AiCandidates;
+        public List<AiMappingCandidate> AiMappingCandidates;
     }
 
     internal sealed class AiQuotaCandidate
@@ -3104,11 +3525,40 @@ namespace RecoQuotaRecommend
         public int LocalScore;
     }
 
+    internal sealed class AiMappingCandidate
+    {
+        public string BoxId;
+        public int LocalScore;
+        public string SampleNames;
+        public List<MappingTarget> Targets;
+
+        public List<RecommendationRow> ToRecommendations(ExcelQuantityItem item, int score, string reason)
+        {
+            return (Targets ?? new List<MappingTarget>())
+                .OrderBy(t => MappingStore.TargetSortRank(t.TargetKind, t.Code))
+                .ThenBy(t => t.Code ?? "", StringComparer.OrdinalIgnoreCase)
+                .Select(t =>
+                {
+                    RecommendationRow row = t.ToRecommendation(item, score, BoxId);
+                    row.Reason = String.IsNullOrWhiteSpace(reason) ? "DeepSeek\u5bf9\u5e94\u6846\u68c0\u6d4b" : "DeepSeek\u5bf9\u5e94\u6846\u68c0\u6d4b\uff1a" + reason;
+                    return row;
+                })
+                .ToList();
+        }
+    }
+
     internal sealed class DeepSeekRequestRow
     {
         public string RowId;
         public ExcelQuantityItem Item;
         public List<AiQuotaCandidate> Candidates;
+        public List<AiMappingCandidate> MappingCandidates;
+    }
+
+    internal sealed class DeepSeekNameRequestRow
+    {
+        public string RowId;
+        public ExcelQuantityItem Item;
     }
 
     internal sealed class AiPendingRecommendation
@@ -3121,7 +3571,24 @@ namespace RecoQuotaRecommend
     internal sealed class DeepSeekSelection
     {
         public string RowId;
+        public string BoxId;
         public string SelectedCode;
+        public int Confidence;
+        public string Reason;
+        public string ErrorText;
+    }
+
+    internal sealed class DeepSeekNameResult
+    {
+        public string RowId;
+        public string QuantityName;
+        public int Confidence;
+        public string Reason;
+    }
+
+    internal sealed class DeepSeekMappingSelection
+    {
+        public string BoxId;
         public int Confidence;
         public string Reason;
     }
@@ -3138,10 +3605,28 @@ namespace RecoQuotaRecommend
         public int LocalHighScore = 80;
         public int DisplayConfidence = 65;
         public int AutoCheckConfidence = 85;
+        public bool EnableNameNormalization = true;
+        public bool EnableMappingDetection = true;
+        public bool EnableQuotaRecommendation = true;
 
         public bool IsAvailable
         {
-            get { return Enabled && !String.IsNullOrWhiteSpace(ApiKey); }
+            get { return !String.IsNullOrWhiteSpace(ApiKey); }
+        }
+
+        public bool CanNormalizeNames
+        {
+            get { return IsAvailable && EnableNameNormalization; }
+        }
+
+        public bool CanRecommendQuota
+        {
+            get { return IsAvailable && EnableQuotaRecommendation; }
+        }
+
+        public bool CanDetectMapping
+        {
+            get { return IsAvailable; }
         }
 
         public DeepSeekSettings Copy()
@@ -3157,7 +3642,10 @@ namespace RecoQuotaRecommend
                 MaxCandidatesPerRow = MaxCandidatesPerRow,
                 LocalHighScore = LocalHighScore,
                 DisplayConfidence = DisplayConfidence,
-                AutoCheckConfidence = AutoCheckConfidence
+                AutoCheckConfidence = AutoCheckConfidence,
+                EnableNameNormalization = EnableNameNormalization,
+                EnableMappingDetection = EnableMappingDetection,
+                EnableQuotaRecommendation = EnableQuotaRecommendation
             };
         }
 
@@ -3189,6 +3677,9 @@ namespace RecoQuotaRecommend
                 settings.LocalHighScore = Clamp(ReadInt(values, "local_high_score", settings.LocalHighScore), 60, 120);
                 settings.DisplayConfidence = Clamp(ReadInt(values, "display_confidence", settings.DisplayConfidence), 1, 100);
                 settings.AutoCheckConfidence = Clamp(ReadInt(values, "auto_check_confidence", settings.AutoCheckConfidence), 1, 100);
+                settings.EnableNameNormalization = ReadBool(values, "enable_name_normalization", settings.EnableNameNormalization);
+                settings.EnableMappingDetection = ReadBool(values, "enable_mapping_detection", settings.EnableMappingDetection);
+                settings.EnableQuotaRecommendation = ReadBool(values, "enable_quota_recommendation", settings.EnableQuotaRecommendation);
             }
             catch (Exception ex)
             {
@@ -3214,7 +3705,10 @@ namespace RecoQuotaRecommend
             AppendJson(builder, "max_candidates_per_row", MaxCandidatesPerRow.ToString(CultureInfo.InvariantCulture), false, true);
             AppendJson(builder, "local_high_score", LocalHighScore.ToString(CultureInfo.InvariantCulture), false, true);
             AppendJson(builder, "display_confidence", DisplayConfidence.ToString(CultureInfo.InvariantCulture), false, true);
-            AppendJson(builder, "auto_check_confidence", AutoCheckConfidence.ToString(CultureInfo.InvariantCulture), false, false);
+            AppendJson(builder, "auto_check_confidence", AutoCheckConfidence.ToString(CultureInfo.InvariantCulture), false, true);
+            AppendJson(builder, "enable_name_normalization", EnableNameNormalization ? "true" : "false", false, true);
+            AppendJson(builder, "enable_mapping_detection", EnableMappingDetection ? "true" : "false", false, true);
+            AppendJson(builder, "enable_quota_recommendation", EnableQuotaRecommendation ? "true" : "false", false, false);
             builder.AppendLine("}");
             File.WriteAllText(path, builder.ToString(), Encoding.UTF8);
         }
@@ -3316,6 +3810,9 @@ namespace RecoQuotaRecommend
     internal sealed class DeepSeekSettingsDialog : Form
     {
         private readonly CheckBox enabledCheck;
+        private readonly CheckBox normalizeNameCheck;
+        private readonly CheckBox mappingDetectCheck;
+        private readonly CheckBox recommendQuotaCheck;
         private readonly TextBox apiKeyText;
         private readonly CheckBox showKeyCheck;
         private readonly TextBox modelText;
@@ -3337,20 +3834,20 @@ namespace RecoQuotaRecommend
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
-            ClientSize = new Size(560, 430);
+            ClientSize = new Size(560, 300);
 
-            enabledCheck = new CheckBox();
-            enabledCheck.Left = 24;
-            enabledCheck.Top = 18;
-            enabledCheck.Width = 220;
-            enabledCheck.Text = "\u542f\u7528 DeepSeek AI\u8865\u63a8";
-            enabledCheck.Checked = Settings.Enabled;
-            Controls.Add(enabledCheck);
+            enabledCheck = new CheckBox { Checked = true };
+            normalizeNameCheck = new CheckBox { Checked = true };
+            mappingDetectCheck = new CheckBox { Checked = true };
+            recommendQuotaCheck = new CheckBox { Checked = true };
+            batchInput = HiddenNumber(Settings.MaxRowsPerBatch, 1, 20);
+            localHighScoreInput = HiddenNumber(Settings.LocalHighScore, 60, 120);
+            displayConfidenceInput = HiddenNumber(Settings.DisplayConfidence, 1, 100);
 
-            AddLabel("API Key", 24, 58, 150);
+            AddLabel("API Key", 24, 28, 150);
             apiKeyText = new TextBox();
             apiKeyText.Left = 180;
-            apiKeyText.Top = 54;
+            apiKeyText.Top = 24;
             apiKeyText.Width = 280;
             apiKeyText.UseSystemPasswordChar = true;
             apiKeyText.Text = Settings.ApiKey ?? "";
@@ -3358,40 +3855,31 @@ namespace RecoQuotaRecommend
 
             showKeyCheck = new CheckBox();
             showKeyCheck.Left = 470;
-            showKeyCheck.Top = 56;
+            showKeyCheck.Top = 26;
             showKeyCheck.Width = 60;
             showKeyCheck.Text = "\u663e\u793a";
             showKeyCheck.CheckedChanged += delegate { apiKeyText.UseSystemPasswordChar = !showKeyCheck.Checked; };
             Controls.Add(showKeyCheck);
 
-            AddLabel("\u6a21\u578b", 24, 94, 150);
-            modelText = AddTextBox(Settings.Model, 180, 90, 280);
+            AddLabel("\u6a21\u578b", 24, 64, 150);
+            modelText = AddTextBox(Settings.Model, 180, 60, 280);
 
-            AddLabel("\u63a5\u53e3\u5730\u5740", 24, 130, 150);
-            baseUrlText = AddTextBox(Settings.BaseUrl, 180, 126, 280);
+            AddLabel("\u63a5\u53e3\u5730\u5740", 24, 100, 150);
+            baseUrlText = AddTextBox(Settings.BaseUrl, 180, 96, 280);
 
-            AddLabel("\u8d85\u65f6\u79d2\u6570", 24, 166, 150);
-            timeoutInput = AddNumber(Settings.TimeoutSeconds, 180, 162, 2, 60);
+            AddLabel("\u8d85\u65f6\u79d2\u6570", 24, 136, 150);
+            timeoutInput = AddNumber(Settings.TimeoutSeconds, 180, 132, 2, 60);
 
-            AddLabel("\u6bcf\u6279\u884c\u6570", 24, 202, 150);
-            batchInput = AddNumber(Settings.MaxRowsPerBatch, 180, 198, 1, 20);
+            AddLabel("\u6bcf\u884c\u5019\u9009\u6570", 24, 172, 150);
+            candidatesInput = AddNumber(Settings.MaxCandidatesPerRow, 180, 168, 3, 20);
 
-            AddLabel("\u6bcf\u884c\u5019\u9009\u6570", 24, 238, 150);
-            candidatesInput = AddNumber(Settings.MaxCandidatesPerRow, 180, 234, 3, 20);
-
-            AddLabel("\u672c\u5730\u9ad8\u5206\u9608\u503c", 24, 274, 150);
-            localHighScoreInput = AddNumber(Settings.LocalHighScore, 180, 270, 60, 120);
-
-            AddLabel("AI\u663e\u793a\u7f6e\u4fe1\u5ea6", 24, 310, 150);
-            displayConfidenceInput = AddNumber(Settings.DisplayConfidence, 180, 306, 1, 100);
-
-            AddLabel("AI\u81ea\u52a8\u52fe\u9009\u7f6e\u4fe1\u5ea6", 24, 346, 150);
-            autoCheckConfidenceInput = AddNumber(Settings.AutoCheckConfidence, 180, 342, 1, 100);
+            AddLabel("AI\u81ea\u52a8\u52fe\u9009\u7f6e\u4fe1\u5ea6", 24, 208, 150);
+            autoCheckConfidenceInput = AddNumber(Settings.AutoCheckConfidence, 180, 204, 1, 100);
 
             Button saveButton = new Button();
             saveButton.Text = "\u4fdd\u5b58";
             saveButton.Left = 366;
-            saveButton.Top = 388;
+            saveButton.Top = 252;
             saveButton.Width = 80;
             saveButton.DialogResult = DialogResult.None;
             saveButton.Click += delegate { SaveSettings(); };
@@ -3400,7 +3888,7 @@ namespace RecoQuotaRecommend
             Button cancelButton = new Button();
             cancelButton.Text = "\u53d6\u6d88";
             cancelButton.Left = 456;
-            cancelButton.Top = 388;
+            cancelButton.Top = 252;
             cancelButton.Width = 80;
             cancelButton.DialogResult = DialogResult.Cancel;
             Controls.Add(cancelButton);
@@ -3415,9 +3903,9 @@ namespace RecoQuotaRecommend
             string baseUrl = baseUrlText.Text.Trim();
             string apiKey = apiKeyText.Text.Trim();
 
-            if (enabledCheck.Checked && String.IsNullOrWhiteSpace(apiKey))
+            if (String.IsNullOrWhiteSpace(apiKey))
             {
-                MessageBox.Show(this, "\u542f\u7528AI\u8865\u63a8\u65f6\u8bf7\u586b\u5199 DeepSeek API Key\u3002", "DeepSeek AI\u8bbe\u7f6e", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "\u8bf7\u586b\u5199 DeepSeek API Key\u3002", "DeepSeek AI\u8bbe\u7f6e", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
@@ -3431,7 +3919,7 @@ namespace RecoQuotaRecommend
             }
 
             DeepSeekSettings updated = new DeepSeekSettings();
-            updated.Enabled = enabledCheck.Checked;
+            updated.Enabled = !String.IsNullOrWhiteSpace(apiKey);
             updated.ApiKey = apiKey;
             updated.Model = model;
             updated.BaseUrl = baseUrl.TrimEnd('/');
@@ -3441,6 +3929,9 @@ namespace RecoQuotaRecommend
             updated.LocalHighScore = Convert.ToInt32(localHighScoreInput.Value);
             updated.DisplayConfidence = Convert.ToInt32(displayConfidenceInput.Value);
             updated.AutoCheckConfidence = Convert.ToInt32(autoCheckConfidenceInput.Value);
+            updated.EnableNameNormalization = true;
+            updated.EnableMappingDetection = true;
+            updated.EnableQuotaRecommendation = true;
 
             try
             {
@@ -3479,6 +3970,15 @@ namespace RecoQuotaRecommend
             return input;
         }
 
+        private NumericUpDown HiddenNumber(int value, int min, int max)
+        {
+            NumericUpDown input = new NumericUpDown();
+            input.Minimum = min;
+            input.Maximum = max;
+            input.Value = Math.Max(min, Math.Min(max, value));
+            return input;
+        }
+
         private void AddLabel(string text, int left, int top, int width)
         {
             Label label = new Label();
@@ -3508,7 +4008,31 @@ namespace RecoQuotaRecommend
                 return new List<DeepSeekSelection>();
             }
 
-            string requestJson = BuildRequestJson(rows);
+            return ParseResponse(SendRequest(BuildUnifiedRequestJson(rows)));
+        }
+
+        public List<DeepSeekNameResult> NormalizeQuantityNames(List<DeepSeekNameRequestRow> rows)
+        {
+            if (rows == null || rows.Count == 0)
+            {
+                return new List<DeepSeekNameResult>();
+            }
+
+            return ParseNameResponse(SendRequest(BuildNameRequestJson(rows)));
+        }
+
+        public DeepSeekMappingSelection SelectMappingBox(ExcelQuantityItem item, List<AiMappingCandidate> candidates)
+        {
+            if (item == null || candidates == null || candidates.Count == 0)
+            {
+                return null;
+            }
+
+            return ParseMappingResponse(SendRequest(BuildMappingRequestJson(item, candidates)));
+        }
+
+        private string SendRequest(string requestJson)
+        {
             ServicePointManager.SecurityProtocol = ServicePointManager.SecurityProtocol | (SecurityProtocolType)3072;
             string endpoint = settings.BaseUrl.TrimEnd('/');
             if (!endpoint.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
@@ -3535,7 +4059,7 @@ namespace RecoQuotaRecommend
             using (Stream stream = response.GetResponseStream())
             using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
             {
-                return ParseResponse(reader.ReadToEnd());
+                return reader.ReadToEnd();
             }
         }
 
@@ -3561,6 +4085,115 @@ namespace RecoQuotaRecommend
             });
             payload["messages"] = messages;
             return serializer.Serialize(payload);
+        }
+
+        private string BuildNameRequestJson(List<DeepSeekNameRequestRow> rows)
+        {
+            Dictionary<string, object> payload = new Dictionary<string, object>();
+            payload["model"] = settings.Model;
+            payload["stream"] = false;
+            payload["temperature"] = 0.1;
+            payload["max_tokens"] = 1400;
+            payload["response_format"] = new Dictionary<string, object> { { "type", "json_object" } };
+
+            List<object> messages = new List<object>();
+            messages.Add(new Dictionary<string, object>
+            {
+                { "role", "system" },
+                { "content", "You normalize Chinese railway construction quantity names. Return strict JSON: {\"results\":[{\"row_id\":\"n0\",\"quantity_name\":\"标准工程量名称\",\"confidence\":90,\"reason\":\"short reason\"}]}. The quantity_name must be concise, contain the engineering object and key specification, and must not include serial numbers, units, quantities, formulas, or prices." }
+            });
+            messages.Add(new Dictionary<string, object>
+            {
+                { "role", "user" },
+                { "content", BuildNameUserPrompt(rows) }
+            });
+            payload["messages"] = messages;
+            return serializer.Serialize(payload);
+        }
+
+        private string BuildNameUserPrompt(List<DeepSeekNameRequestRow> rows)
+        {
+            List<object> requestRows = new List<object>();
+            foreach (DeepSeekNameRequestRow row in rows)
+            {
+                ExcelQuantityItem item = row.Item;
+                requestRows.Add(new Dictionary<string, object>
+                {
+                    { "row_id", row.RowId ?? "" },
+                    { "local_name", item == null ? "" : item.OriginalName ?? item.Name ?? "" },
+                    { "section_name", item == null ? "" : item.SectionName ?? "" },
+                    { "unit", item == null ? "" : item.Unit ?? "" },
+                    { "quantity_value", item == null ? "" : item.ValueText ?? "" },
+                    { "raw_row_text", item == null ? "" : Truncate(item.RawRowText, 300) },
+                    { "context_text", item == null ? "" : Truncate(item.ContextText, 300) }
+                });
+            }
+
+            Dictionary<string, object> body = new Dictionary<string, object>();
+            body["task"] = "For each row, summarize all possible quantity-name columns into one standard Chinese engineering quantity name.";
+            body["rules"] = new string[]
+            {
+                "Use all name-like columns before the unit/quantity as context.",
+                "Do not include unit, quantity, formula, serial number, or price.",
+                "Keep key material/model/specification when it changes the quota selection.",
+                "If the row is ambiguous, return the best concise name with lower confidence."
+            };
+            body["rows"] = requestRows;
+            return serializer.Serialize(body);
+        }
+
+        private string BuildMappingRequestJson(ExcelQuantityItem item, List<AiMappingCandidate> candidates)
+        {
+            Dictionary<string, object> payload = new Dictionary<string, object>();
+            payload["model"] = settings.Model;
+            payload["stream"] = false;
+            payload["temperature"] = 0.1;
+            payload["max_tokens"] = 1000;
+            payload["response_format"] = new Dictionary<string, object> { { "type", "json_object" } };
+
+            List<object> messages = new List<object>();
+            messages.Add(new Dictionary<string, object>
+            {
+                { "role", "system" },
+                { "content", "You match a normalized railway engineering quantity name to an existing human-corrected mapping box. Only choose from candidates. Return strict JSON: {\"box_id\":\"box-123\",\"confidence\":90,\"reason\":\"short reason\"}. If no candidate is reliable, return empty box_id and confidence 0." }
+            });
+            messages.Add(new Dictionary<string, object>
+            {
+                { "role", "user" },
+                { "content", BuildMappingUserPrompt(item, candidates) }
+            });
+            payload["messages"] = messages;
+            return serializer.Serialize(payload);
+        }
+
+        private string BuildMappingUserPrompt(ExcelQuantityItem item, List<AiMappingCandidate> candidates)
+        {
+            List<object> candidateRows = new List<object>();
+            foreach (AiMappingCandidate candidate in candidates)
+            {
+                candidateRows.Add(new Dictionary<string, object>
+                {
+                    { "box_id", candidate.BoxId ?? "" },
+                    { "sample_quantity_names", Truncate(candidate.SampleNames, 260) },
+                    { "targets", String.Join(" + ", (candidate.Targets ?? new List<MappingTarget>()).Select(t => (t.Code ?? "") + " " + (t.Name ?? "")).ToArray()) },
+                    { "local_score", candidate.LocalScore }
+                });
+            }
+
+            Dictionary<string, object> body = new Dictionary<string, object>();
+            body["quantity_name"] = item.Name ?? "";
+            body["original_name"] = item.OriginalName ?? "";
+            body["unit"] = item.Unit ?? "";
+            body["raw_row_text"] = Truncate(item.RawRowText, 300);
+            body["rules"] = new string[]
+            {
+                "Prefer human-corrected mapping boxes when the engineering meaning is equivalent.",
+                "Do not choose a box only because of a single generic word.",
+                "Steel and concrete terms must not be confused.",
+                "If unsure, return empty box_id."
+            };
+            body["candidates"] = candidateRows;
+            return serializer.Serialize(body);
         }
 
         private string BuildUserPrompt(List<DeepSeekRequestRow> rows)
@@ -3604,6 +4237,97 @@ namespace RecoQuotaRecommend
                 "普通关键词检索只选一条定额。",
                 "单位不接近或名称证据不足时置空。",
                 "钢筋工程量不要误选钢筋混凝土构件。"
+            };
+            body["rows"] = requestRows;
+            return serializer.Serialize(body);
+        }
+
+        private string BuildUnifiedRequestJson(List<DeepSeekRequestRow> rows)
+        {
+            Dictionary<string, object> payload = new Dictionary<string, object>();
+            payload["model"] = settings.Model;
+            payload["stream"] = false;
+            payload["temperature"] = 0.1;
+            payload["max_tokens"] = 1400;
+            payload["response_format"] = new Dictionary<string, object> { { "type", "json_object" } };
+
+            List<object> messages = new List<object>();
+            messages.Add(new Dictionary<string, object>
+            {
+                { "role", "system" },
+                { "content", "You are a railway quota recommendation assistant. For each row, first decide whether an existing human-corrected mapping box matches. If yes, return selected_box_id. If no mapping box is reliable, choose one quota from quota_candidates. Never invent ids. Return strict JSON: {\"results\":[{\"row_id\":\"r0\",\"selected_box_id\":\"box-123\",\"selected_code\":\"\",\"confidence\":90,\"reason\":\"short reason\"}]}." }
+            });
+            messages.Add(new Dictionary<string, object>
+            {
+                { "role", "user" },
+                { "content", BuildUnifiedUserPrompt(rows) }
+            });
+            payload["messages"] = messages;
+            return serializer.Serialize(payload);
+        }
+
+        private string BuildUnifiedUserPrompt(List<DeepSeekRequestRow> rows)
+        {
+            List<object> requestRows = new List<object>();
+            foreach (DeepSeekRequestRow row in rows)
+            {
+                List<object> quotaCandidates = new List<object>();
+                foreach (AiQuotaCandidate candidate in row.Candidates ?? new List<AiQuotaCandidate>())
+                {
+                    if (candidate == null || candidate.Quota == null)
+                    {
+                        continue;
+                    }
+
+                    quotaCandidates.Add(new Dictionary<string, object>
+                    {
+                        { "code", candidate.Quota.QuotaCode ?? "" },
+                        { "name", candidate.Quota.QuotaName ?? "" },
+                        { "unit", candidate.Quota.QuotaUnit ?? "" },
+                        { "work_content", Truncate(candidate.Quota.WorkContent, 160) },
+                        { "local_score", candidate.LocalScore }
+                    });
+                }
+
+                List<object> mappingCandidates = new List<object>();
+                foreach (AiMappingCandidate candidate in row.MappingCandidates ?? new List<AiMappingCandidate>())
+                {
+                    if (candidate == null)
+                    {
+                        continue;
+                    }
+
+                    mappingCandidates.Add(new Dictionary<string, object>
+                    {
+                        { "box_id", candidate.BoxId ?? "" },
+                        { "sample_quantity_names", Truncate(candidate.SampleNames, 220) },
+                        { "targets", String.Join(" + ", (candidate.Targets ?? new List<MappingTarget>()).Select(t => (t.Code ?? "") + " " + (t.Name ?? "")).ToArray()) },
+                        { "local_score", candidate.LocalScore }
+                    });
+                }
+
+                requestRows.Add(new Dictionary<string, object>
+                {
+                    { "row_id", row.RowId ?? "" },
+                    { "quantity_name", row.Item == null ? "" : row.Item.Name ?? "" },
+                    { "original_name", row.Item == null ? "" : row.Item.OriginalName ?? "" },
+                    { "quantity_unit", row.Item == null ? "" : row.Item.Unit ?? "" },
+                    { "quantity_value", row.Item == null ? "" : row.Item.ValueText ?? "" },
+                    { "raw_row_text", row.Item == null ? "" : Truncate(row.Item.RawRowText, 260) },
+                    { "mapping_candidates", mappingCandidates },
+                    { "quota_candidates", quotaCandidates }
+                });
+            }
+
+            Dictionary<string, object> body = new Dictionary<string, object>();
+            body["task"] = "For each quantity row, first match mapping_candidates; if no reliable mapping box exists, select the best quota from quota_candidates.";
+            body["rules"] = new string[]
+            {
+                "selected_box_id must exactly equal a mapping candidate box_id, otherwise leave it empty.",
+                "selected_code must exactly equal a quota candidate code, otherwise leave it empty.",
+                "Prefer a reliable human-corrected mapping box over a single quota.",
+                "Do not choose a mapping box from generic one-word similarity only.",
+                "Do not confuse steel quantities with concrete structure quotas."
             };
             body["rows"] = requestRows;
             return serializer.Serialize(body);
@@ -3656,6 +4380,7 @@ namespace RecoQuotaRecommend
                 selections.Add(new DeepSeekSelection
                 {
                     RowId = ReadString(row, "row_id"),
+                    BoxId = String.IsNullOrWhiteSpace(ReadString(row, "selected_box_id")) ? ReadString(row, "box_id") : ReadString(row, "selected_box_id"),
                     SelectedCode = ReadString(row, "selected_code"),
                     Confidence = ReadInt(row, "confidence"),
                     Reason = ReadString(row, "reason")
@@ -3663,6 +4388,99 @@ namespace RecoQuotaRecommend
             }
 
             return selections;
+        }
+
+        private DeepSeekMappingSelection ParseMappingResponse(string responseJson)
+        {
+            object rootObject = serializer.DeserializeObject(responseJson);
+            Dictionary<string, object> root = rootObject as Dictionary<string, object>;
+            if (root == null)
+            {
+                return null;
+            }
+
+            List<object> choices = GetList(root, "choices");
+            if (choices == null || choices.Count == 0)
+            {
+                return null;
+            }
+
+            Dictionary<string, object> firstChoice = choices[0] as Dictionary<string, object>;
+            Dictionary<string, object> message = firstChoice == null || !firstChoice.ContainsKey("message") ? null : firstChoice["message"] as Dictionary<string, object>;
+            string content = message == null || !message.ContainsKey("content") ? "" : Convert.ToString(message["content"], CultureInfo.InvariantCulture);
+            if (String.IsNullOrWhiteSpace(content))
+            {
+                return null;
+            }
+
+            Dictionary<string, object> resultRoot = serializer.DeserializeObject(content) as Dictionary<string, object>;
+            if (resultRoot == null)
+            {
+                return null;
+            }
+
+            return new DeepSeekMappingSelection
+            {
+                BoxId = ReadString(resultRoot, "box_id"),
+                Confidence = ReadInt(resultRoot, "confidence"),
+                Reason = ReadString(resultRoot, "reason")
+            };
+        }
+
+        private List<DeepSeekNameResult> ParseNameResponse(string responseJson)
+        {
+            object rootObject = serializer.DeserializeObject(responseJson);
+            Dictionary<string, object> root = rootObject as Dictionary<string, object>;
+            if (root == null)
+            {
+                return new List<DeepSeekNameResult>();
+            }
+
+            List<object> choices = GetList(root, "choices");
+            if (choices == null || choices.Count == 0)
+            {
+                return new List<DeepSeekNameResult>();
+            }
+
+            Dictionary<string, object> firstChoice = choices[0] as Dictionary<string, object>;
+            Dictionary<string, object> message = firstChoice == null || !firstChoice.ContainsKey("message") ? null : firstChoice["message"] as Dictionary<string, object>;
+            string content = message == null || !message.ContainsKey("content") ? "" : Convert.ToString(message["content"], CultureInfo.InvariantCulture);
+            if (String.IsNullOrWhiteSpace(content))
+            {
+                return new List<DeepSeekNameResult>();
+            }
+
+            Dictionary<string, object> resultRoot = serializer.DeserializeObject(content) as Dictionary<string, object>;
+            if (resultRoot == null)
+            {
+                return new List<DeepSeekNameResult>();
+            }
+
+            List<object> results = GetList(resultRoot, "results");
+            if (results == null && resultRoot.ContainsKey("row_id"))
+            {
+                results = new List<object> { resultRoot };
+            }
+
+            List<DeepSeekNameResult> normalized = new List<DeepSeekNameResult>();
+            foreach (object item in results ?? new List<object>())
+            {
+                Dictionary<string, object> row = item as Dictionary<string, object>;
+                if (row == null)
+                {
+                    continue;
+                }
+
+                normalized.Add(new DeepSeekNameResult
+                {
+                    RowId = ReadString(row, "row_id"),
+                    QuantityName = ReadString(row, "quantity_name"),
+                    Confidence = ReadInt(row, "confidence"),
+                    Reason = ReadString(row, "reason")
+                });
+            }
+
+            return normalized;
         }
 
         private static List<object> GetList(Dictionary<string, object> values, string key)
@@ -4558,6 +5376,33 @@ namespace RecoQuotaRecommend
             return allowedQuotaTargets;
         }
 
+        public List<AiMappingCandidate> BuildDeepSeekCandidates(ExcelQuantityItem item, string categoryFilter, SearchIndexStore searchIndex, int limit)
+        {
+            if (item == null)
+            {
+                return new List<AiMappingCandidate>();
+            }
+
+            return boxes
+                .Select(box => new
+                {
+                    Box = box,
+                    Targets = FilterTargetsByCategory(box.Targets, categoryFilter, searchIndex),
+                    Score = Math.Max(box.Score(item), box.LooseScore(item))
+                })
+                .Where(x => x.Targets.Count > 0 && x.Score >= 20)
+                .OrderByDescending(x => x.Score)
+                .Take(Math.Max(1, limit))
+                .Select(x => new AiMappingCandidate
+                {
+                    BoxId = x.Box.BoxId,
+                    LocalScore = x.Score,
+                    SampleNames = x.Box.SampleNamesForPrompt(),
+                    Targets = x.Targets
+                })
+                .ToList();
+        }
+
         public void Accept(List<RecommendationRow> rows)
         {
             bool changed = false;
@@ -4814,7 +5659,7 @@ namespace RecoQuotaRecommend
             return "box-" + Math.Abs(raw.ToLowerInvariant().GetHashCode()).ToString(CultureInfo.InvariantCulture);
         }
 
-        private static int TargetSortRank(string targetKind, string code)
+        public static int TargetSortRank(string targetKind, string code)
         {
             string kind = String.IsNullOrWhiteSpace(targetKind) ? QuotaEntry.GuessKind(code) : targetKind;
             return String.Equals(kind, "quota", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
@@ -4850,6 +5695,11 @@ namespace RecoQuotaRecommend
             int best = 0;
             foreach (MappingSample sample in Samples)
             {
+                if (!CanUseSampleForItem(item, sample))
+                {
+                    continue;
+                }
+
                 if (!TextMatcher.HasStrongNamePairMatch(item.Name, sample.QuantityName))
                 {
                     continue;
@@ -4875,6 +5725,94 @@ namespace RecoQuotaRecommend
             }
 
             return best;
+        }
+
+        public int LooseScore(ExcelQuantityItem item)
+        {
+            int best = 0;
+            string raw = item == null ? "" : item.RawRowText;
+            foreach (MappingSample sample in Samples)
+            {
+                if (!CanUseSampleForItem(item, sample))
+                {
+                    continue;
+                }
+
+                int score = Math.Max(
+                    TextMatcher.NamePairScore(item == null ? "" : item.Name, sample.QuantityName),
+                    TextMatcher.NamePairScore(raw, sample.QuantityName) / 2);
+                if (RecommendDialog.UnitCompatibleForIndex(sample.QuantityUnit, item == null ? "" : item.Unit))
+                {
+                    score += 8;
+                }
+                best = Math.Max(best, score + Math.Min(20, sample.Weight / 2));
+            }
+
+            return best;
+        }
+
+        private bool CanUseSampleForItem(ExcelQuantityItem item, MappingSample sample)
+        {
+            if (item == null || sample == null)
+            {
+                return false;
+            }
+
+            if (!String.IsNullOrWhiteSpace(item.Unit) &&
+                !String.IsNullOrWhiteSpace(sample.QuantityUnit) &&
+                !RecommendDialog.UnitCompatibleForIndex(sample.QuantityUnit, item.Unit))
+            {
+                return false;
+            }
+
+            string targetText = String.Join(" ", Targets.Select(t => (t == null ? "" : (t.Code ?? "") + " " + (t.Name ?? "") + " " + (t.Unit ?? ""))).ToArray());
+            return !HasEngineeringProcessConflict(item.Name + " " + item.RawRowText, sample.QuantityName + " " + targetText);
+        }
+
+        private static bool HasEngineeringProcessConflict(string quantityText, string candidateText)
+        {
+            string q = TextMatcher.Normalize(quantityText);
+            string c = TextMatcher.Normalize(candidateText);
+            bool qSheetPileRemoval = ContainsAny(q, "\u62c9\u68ee", "\u94a2\u677f\u6869") && ContainsAny(q, "\u62d4\u9664", "\u62c6\u9664", "\u62d4\u51fa");
+            bool qHasGrout = ContainsAny(q, "\u6ce8\u6d46", "\u6c34\u6ce5\u6d46", "\u586b\u5145", "\u5145\u586b", "\u56de\u586b");
+            bool cHasGrout = ContainsAny(c, "\u6ce8\u6d46", "\u6c34\u6ce5\u6d46", "\u586b\u5145", "\u5145\u586b");
+            if (qSheetPileRemoval && !qHasGrout && cHasGrout)
+            {
+                return true;
+            }
+
+            bool qConcreteOnly = TextMatcher.IsConcreteQuantityName(q) && !TextMatcher.IsSteelQuantityName(q);
+            bool cSteelOnly = TextMatcher.IsSteelQuantityName(c) && !TextMatcher.IsConcreteQuantityName(c);
+            if (qConcreteOnly && cSteelOnly)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool ContainsAny(string text, params string[] keywords)
+        {
+            foreach (string keyword in keywords ?? new string[0])
+            {
+                if (!String.IsNullOrWhiteSpace(keyword) && (text ?? "").Contains(TextMatcher.Normalize(keyword)))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public string SampleNamesForPrompt()
+        {
+            return String.Join("；", Samples
+                .OrderByDescending(s => s.Weight)
+                .ThenByDescending(s => s.LastUsedAt ?? "")
+                .Take(8)
+                .Select(s => s.QuantityName)
+                .Where(n => !String.IsNullOrWhiteSpace(n))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray());
         }
 
         public MappingSample FindOrCreateSample(string name, string unit)

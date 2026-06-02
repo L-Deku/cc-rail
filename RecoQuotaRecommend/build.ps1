@@ -169,6 +169,7 @@ Assert-NativeSuccess "Build RecoPluginLoader"
   /reference:System.Xml.dll `
   /reference:System.Xml.Linq.dll `
   /reference:System.Core.dll `
+  /reference:System.Web.Extensions.dll `
   /reference:System.IO.Compression.dll `
   /reference:System.IO.Compression.FileSystem.dll `
   /reference:$npoi `
