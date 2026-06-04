@@ -137,6 +137,24 @@ namespace RecoNet
                     baseIndex++;
                 }
                 ApplyMenuIcon(bindExcel, "excel_bind.png");
+                int bindIndex = menu.Items.IndexOf(bindExcel);
+                if (bindIndex >= 0)
+                {
+                    baseIndex = Math.Max(baseIndex, bindIndex + 1);
+                }
+
+                ToolStripMenuItem trainMapping = FindMenuItem(menu, "\u6dfb\u52a0\u5bf9\u5e94\u6846\u5185\u5bb9");
+                if (trainMapping == null)
+                {
+                    trainMapping = new ToolStripMenuItem("\u6dfb\u52a0\u5bf9\u5e94\u6846\u5185\u5bb9");
+                    trainMapping.Visible = true;
+                    trainMapping.Available = true;
+                    trainMapping.Enabled = true;
+                    trainMapping.Click += delegate { ShowMappingBoxTrainerPanel(mainForm); };
+                    menu.Items.Insert(Math.Min(baseIndex, menu.Items.Count), trainMapping);
+                    baseIndex++;
+                }
+                ApplyMenuIcon(trainMapping, "recommend_quota.png");
 
                 ToolStripMenuItem openPanel = FindMenuItem(menu, "打开Excel联动面板");
                 if (openPanel == null)
@@ -830,11 +848,19 @@ namespace RecoNet
                     continue;
                 }
 
+                string currentQuantity = GetRowValue(row, "工程数量输入", "工程数量");
+                decimal currentQuantityValue;
+                string currentQuantityError;
+                if (TryEvaluateDecimal(currentQuantity, out currentQuantityValue, out currentQuantityError) && currentQuantityValue == 0m)
+                {
+                    continue;
+                }
+
                 result.Add(new AiQuotaMatchRow
                 {
                     Link = link,
                     QuotaUnit = GetRowValue(row, "单位", "定额单位"),
-                    CurrentQuantityText = GetRowValue(row, "工程数量输入", "工程数量")
+                    CurrentQuantityText = currentQuantity
                 });
             }
 
@@ -3458,7 +3484,7 @@ namespace RecoNet
         {
             public bool Enabled;
             public string ApiKey;
-            public string Model = "deepseek-v4-flash";
+            public string Model = "deepseek-v4-pro";
             public string BaseUrl = "https://api.deepseek.com";
             public int TimeoutSeconds = 8;
             public int MaxRowsPerBatch = 8;
@@ -3677,9 +3703,9 @@ namespace RecoNet
 
                 Button aiMatch = new Button();
                 aiMatch.Text = "AI智能匹配";
-                aiMatch.Left = 220;
+                aiMatch.Left = 12;
                 aiMatch.Top = 226;
-                aiMatch.Width = 110;
+                aiMatch.Width = 120;
                 aiMatch.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
                 aiMatch.Click += delegate { MatchSelectedQuotasWithAi(); };
 
@@ -3896,7 +3922,7 @@ namespace RecoNet
                         return;
                     }
 
-                    status.Text = "DeepSeek正在匹配选中定额和Excel选区...";
+                    status.Text = "正在先按工程数量快速匹配，剩余项再交给DeepSeek...";
                     Application.DoEvents();
 
                     List<AiMatchPreviewItem> preview = new List<AiMatchPreviewItem>();

@@ -3597,7 +3597,7 @@ namespace RecoQuotaRecommend
     {
         public bool Enabled;
         public string ApiKey;
-        public string Model = "deepseek-v4-flash";
+        public string Model = "deepseek-v4-pro";
         public string BaseUrl = "https://api.deepseek.com";
         public int TimeoutSeconds = 8;
         public int MaxRowsPerBatch = 8;
@@ -3698,7 +3698,7 @@ namespace RecoQuotaRecommend
             builder.AppendLine("{");
             AppendJson(builder, "enabled", Enabled ? "true" : "false", false, true);
             AppendJson(builder, "api_key", ApiKey ?? "", true, true);
-            AppendJson(builder, "model", String.IsNullOrWhiteSpace(Model) ? "deepseek-v4-flash" : Model, true, true);
+            AppendJson(builder, "model", String.IsNullOrWhiteSpace(Model) ? "deepseek-v4-pro" : Model, true, true);
             AppendJson(builder, "base_url", String.IsNullOrWhiteSpace(BaseUrl) ? "https://api.deepseek.com" : BaseUrl, true, true);
             AppendJson(builder, "timeout_seconds", TimeoutSeconds.ToString(CultureInfo.InvariantCulture), false, true);
             AppendJson(builder, "max_rows_per_batch", MaxRowsPerBatch.ToString(CultureInfo.InvariantCulture), false, true);
@@ -3911,7 +3911,7 @@ namespace RecoQuotaRecommend
 
             if (String.IsNullOrWhiteSpace(model))
             {
-                model = "deepseek-v4-flash";
+                model = "deepseek-v4-pro";
             }
             if (String.IsNullOrWhiteSpace(baseUrl))
             {
