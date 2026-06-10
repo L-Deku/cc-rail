@@ -46,10 +46,12 @@ Desktop.ini
 /tools/packages/
 *.nupkg
 *.zip
+*.msi
 
 # Full local railway investment control system install/runtime directory
 /铁路基本建设工程投资控制系统2020网络版V0503021201/
 /2024铁路工程云计价系统网络版V1.0/
+/广联达/
 
 # Local project/business files
 /阜阳北机务段新增股道工程/

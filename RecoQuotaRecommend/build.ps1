@@ -132,12 +132,22 @@ $importerOut = Join-Path $outDir "QuotaLearningImporter.exe"
 $quotaOut = Join-Path $outDir "RecoQuotaRecommend.dll"
 $loaderOut = Join-Path $outDir "RecoPluginLoader.dll"
 $expandOut = Join-Path $outDir "RecoExpandPanel.dll"
+$guangcaiBridgeOut = Join-Path $outDir "GuangcaiBridge.exe"
 
 $npoi = Join-Path $referenceDir "NPOI.dll"
 $npoiOoxml = Join-Path $referenceDir "NPOI.OOXML.dll"
 $npoiOpenXml4Net = Join-Path $referenceDir "NPOI.OpenXml4Net.dll"
 $npoiOpenXmlFormats = Join-Path $referenceDir "NPOI.OpenXmlFormats.dll"
 $sharpZipLib = Join-Path $referenceDir "ICSharpCode.SharpZipLib.dll"
+$uiAutomationClient = Get-ChildItem -LiteralPath "$env:WINDIR\Microsoft.NET\assembly\GAC_MSIL\UIAutomationClient" -Recurse -Filter "UIAutomationClient.dll" |
+  Select-Object -First 1 -ExpandProperty FullName
+$uiAutomationTypes = Get-ChildItem -LiteralPath "$env:WINDIR\Microsoft.NET\assembly\GAC_MSIL\UIAutomationTypes" -Recurse -Filter "UIAutomationTypes.dll" |
+  Select-Object -First 1 -ExpandProperty FullName
+$windowsBase = Get-ChildItem -LiteralPath "$env:WINDIR\Microsoft.NET\assembly\GAC_MSIL\WindowsBase" -Recurse -Filter "WindowsBase.dll" |
+  Select-Object -First 1 -ExpandProperty FullName
+if (-not $uiAutomationClient -or -not $uiAutomationTypes -or -not $windowsBase) {
+  throw "Could not find .NET UI Automation assemblies"
+}
 $expandSources = Get-ChildItem -LiteralPath (Join-Path $root "tools\RecoExpandPanel") -Filter "*.cs" |
   Sort-Object Name |
   ForEach-Object { $_.FullName }
@@ -180,6 +190,15 @@ Assert-NativeSuccess "Build RecoPluginLoader"
   $expandSources
 Assert-NativeSuccess "Build RecoExpandPanel"
 
+& $csc /nologo /target:exe /platform:x86 /out:$guangcaiBridgeOut `
+  /reference:System.Windows.Forms.dll `
+  /reference:System.Drawing.dll `
+  /reference:$windowsBase `
+  /reference:$uiAutomationClient `
+  /reference:$uiAutomationTypes `
+  (Join-Path $root "GuangcaiBridge\GuangcaiBridge.cs")
+Assert-NativeSuccess "Build GuangcaiBridge"
+
 Copy-Item -LiteralPath $npoi -Destination $outDir -Force
 Copy-Item -LiteralPath $npoiOoxml -Destination $outDir -Force
 Copy-Item -LiteralPath $npoiOpenXml4Net -Destination $outDir -Force
@@ -190,6 +209,7 @@ foreach ($softwareDir in $targets) {
   Copy-Item -LiteralPath $loaderOut -Destination $softwareDir -Force
   Copy-Item -LiteralPath $expandOut -Destination $softwareDir -Force
   Copy-Item -LiteralPath $quotaOut -Destination $softwareDir -Force
+  Copy-Item -LiteralPath $guangcaiBridgeOut -Destination $softwareDir -Force
 
   $iconSource = Join-Path $root "tools\RecoExpandPanel\icons"
   if (Test-Path -LiteralPath $iconSource) {
@@ -220,3 +240,4 @@ Write-Host "Built $importerOut"
 Write-Host "Built $quotaOut"
 Write-Host "Built $loaderOut"
 Write-Host "Built $expandOut"
+Write-Host "Built $guangcaiBridgeOut"

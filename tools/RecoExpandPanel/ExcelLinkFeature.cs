@@ -893,6 +893,11 @@ namespace RecoNet
                 context.WorkbookPath = Convert.ToString(workbook.FullName, CultureInfo.InvariantCulture);
                 context.WorksheetName = Convert.ToString(sheet.Name, CultureInfo.InvariantCulture);
 
+                if (TryReadActiveExcelSelectionContextBulk(selection, context))
+                {
+                    return true;
+                }
+
                 int count = Convert.ToInt32(selection.Cells.Count, CultureInfo.InvariantCulture);
                 int limit = Math.Min(count, 800);
                 for (int i = 1; i <= limit; i++)
@@ -943,6 +948,71 @@ namespace RecoNet
                 error = BuildExcelConnectError("读取 Excel/WPS 当前选区失败：" + ex.Message);
                 return false;
             }
+        }
+
+        private static bool TryReadActiveExcelSelectionContextBulk(dynamic selection, AiExcelSelectionContext context)
+        {
+            try
+            {
+                int rowCount = Convert.ToInt32(selection.Rows.Count, CultureInfo.InvariantCulture);
+                int colCount = Convert.ToInt32(selection.Columns.Count, CultureInfo.InvariantCulture);
+                if (rowCount <= 0 || colCount <= 0 || rowCount * colCount > 1200)
+                {
+                    return false;
+                }
+
+                int firstRow = Convert.ToInt32(selection.Row, CultureInfo.InvariantCulture);
+                int firstColumn = Convert.ToInt32(selection.Column, CultureInfo.InvariantCulture);
+                object rawValues = selection.Value2;
+                if (rowCount == 1 && colCount == 1)
+                {
+                    AddAiExcelCell(context, firstRow, firstColumn, rawValues);
+                }
+                else
+                {
+                    Array values = rawValues as Array;
+                    if (values == null)
+                    {
+                        return false;
+                    }
+
+                    for (int row = 1; row <= rowCount; row++)
+                    {
+                        for (int col = 1; col <= colCount; col++)
+                        {
+                            AddAiExcelCell(context, firstRow + row - 1, firstColumn + col - 1, values.GetValue(row, col));
+                        }
+                    }
+                }
+
+                return context.Cells.Count > 0 && context.Cells.Any(c => c.IsNumber);
+            }
+            catch (Exception ex)
+            {
+                Log("Bulk read active Excel selection failed: " + ex.Message);
+                context.Cells.Clear();
+                return false;
+            }
+        }
+
+        private static void AddAiExcelCell(AiExcelSelectionContext context, int row, int column, object rawValue)
+        {
+            string text = ExcelValueToText(rawValue);
+            if (String.IsNullOrWhiteSpace(text))
+            {
+                return;
+            }
+
+            decimal parsed;
+            string parseError;
+            context.Cells.Add(new AiExcelCell
+            {
+                Address = ColumnNumberToName(column) + row.ToString(CultureInfo.InvariantCulture),
+                Text = text,
+                Row = row,
+                Column = column,
+                IsNumber = TryEvaluateDecimal(text, out parsed, out parseError)
+            });
         }
 
         private static DeepSeekExcelMatchSettings LoadDeepSeekExcelMatchSettings()
@@ -1264,14 +1334,6 @@ namespace RecoNet
                     continue;
                 }
 
-                string displayValue;
-                decimal quantity;
-                string readError;
-                if (!TryEvaluateWorkbookExpression(selection.WorkbookPath, selection.WorksheetName, bestExpression, out displayValue, out quantity, out readError))
-                {
-                    continue;
-                }
-
                 preview.Add(new AiMatchPreviewItem
                 {
                     Checked = true,
@@ -1281,7 +1343,7 @@ namespace RecoNet
                     WorksheetName = selection.WorksheetName,
                     Expression = bestExpression,
                     CellAddress = bestCell.Address,
-                    DisplayValue = displayValue,
+                    DisplayValue = FormatAiMatchDecimal(quotaQuantity),
                     QuantityName = BuildQuantityNameFromExcelRow(selection, bestCell.Address)
                 });
             }
@@ -1425,6 +1487,11 @@ namespace RecoNet
             }
 
             return diff / baseValue;
+        }
+
+        private static string FormatAiMatchDecimal(decimal value)
+        {
+            return value.ToString("0.########", CultureInfo.InvariantCulture);
         }
 
         private static string NormalizeExpressionOperators(string expression)
@@ -3967,49 +4034,62 @@ namespace RecoNet
                         status.Text = fallbackMessage;
                     }
 
-                    using (AiMatchPreviewDialog dialog = new AiMatchPreviewDialog(preview))
+                    AiMatchPreviewDialog modelessDialog = new AiMatchPreviewDialog(preview);
+                    modelessDialog.Accepted += delegate(List<AiMatchPreviewItem> accepted)
                     {
-                        if (dialog.ShowDialog(this) != DialogResult.OK)
-                        {
-                            status.Text = "已取消AI匹配绑定。";
-                            return;
-                        }
-
-                        List<AiMatchPreviewItem> accepted = dialog.GetAcceptedItems();
-                        if (accepted.Count == 0)
-                        {
-                            status.Text = "没有勾选任何AI匹配结果。";
-                            return;
-                        }
-
-                        ExcelLinkStore store = LoadStore(conn);
-                        foreach (AiMatchPreviewItem item in accepted)
-                        {
-                            item.Link.ExcelPath = String.IsNullOrWhiteSpace(item.WorkbookPath) ? selection.WorkbookPath : item.WorkbookPath;
-                            item.Link.WorksheetName = String.IsNullOrWhiteSpace(item.WorksheetName) ? selection.WorksheetName : item.WorksheetName;
-                            item.Link.CellAddress = item.CellAddress;
-                            item.Link.Expression = item.Expression;
-                            item.Link.LastSyncValue = item.DisplayValue ?? "";
-                            item.Link.LastStatus = "AI智能匹配绑定，等待同步";
-                            item.Link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
-                            store.Upsert(item.Link);
-                        }
-
-                        SaveStore(conn, store);
-                        EnsureExcelLinkRuntime(mainForm);
-                        if (ExcelLinkRuntimes.ContainsKey(mainForm))
-                        {
-                            ExcelLinkRuntimes[mainForm].Reload();
-                        }
-
-                        RefreshExcelLinkPanel(mainForm);
-                        status.Text = "AI已绑定 " + accepted.Count.ToString(CultureInfo.InvariantCulture) + " 条选中定额。";
-                    }
+                        SaveAiMatchPreviewAccepted(conn, selection, accepted);
+                    };
+                    modelessDialog.Cancelled += delegate
+                    {
+                        status.Text = "已取消AI匹配绑定。";
+                    };
+                    modelessDialog.Show(this);
+                    return;
                 }
                 catch (Exception ex)
                 {
                     Log("AI Excel match failed: " + ex);
                     status.Text = "AI匹配失败：" + ex.Message;
+                }
+            }
+
+            private void SaveAiMatchPreviewAccepted(SqlConnection conn, AiExcelSelectionContext selection, List<AiMatchPreviewItem> accepted)
+            {
+                try
+                {
+                    if (accepted == null || accepted.Count == 0)
+                    {
+                        status.Text = "没有勾选任何AI匹配结果。";
+                        return;
+                    }
+
+                    ExcelLinkStore store = LoadStore(conn);
+                    foreach (AiMatchPreviewItem item in accepted)
+                    {
+                        item.Link.ExcelPath = String.IsNullOrWhiteSpace(item.WorkbookPath) ? selection.WorkbookPath : item.WorkbookPath;
+                        item.Link.WorksheetName = String.IsNullOrWhiteSpace(item.WorksheetName) ? selection.WorksheetName : item.WorksheetName;
+                        item.Link.CellAddress = item.CellAddress;
+                        item.Link.Expression = item.Expression;
+                        item.Link.LastSyncValue = item.DisplayValue ?? "";
+                        item.Link.LastStatus = "AI智能匹配绑定，等待同步";
+                        item.Link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+                        store.Upsert(item.Link);
+                    }
+
+                    SaveStore(conn, store);
+                    EnsureExcelLinkRuntime(mainForm);
+                    if (ExcelLinkRuntimes.ContainsKey(mainForm))
+                    {
+                        ExcelLinkRuntimes[mainForm].Reload();
+                    }
+
+                    RefreshExcelLinkPanel(mainForm);
+                    status.Text = "AI已绑定 " + accepted.Count.ToString(CultureInfo.InvariantCulture) + " 条选中定额。";
+                }
+                catch (Exception ex)
+                {
+                    Log("Save AI Excel match preview failed: " + ex);
+                    status.Text = "AI匹配保存失败：" + ex.Message;
                 }
             }
 
@@ -4118,6 +4198,8 @@ namespace RecoNet
             private readonly DataGridView grid;
             private readonly List<AiMatchPreviewItem> items;
             private readonly Label status;
+            public event Action<List<AiMatchPreviewItem>> Accepted;
+            public event Action Cancelled;
 
             public AiMatchPreviewDialog(List<AiMatchPreviewItem> previewItems)
             {
@@ -4182,6 +4264,18 @@ namespace RecoNet
                 ok.Click += delegate
                 {
                     grid.EndEdit();
+                    List<AiMatchPreviewItem> accepted = GetAcceptedItems();
+                    if (accepted.Count == 0)
+                    {
+                        status.Text = "请至少勾选一条已匹配Excel单元格的定额。";
+                        return;
+                    }
+
+                    if (Accepted != null)
+                    {
+                        Accepted(accepted);
+                    }
+
                     DialogResult = DialogResult.OK;
                     Close();
                 };
@@ -4191,6 +4285,11 @@ namespace RecoNet
                 cancel.Width = 75;
                 cancel.Click += delegate
                 {
+                    if (Cancelled != null)
+                    {
+                        Cancelled();
+                    }
+
                     DialogResult = DialogResult.Cancel;
                     Close();
                 };
