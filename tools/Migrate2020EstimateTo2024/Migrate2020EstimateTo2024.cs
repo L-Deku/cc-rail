@@ -6,6 +6,7 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Migrate2020EstimateTo2024
 {
@@ -668,26 +669,29 @@ namespace Migrate2020EstimateTo2024
             List<Resource> targets;
             if (targetByName.TryGetValue(mapping.Source.Name, out targets) && targets.Count > 0)
             {
-                Resource chosen = null;
-                foreach (Resource target in targets)
-                {
-                    if (String.Equals(target.Unit, mapping.Source.Unit, StringComparison.Ordinal))
-                    {
-                        chosen = target;
-                        break;
-                    }
-                }
+                ApplyChosenTarget(plan, mapping, ChooseByUnit(targets, mapping.Source.Unit), "名称单位匹配", "名称匹配单位不同", 100);
+                return;
+            }
 
-                if (chosen == null)
-                {
-                    chosen = targets[0];
-                    mapping.UnitDifference = true;
-                    plan.UnitDifferences.Add(mapping);
-                }
+            string sourceNormalized = NormalizeResourceName(mapping.Source.Name);
+            Resource normalizedTarget = FindNormalizedTarget(targetByName, sourceNormalized, mapping.Source.Unit);
+            if (normalizedTarget != null)
+            {
+                ApplyChosenTarget(plan, mapping, normalizedTarget, "规范化名称匹配", "规范化名称匹配单位不同", 98);
+                plan.NameReviewMappings.Add(mapping);
+                return;
+            }
 
-                mapping.NewCode = chosen.NewCode;
-                mapping.Target = chosen;
-                mapping.MatchStatus = mapping.UnitDifference ? "名称匹配单位不同" : "名称单位匹配";
+            ResourceCandidate candidate = FindFuzzyTarget(targetByName, mapping.Source);
+            if (candidate.Target != null &&
+                candidate.Score >= 92 &&
+                candidate.Score - candidate.SecondScore >= 8 &&
+                LengthRatioAcceptable(sourceNormalized, NormalizeResourceName(candidate.Target.Name)) &&
+                NumbersEqual(mapping.Source.Name, candidate.Target.Name))
+            {
+                ApplyChosenTarget(plan, mapping, candidate.Target, "相似名称匹配", "相似名称匹配单位不同", candidate.Score);
+                mapping.MatchReason = "自动采用唯一高相似候选";
+                plan.NameReviewMappings.Add(mapping);
                 return;
             }
 
@@ -706,7 +710,489 @@ namespace Migrate2020EstimateTo2024
             mapping.NewCode = supplement.NewCode;
             mapping.Target = supplement;
             mapping.MatchStatus = "2024缺失，补充";
+            ResourceCandidate reviewCandidate = candidate.Target != null && candidate.Score >= 60
+                ? candidate
+                : FindReviewCandidate(targetByName, mapping.Source);
+            if (reviewCandidate.Target != null)
+            {
+                mapping.CandidateName = reviewCandidate.Target.Name;
+                mapping.CandidateCode = reviewCandidate.Target.NewCode;
+                mapping.CandidateUnit = reviewCandidate.Target.Unit;
+                mapping.CandidateScore = reviewCandidate.Score;
+                mapping.MatchReason = reviewCandidate.Score >= 60
+                    ? "无可靠唯一相似候选，按补充处理"
+                    : "低置信兜底候选，仅供人工审核，按补充处理";
+            }
+            else
+            {
+                mapping.MatchReason = "无相似候选，按补充处理";
+            }
             plan.MissingResources.Add(mapping);
+        }
+
+        private static Resource ChooseByUnit(List<Resource> targets, string unit)
+        {
+            foreach (Resource target in targets)
+            {
+                if (String.Equals(target.Unit, unit, StringComparison.Ordinal))
+                {
+                    return target;
+                }
+            }
+
+            return targets[0];
+        }
+
+        private static void ApplyChosenTarget(MigrationPlan plan, ResourceMapping mapping, Resource chosen, string sameUnitStatus, string diffUnitStatus, int score)
+        {
+            mapping.NewCode = chosen.NewCode;
+            mapping.Target = chosen;
+            mapping.MatchScore = score;
+            mapping.UnitDifference = !String.Equals(mapping.Source.Unit, chosen.Unit, StringComparison.Ordinal);
+            mapping.MatchStatus = mapping.UnitDifference ? diffUnitStatus : sameUnitStatus;
+            if (mapping.UnitDifference)
+            {
+                plan.UnitDifferences.Add(mapping);
+            }
+        }
+
+        private static Resource FindNormalizedTarget(Dictionary<string, List<Resource>> targetByName, string sourceNormalized, string sourceUnit)
+        {
+            List<Resource> matches = new List<Resource>();
+            foreach (KeyValuePair<string, List<Resource>> pair in targetByName)
+            {
+                if (String.Equals(NormalizeResourceName(pair.Key), sourceNormalized, StringComparison.Ordinal))
+                {
+                    matches.AddRange(pair.Value);
+                }
+            }
+
+            if (matches.Count == 0)
+            {
+                return null;
+            }
+
+            return ChooseByUnit(matches, sourceUnit);
+        }
+
+        private static ResourceCandidate FindFuzzyTarget(Dictionary<string, List<Resource>> targetByName, Resource source)
+        {
+            string sourceNormalized = NormalizeResourceName(source.Name);
+            ResourceCandidate best = new ResourceCandidate();
+            foreach (KeyValuePair<string, List<Resource>> pair in targetByName)
+            {
+                string targetNormalized = NormalizeResourceName(pair.Key);
+                if (!NumbersCompatibleNormalized(sourceNormalized, targetNormalized))
+                {
+                    continue;
+                }
+
+                if (source.Kind == ResourceKind.Machine && !MachineNameCompatible(source.Name, pair.Key))
+                {
+                    continue;
+                }
+
+                int score = SimilarityScore(sourceNormalized, targetNormalized);
+                if (source.Kind == ResourceKind.Machine)
+                {
+                    score = Math.Min(100, score + MachineKeywordBonus(source.Name, pair.Key));
+                }
+
+                foreach (Resource target in pair.Value)
+                {
+                    int unitAdjusted = String.Equals(source.Unit, target.Unit, StringComparison.Ordinal) ? Math.Min(100, score + 3) : score;
+                    if (unitAdjusted > best.Score)
+                    {
+                        best.SecondScore = best.Score;
+                        best.Score = unitAdjusted;
+                        best.Target = target;
+                    }
+                    else if (unitAdjusted > best.SecondScore)
+                    {
+                        best.SecondScore = unitAdjusted;
+                    }
+                }
+            }
+
+            return best;
+        }
+
+        private static ResourceCandidate FindReviewCandidate(Dictionary<string, List<Resource>> targetByName, Resource source)
+        {
+            string sourceNormalized = NormalizeResourceName(source.Name);
+            ResourceCandidate best = new ResourceCandidate();
+            foreach (KeyValuePair<string, List<Resource>> pair in targetByName)
+            {
+                string targetNormalized = NormalizeResourceName(pair.Key);
+                int score = ReviewSimilarityScore(source.Name, pair.Key, sourceNormalized, targetNormalized, source.Kind);
+                foreach (Resource target in pair.Value)
+                {
+                    int adjusted = score;
+                    if (String.Equals(source.Unit, target.Unit, StringComparison.Ordinal))
+                    {
+                        adjusted += 5;
+                    }
+                    else
+                    {
+                        adjusted -= 6;
+                    }
+
+                    if (adjusted > best.Score)
+                    {
+                        best.SecondScore = best.Score;
+                        best.Score = Math.Max(1, Math.Min(100, adjusted));
+                        best.Target = target;
+                    }
+                    else if (adjusted > best.SecondScore)
+                    {
+                        best.SecondScore = adjusted;
+                    }
+                }
+            }
+
+            return best;
+        }
+
+        private static int ReviewSimilarityScore(string sourceName, string targetName, string sourceNormalized, string targetNormalized, ResourceKind kind)
+        {
+            int score = SimilarityScore(sourceNormalized, targetNormalized);
+            score = Math.Max(score, TokenOverlapScore(sourceNormalized, targetNormalized));
+
+            List<string> sourceNumbers = ExtractNumbers(sourceNormalized);
+            List<string> targetNumbers = ExtractNumbers(targetNormalized);
+            int sharedNumbers = CountShared(sourceNumbers, targetNumbers);
+            if (sourceNumbers.Count > 0)
+            {
+                score += sharedNumbers * 4;
+                score -= Math.Max(0, sourceNumbers.Count - sharedNumbers) * 6;
+            }
+
+            if (kind == ResourceKind.Machine)
+            {
+                score += MachineKeywordBonus(sourceName, targetName);
+                if (!MachineNameCompatible(sourceName, targetName))
+                {
+                    score -= 28;
+                }
+            }
+            else if (kind == ResourceKind.Material)
+            {
+                score += MaterialKeywordBonus(sourceName, targetName);
+            }
+
+            return Math.Max(1, Math.Min(100, score));
+        }
+
+        private static int TokenOverlapScore(string sourceNormalized, string targetNormalized)
+        {
+            HashSet<string> sourceTokens = BuildNgrams(sourceNormalized);
+            HashSet<string> targetTokens = BuildNgrams(targetNormalized);
+            if (sourceTokens.Count == 0 || targetTokens.Count == 0)
+            {
+                return 0;
+            }
+
+            int shared = 0;
+            foreach (string token in sourceTokens)
+            {
+                if (targetTokens.Contains(token))
+                {
+                    shared++;
+                }
+            }
+
+            return (int)Math.Round((200.0 * shared) / (sourceTokens.Count + targetTokens.Count), MidpointRounding.AwayFromZero);
+        }
+
+        private static HashSet<string> BuildNgrams(string text)
+        {
+            HashSet<string> tokens = new HashSet<string>(StringComparer.Ordinal);
+            if (String.IsNullOrEmpty(text))
+            {
+                return tokens;
+            }
+
+            if (text.Length <= 2)
+            {
+                tokens.Add(text);
+                return tokens;
+            }
+
+            for (int i = 0; i < text.Length - 1; i++)
+            {
+                tokens.Add(text.Substring(i, 2));
+            }
+
+            return tokens;
+        }
+
+        private static int CountShared(List<string> left, List<string> right)
+        {
+            int count = 0;
+            foreach (string value in left)
+            {
+                if (right.Contains(value))
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        private static int MaterialKeywordBonus(string sourceName, string targetName)
+        {
+            int bonus = 0;
+            string[] tokens = new[]
+            {
+                "钢筋", "钢丝", "水泥", "砂", "碎石", "粉煤灰", "减水剂",
+                "混凝土", "沥青", "绝缘子", "电缆", "横担", "抱箍", "螺栓",
+                "螺母", "垫圈", "支架", "管", "板", "砖", "线"
+            };
+
+            foreach (string token in tokens)
+            {
+                if (sourceName.IndexOf(token, StringComparison.Ordinal) >= 0 && targetName.IndexOf(token, StringComparison.Ordinal) >= 0)
+                {
+                    bonus += 3;
+                }
+            }
+
+            return Math.Min(12, bonus);
+        }
+
+        private static bool MachineNameCompatible(string sourceName, string targetName)
+        {
+            if (HasAny(sourceName, "内燃") && HasAny(targetName, "电动", "电力"))
+            {
+                return false;
+            }
+
+            if (HasAny(sourceName, "电动", "电力") && HasAny(targetName, "内燃"))
+            {
+                return false;
+            }
+
+            string[] exclusiveTypes = new[]
+            {
+                "卷扬机", "空气压缩机", "清水泵", "污水泵", "泥浆泵", "发电机",
+                "起重机", "挖掘机", "装载机", "推土机", "压路机", "摊铺机",
+                "搅拌机", "搅拌站", "搅拌船", "输送泵车", "输送泵",
+                "运输车", "汽车", "叉车", "钻机", "流量计", "示波器",
+                "分析仪", "测试仪", "信号发生器", "平台车"
+            };
+
+            string sourceType = FirstKeyword(sourceName, exclusiveTypes);
+            string targetType = FirstKeyword(targetName, exclusiveTypes);
+            if (!String.IsNullOrEmpty(sourceType) && !String.IsNullOrEmpty(targetType) && !String.Equals(sourceType, targetType, StringComparison.Ordinal))
+            {
+                if (!(sourceType == "运输车" && targetType == "汽车") && !(sourceType == "汽车" && targetType == "运输车"))
+                {
+                    return false;
+                }
+            }
+
+            if (HasAny(sourceName, "单筒") && HasAny(targetName, "双筒"))
+            {
+                return false;
+            }
+
+            if (HasAny(sourceName, "双筒") && HasAny(targetName, "单筒"))
+            {
+                return false;
+            }
+
+            if (HasAny(sourceName, "慢速") && HasAny(targetName, "快速"))
+            {
+                return false;
+            }
+
+            if (HasAny(sourceName, "快速") && HasAny(targetName, "慢速"))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private static int MachineKeywordBonus(string sourceName, string targetName)
+        {
+            int bonus = 0;
+            string[] tokens = new[]
+            {
+                "内燃", "电动", "液压", "履带式", "轮胎式", "单筒", "双筒",
+                "慢速", "快速", "活塞式", "离心", "清水", "污水", "泥浆",
+                "卷扬机", "空气压缩机", "起重机", "挖掘机", "装载机", "推土机",
+                "搅拌站", "输送泵", "流量计", "示波器", "分析仪", "信号发生器"
+            };
+
+            foreach (string token in tokens)
+            {
+                if (sourceName.IndexOf(token, StringComparison.Ordinal) >= 0 && targetName.IndexOf(token, StringComparison.Ordinal) >= 0)
+                {
+                    bonus += 2;
+                }
+            }
+
+            return Math.Min(8, bonus);
+        }
+
+        private static string FirstKeyword(string text, string[] keywords)
+        {
+            foreach (string keyword in keywords)
+            {
+                if (text.IndexOf(keyword, StringComparison.Ordinal) >= 0)
+                {
+                    return keyword;
+                }
+            }
+
+            return "";
+        }
+
+        private static bool HasAny(string text, params string[] keywords)
+        {
+            foreach (string keyword in keywords)
+            {
+                if (text.IndexOf(keyword, StringComparison.Ordinal) >= 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static string NormalizeResourceName(string text)
+        {
+            if (String.IsNullOrWhiteSpace(text))
+            {
+                return "";
+            }
+
+            string value = text.Trim().ToLowerInvariant();
+            value = value.Replace('（', '(').Replace('）', ')');
+            value = value.Replace('，', ',').Replace('。', '.').Replace('：', ':');
+            value = value.Replace('～', '~').Replace('－', '-').Replace('—', '-').Replace('–', '-');
+            value = value.Replace('＜', '<').Replace('≤', '<').Replace('≦', '<');
+            value = value.Replace('＞', '>').Replace('≥', '>').Replace('≧', '>');
+            value = value.Replace('φ', 'f').Replace('Φ', 'f');
+            value = value.Replace("活塞式", "");
+            value = value.Replace("式", "");
+            value = value.Replace("级", "");
+            value = value.Replace("mm", "");
+            value = value.Replace(" ", "");
+            value = value.Replace("　", "");
+            value = value.Replace("=", "");
+            value = value.Replace("(", "").Replace(")", "");
+            value = value.Replace(",", "");
+            return value;
+        }
+
+        private static bool NumbersCompatible(string sourceName, string targetName)
+        {
+            return NumbersCompatibleNormalized(NormalizeResourceName(sourceName), NormalizeResourceName(targetName));
+        }
+
+        private static bool NumbersEqual(string sourceName, string targetName)
+        {
+            List<string> sourceNumbers = ExtractNumbers(NormalizeResourceName(sourceName));
+            List<string> targetNumbers = ExtractNumbers(NormalizeResourceName(targetName));
+            if (sourceNumbers.Count != targetNumbers.Count)
+            {
+                return false;
+            }
+
+            foreach (string number in sourceNumbers)
+            {
+                if (!targetNumbers.Contains(number))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool LengthRatioAcceptable(string sourceNormalized, string targetNormalized)
+        {
+            int min = Math.Min(sourceNormalized.Length, targetNormalized.Length);
+            int max = Math.Max(sourceNormalized.Length, targetNormalized.Length);
+            if (max == 0)
+            {
+                return false;
+            }
+
+            return ((double)min / (double)max) >= 0.75;
+        }
+
+        private static bool NumbersCompatibleNormalized(string sourceNormalized, string targetNormalized)
+        {
+            List<string> sourceNumbers = ExtractNumbers(sourceNormalized);
+            List<string> targetNumbers = ExtractNumbers(targetNormalized);
+            foreach (string number in sourceNumbers)
+            {
+                if (!targetNumbers.Contains(number))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static List<string> ExtractNumbers(string text)
+        {
+            List<string> numbers = new List<string>();
+            foreach (Match match in Regex.Matches(text ?? "", @"\d+(?:\.\d+)?"))
+            {
+                if (!numbers.Contains(match.Value))
+                {
+                    numbers.Add(match.Value);
+                }
+            }
+
+            return numbers;
+        }
+
+        private static int SimilarityScore(string left, string right)
+        {
+            if (String.Equals(left, right, StringComparison.Ordinal))
+            {
+                return 100;
+            }
+
+            if (left.Length == 0 || right.Length == 0)
+            {
+                return 0;
+            }
+
+            int lcs = LongestCommonSubsequence(left, right);
+            double coverage = (2.0 * lcs) / (left.Length + right.Length);
+            int containsBonus = (left.Contains(right) || right.Contains(left)) ? 8 : 0;
+            int score = (int)Math.Round(coverage * 100.0, MidpointRounding.AwayFromZero) + containsBonus;
+            return Math.Max(0, Math.Min(100, score));
+        }
+
+        private static int LongestCommonSubsequence(string left, string right)
+        {
+            int[,] dp = new int[left.Length + 1, right.Length + 1];
+            for (int i = 1; i <= left.Length; i++)
+            {
+                for (int j = 1; j <= right.Length; j++)
+                {
+                    if (left[i - 1] == right[j - 1])
+                    {
+                        dp[i, j] = dp[i - 1, j - 1] + 1;
+                    }
+                    else
+                    {
+                        dp[i, j] = Math.Max(dp[i - 1, j], dp[i, j - 1]);
+                    }
+                }
+            }
+
+            return dp[left.Length, right.Length];
         }
 
         private static int AllocateMaterialCode(MigrationPlan plan)
@@ -806,6 +1292,7 @@ namespace Migrate2020EstimateTo2024
             WriteResourceMap(plan, Path.Combine(reportDir, "resource-map.csv"));
             WriteMissingResources(plan, Path.Combine(reportDir, "missing-resources.csv"));
             WriteUnitDifferences(plan, Path.Combine(reportDir, "unit-differences.csv"));
+            WriteNameReview(plan, Path.Combine(reportDir, "name-review.csv"));
             WriteConflicts(plan, Path.Combine(reportDir, "conflicts.csv"));
             WriteRollback(plan, Path.Combine(reportDir, "rollback.sql"));
         }
@@ -825,6 +1312,8 @@ namespace Migrate2020EstimateTo2024
             text.AppendLine("DirectOrUnitDiffMappings: " + plan.DirectMappings.ToString(CultureInfo.InvariantCulture));
             text.AppendLine("UnitDifferences: " + plan.UnitDifferences.Count.ToString(CultureInfo.InvariantCulture));
             text.AppendLine("SupplementResources: " + plan.MissingResources.Count.ToString(CultureInfo.InvariantCulture));
+            text.AppendLine("SupplementResourcesWithoutCandidate: " + plan.MissingResourcesWithoutCandidate.ToString(CultureInfo.InvariantCulture));
+            text.AppendLine("LowConfidenceSupplementCandidates: " + plan.LowConfidenceSupplementCandidates.ToString(CultureInfo.InvariantCulture));
             text.AppendLine("UnknownCodes: " + plan.UnknownCodes.Count.ToString(CultureInfo.InvariantCulture));
             text.AppendLine("Conflicts: " + plan.Conflicts.Count.ToString(CultureInfo.InvariantCulture));
             text.AppendLine("MaterialSupplementRange: " + plan.MaterialRangeStart.ToString(CultureInfo.InvariantCulture) + "-" + plan.MaterialRangeEnd.ToString(CultureInfo.InvariantCulture));
@@ -836,10 +1325,10 @@ namespace Migrate2020EstimateTo2024
         {
             using (StreamWriter writer = new StreamWriter(path, false, Encoding.UTF8))
             {
-                writer.WriteLine("kind,old_code,new_code,status,name,source_unit,target_unit");
+                writer.WriteLine("kind,old_code,new_code,status,source_name,target_name,source_unit,target_unit,match_score,reason");
                 foreach (ResourceMapping row in plan.SortedResourceMap)
                 {
-                    writer.WriteLine(Csv(row.Kind.ToString(), row.OldCode, row.NewCode, row.MatchStatus, row.Name, row.SourceUnit, row.TargetUnit));
+                    writer.WriteLine(Csv(row.Kind.ToString(), row.OldCode, row.NewCode, row.MatchStatus, row.SourceName, row.TargetName, row.SourceUnit, row.TargetUnit, row.MatchScore, row.MatchReason));
                 }
             }
         }
@@ -848,10 +1337,10 @@ namespace Migrate2020EstimateTo2024
         {
             using (StreamWriter writer = new StreamWriter(path, false, Encoding.UTF8))
             {
-                writer.WriteLine("kind,old_code,new_code,name,unit,base_price");
+                writer.WriteLine("kind,old_code,new_supplement_code,source_name,source_unit,base_price,best_candidate_code,best_candidate_name,best_candidate_unit,best_candidate_score,reason");
                 foreach (ResourceMapping row in plan.MissingResources)
                 {
-                    writer.WriteLine(Csv(row.Kind.ToString(), row.OldCode, row.NewCode, row.Name, row.SourceUnit, row.Source == null ? 0 : row.Source.BasePrice));
+                    writer.WriteLine(Csv(row.Kind.ToString(), row.OldCode, row.NewCode, row.SourceName, row.SourceUnit, row.Source == null ? 0 : row.Source.BasePrice, row.CandidateCode, row.CandidateName, row.CandidateUnit, row.CandidateScore, row.MatchReason));
                 }
             }
         }
@@ -860,10 +1349,22 @@ namespace Migrate2020EstimateTo2024
         {
             using (StreamWriter writer = new StreamWriter(path, false, Encoding.UTF8))
             {
-                writer.WriteLine("kind,old_code,new_code,name,source_unit,target_unit");
+                writer.WriteLine("kind,old_code,new_code,source_name,target_name,source_unit,target_unit,status,match_score");
                 foreach (ResourceMapping row in plan.UnitDifferences)
                 {
-                    writer.WriteLine(Csv(row.Kind.ToString(), row.OldCode, row.NewCode, row.Name, row.SourceUnit, row.TargetUnit));
+                    writer.WriteLine(Csv(row.Kind.ToString(), row.OldCode, row.NewCode, row.SourceName, row.TargetName, row.SourceUnit, row.TargetUnit, row.MatchStatus, row.MatchScore));
+                }
+            }
+        }
+
+        private static void WriteNameReview(MigrationPlan plan, string path)
+        {
+            using (StreamWriter writer = new StreamWriter(path, false, Encoding.UTF8))
+            {
+                writer.WriteLine("kind,old_code,new_code,status,source_name,target_name,source_unit,target_unit,match_score,reason");
+                foreach (ResourceMapping row in plan.NameReviewMappings)
+                {
+                    writer.WriteLine(Csv(row.Kind.ToString(), row.OldCode, row.NewCode, row.MatchStatus, row.SourceName, row.TargetName, row.SourceUnit, row.TargetUnit, row.MatchScore, row.MatchReason));
                 }
             }
         }
@@ -1258,6 +1759,7 @@ namespace Migrate2020EstimateTo2024
         public Dictionary<int, ResourceMapping> ResourceMap = new Dictionary<int, ResourceMapping>();
         public List<ResourceMapping> MissingResources = new List<ResourceMapping>();
         public List<ResourceMapping> UnitDifferences = new List<ResourceMapping>();
+        public List<ResourceMapping> NameReviewMappings = new List<ResourceMapping>();
         public List<ResourceMapping> UnknownCodes = new List<ResourceMapping>();
         public List<string> Conflicts = new List<string>();
         public HashSet<string> TargetBooks = new HashSet<string>(StringComparer.Ordinal);
@@ -1299,11 +1801,52 @@ namespace Migrate2020EstimateTo2024
                 int total = 0;
                 foreach (ResourceMapping row in ResourceMap.Values)
                 {
-                    if (row.MatchStatus == "名称单位匹配" || row.MatchStatus == "名称匹配单位不同" || row.MatchStatus == "人工保留" || row.MatchStatus == "特殊人工保留")
+                    if (row.MatchStatus == "名称单位匹配" ||
+                        row.MatchStatus == "名称匹配单位不同" ||
+                        row.MatchStatus == "规范化名称匹配" ||
+                        row.MatchStatus == "规范化名称匹配单位不同" ||
+                        row.MatchStatus == "相似名称匹配" ||
+                        row.MatchStatus == "相似名称匹配单位不同" ||
+                        row.MatchStatus == "人工保留" ||
+                        row.MatchStatus == "特殊人工保留")
                     {
                         total++;
                     }
                 }
+                return total;
+            }
+        }
+
+        public int MissingResourcesWithoutCandidate
+        {
+            get
+            {
+                int total = 0;
+                foreach (ResourceMapping row in MissingResources)
+                {
+                    if (row.CandidateCode == 0)
+                    {
+                        total++;
+                    }
+                }
+
+                return total;
+            }
+        }
+
+        public int LowConfidenceSupplementCandidates
+        {
+            get
+            {
+                int total = 0;
+                foreach (ResourceMapping row in MissingResources)
+                {
+                    if (row.CandidateCode != 0 && row.CandidateScore < 60)
+                    {
+                        total++;
+                    }
+                }
+
                 return total;
             }
         }
@@ -1440,11 +1983,27 @@ namespace Migrate2020EstimateTo2024
         public Resource Source;
         public Resource Target;
         public string MatchStatus;
+        public string MatchReason;
+        public int MatchScore;
         public bool UnitDifference;
+        public int CandidateCode;
+        public string CandidateName;
+        public string CandidateUnit;
+        public int CandidateScore;
 
         public string Name
         {
             get { return Source != null ? Source.Name : (Target != null ? Target.Name : ""); }
+        }
+
+        public string SourceName
+        {
+            get { return Source == null ? "" : Source.Name; }
+        }
+
+        public string TargetName
+        {
+            get { return Target == null ? "" : Target.Name; }
         }
 
         public string SourceUnit
@@ -1456,5 +2015,12 @@ namespace Migrate2020EstimateTo2024
         {
             get { return Target == null ? SourceUnit : Target.Unit; }
         }
+    }
+
+    internal sealed class ResourceCandidate
+    {
+        public Resource Target;
+        public int Score;
+        public int SecondScore;
     }
 }

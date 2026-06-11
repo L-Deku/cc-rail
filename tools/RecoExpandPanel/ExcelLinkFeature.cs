@@ -137,25 +137,6 @@ namespace RecoNet
                     baseIndex++;
                 }
                 ApplyMenuIcon(bindExcel, "excel_bind.png");
-                int bindIndex = menu.Items.IndexOf(bindExcel);
-                if (bindIndex >= 0)
-                {
-                    baseIndex = Math.Max(baseIndex, bindIndex + 1);
-                }
-
-                ToolStripMenuItem trainMapping = FindMenuItem(menu, "\u6dfb\u52a0\u5bf9\u5e94\u6846\u5185\u5bb9");
-                if (trainMapping == null)
-                {
-                    trainMapping = new ToolStripMenuItem("\u6dfb\u52a0\u5bf9\u5e94\u6846\u5185\u5bb9");
-                    trainMapping.Visible = true;
-                    trainMapping.Available = true;
-                    trainMapping.Enabled = true;
-                    trainMapping.Click += delegate { ShowMappingBoxTrainerPanel(mainForm); };
-                    menu.Items.Insert(Math.Min(baseIndex, menu.Items.Count), trainMapping);
-                    baseIndex++;
-                }
-                ApplyMenuIcon(trainMapping, "recommend_quota.png");
-
                 ToolStripMenuItem openPanel = FindMenuItem(menu, "打开Excel联动面板");
                 if (openPanel == null)
                 {
@@ -1754,7 +1735,7 @@ namespace RecoNet
                     {
                         string kind = GetFlat(row, "target_kind").Trim();
                         string code = GetFlat(row, "target_code").Trim();
-                        return (String.IsNullOrWhiteSpace(kind) ? GuessMappingTargetKind(code) : kind.ToLowerInvariant()) + ":" + code.ToUpperInvariant();
+                        return (String.IsNullOrWhiteSpace(kind) ? (code.All(Char.IsDigit) ? "material" : "quota") : kind.ToLowerInvariant()) + ":" + code.ToUpperInvariant();
                     })
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
