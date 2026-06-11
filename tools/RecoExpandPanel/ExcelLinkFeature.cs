@@ -1037,7 +1037,7 @@ namespace RecoNet
                 settings.ApiKey = ReadJsonString(values, "api_key", "");
                 settings.Model = ReadJsonString(values, "model", settings.Model);
                 settings.BaseUrl = ReadJsonString(values, "base_url", settings.BaseUrl).TrimEnd('/');
-                settings.TimeoutSeconds = ClampInt(ReadJsonInt(values, "timeout_seconds", settings.TimeoutSeconds), 2, 60);
+                settings.TimeoutSeconds = ClampInt(ReadJsonInt(values, "timeout_seconds", settings.TimeoutSeconds), 5, 120);
                 settings.MaxRowsPerBatch = ClampInt(ReadJsonInt(values, "max_rows_per_batch", settings.MaxRowsPerBatch), 1, 20);
             }
             catch (Exception ex)
@@ -1065,12 +1065,29 @@ namespace RecoNet
             serializer.MaxJsonLength = 1024 * 1024 * 4;
             List<AiMatchResult> all = new List<AiMatchResult>(localMatches);
             int batchSize = Math.Max(1, settings.MaxRowsPerBatch);
+            Exception lastBatchError = null;
+            int successfulBatches = 0;
             for (int i = 0; i < remaining.Count; i += batchSize)
             {
                 List<AiQuotaMatchRow> batch = remaining.Skip(i).Take(batchSize).ToList();
-                string requestJson = BuildAiExcelMatchRequestJson(serializer, settings, batch, selection);
-                string responseJson = SendDeepSeekExcelMatchRequest(settings, requestJson);
-                all.AddRange(ParseAiExcelMatchResponse(serializer, responseJson));
+                try
+                {
+                    string requestJson = BuildAiExcelMatchRequestJson(serializer, settings, batch, selection);
+                    string responseJson = SendDeepSeekExcelMatchRequest(settings, requestJson);
+                    all.AddRange(ParseAiExcelMatchResponse(serializer, responseJson));
+                    successfulBatches++;
+                }
+                catch (Exception ex)
+                {
+                    lastBatchError = ex;
+                    Log("DeepSeek Excel match batch failed: " + ex.Message);
+                }
+            }
+
+            // 全部批次失败时仍按原行为抛出，让调用方提示并回退本地数量匹配；部分失败则保留成功批次结果。
+            if (lastBatchError != null && successfulBatches == 0)
+            {
+                throw lastBatchError;
             }
 
             return all;
@@ -1135,7 +1152,7 @@ namespace RecoNet
             payload["model"] = settings.Model;
             payload["stream"] = false;
             payload["temperature"] = 0.1;
-            payload["max_tokens"] = 1800;
+            payload["max_tokens"] = 3000;
             payload["response_format"] = new Dictionary<string, object> { { "type", "json_object" } };
             payload["messages"] = new object[]
             {
@@ -1168,7 +1185,7 @@ namespace RecoNet
             request.ContentType = "application/json";
             request.Accept = "application/json";
             request.Headers["Authorization"] = "Bearer " + settings.ApiKey;
-            int timeoutSeconds = Math.Max(30, settings.TimeoutSeconds);
+            int timeoutSeconds = Math.Max(5, settings.TimeoutSeconds);
             request.Timeout = timeoutSeconds * 1000;
             request.ReadWriteTimeout = timeoutSeconds * 1000;
 
@@ -1604,6 +1621,8 @@ namespace RecoNet
 
             try
             {
+                WithMappingBoxesLock(delegate
+                {
                 string path = Path.Combine(FindRecoQuotaDataDir(), "mapping-boxes.jsonl");
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
                 List<Dictionary<string, string>> rows = new List<Dictionary<string, string>>();
@@ -1626,7 +1645,8 @@ namespace RecoNet
                         continue;
                     }
 
-                    string boxId = BuildSingleQuotaBoxId(item.Link.QuotaCode);
+                    string targetKey = "quota:" + item.Link.QuotaCode.Trim().ToUpperInvariant();
+                    string boxId = FindExistingMappingBoxId(rows, targetKey) ?? BuildSingleQuotaBoxId(item.Link.QuotaCode);
                     string signature = NormalizeForSignature(item.QuantityName) + "|";
                     Dictionary<string, string> existing = rows.FirstOrDefault(row =>
                         String.Equals(GetFlat(row, "box_id"), boxId, StringComparison.OrdinalIgnoreCase) &&
@@ -1657,6 +1677,7 @@ namespace RecoNet
 
                 TrimMappingRows(rows, 30);
                 File.WriteAllLines(path, rows.Select(ToFlatJson).ToArray(), Encoding.UTF8);
+                });
             }
             catch (Exception ex)
             {
@@ -1701,10 +1722,80 @@ namespace RecoNet
 
         private static string BuildSingleQuotaBoxId(string quotaCode)
         {
-            string raw = "quota:" + (quotaCode ?? "").Trim().ToUpperInvariant();
-            int hash = raw.ToLowerInvariant().GetHashCode();
-            long positive = hash == Int32.MinValue ? (long)Int32.MaxValue + 1L : Math.Abs(hash);
-            return "box-" + positive.ToString(CultureInfo.InvariantCulture);
+            return BuildStableMappingBoxId("quota:" + (quotaCode ?? "").Trim().ToUpperInvariant());
+        }
+
+        // 与 RecoQuotaRecommend 的 MappingStore 使用同一套规则：对小写化的目标键做 SHA1。
+        // String.GetHashCode 在 x86/x64 进程间不一致且会碰撞，不能用于持久化 ID。
+        private static string BuildStableMappingBoxId(string raw)
+        {
+            using (SHA1 sha = SHA1.Create())
+            {
+                byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes((raw ?? "").ToLowerInvariant()));
+                StringBuilder builder = new StringBuilder("box-");
+                for (int i = 0; i < 8; i++)
+                {
+                    builder.Append(hash[i].ToString("x2", CultureInfo.InvariantCulture));
+                }
+
+                return builder.ToString();
+            }
+        }
+
+        // 旧版文件里的 box_id 是 GetHashCode 生成的数字，按目标组合查找可同时兼容新旧 ID。
+        private static string FindExistingMappingBoxId(List<Dictionary<string, string>> rows, string targetKey)
+        {
+            foreach (IGrouping<string, Dictionary<string, string>> group in rows
+                .Where(row => !String.IsNullOrWhiteSpace(GetFlat(row, "box_id")))
+                .GroupBy(row => GetFlat(row, "box_id"), StringComparer.OrdinalIgnoreCase))
+            {
+                List<string> keys = group
+                    .Select(row =>
+                    {
+                        string kind = GetFlat(row, "target_kind").Trim();
+                        string code = GetFlat(row, "target_code").Trim();
+                        return (String.IsNullOrWhiteSpace(kind) ? GuessMappingTargetKind(code) : kind.ToLowerInvariant()) + ":" + code.ToUpperInvariant();
+                    })
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (keys.Count == 1 && String.Equals(keys[0], targetKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    return group.Key;
+                }
+            }
+
+            return null;
+        }
+
+        private const string MappingBoxesMutexName = "RecoQuotaData.mapping-boxes.lock";
+
+        // mapping-boxes.jsonl 有三个写入方（推荐窗口扶正、Excel联动AI匹配、扶正训练器），
+        // 都是整文件读改写，必须用跨程序集一致的命名互斥锁串行化，避免互相覆盖。
+        private static void WithMappingBoxesLock(Action action)
+        {
+            System.Threading.Mutex mutex = new System.Threading.Mutex(false, MappingBoxesMutexName);
+            bool acquired = false;
+            try
+            {
+                try
+                {
+                    acquired = mutex.WaitOne(5000);
+                }
+                catch (System.Threading.AbandonedMutexException)
+                {
+                    acquired = true;
+                }
+
+                action();
+            }
+            finally
+            {
+                if (acquired)
+                {
+                    mutex.ReleaseMutex();
+                }
+                mutex.Dispose();
+            }
         }
 
         private static Dictionary<string, object> ReadJsonObject(Dictionary<string, object> values, string key)
@@ -2278,21 +2369,42 @@ namespace RecoNet
                 }
 
                 dynamic sheet = targetWorkbook.Worksheets[link.WorksheetName];
-                dynamic range = sheet.Range[link.CellAddress];
-                object rawValue = range.Value2;
-                valueText = ExcelValueToText(rawValue);
-                if (String.IsNullOrWhiteSpace(valueText))
+                string liveExpression = String.IsNullOrWhiteSpace(link.Expression) ? link.CellAddress : link.Expression;
+                string normalizedExpression = NormalizeCellAddress(liveExpression).Replace("×", "*").Replace("（", "(").Replace("）", ")");
+                CellRef onlyCell;
+                if (TryParseCellAddress(normalizedExpression, out onlyCell))
                 {
-                    error = "Excel 单元格为空";
+                    dynamic range = sheet.Range[normalizedExpression];
+                    object rawValue = range.Value2;
+                    valueText = ExcelValueToText(rawValue);
+                    if (String.IsNullOrWhiteSpace(valueText))
+                    {
+                        error = "Excel 单元格为空";
+                        return false;
+                    }
+
+                    if (!TryEvaluateDecimal(valueText, out quantity, out error))
+                    {
+                        error = "Excel 单元格值无法计算：" + error;
+                        return false;
+                    }
+
+                    return true;
+                }
+
+                string resolved = ResolveLiveExpression(sheet, normalizedExpression, out error);
+                if (resolved == null)
+                {
+                    return TryReadExcelCellValueFromFile(link, out valueText, out quantity, out error);
+                }
+
+                if (!TryEvaluateDecimal(resolved, out quantity, out error))
+                {
+                    error = "表达式计算失败：" + error;
                     return false;
                 }
 
-                if (!TryEvaluateDecimal(valueText, out quantity, out error))
-                {
-                    error = "Excel 单元格值无法计算：" + error;
-                    return false;
-                }
-
+                valueText = quantity.ToString(CultureInfo.InvariantCulture);
                 return true;
             }
             catch (COMException ex)
@@ -2439,6 +2551,71 @@ namespace RecoNet
                     if (!TryReadWorkbookCellValue(path, sheetName, token, out cellValue, out error))
                     {
                         error = token + " 读取失败：" + error;
+                        return null;
+                    }
+
+                    decimal parsed;
+                    string parseError;
+                    if (!TryEvaluateDecimal(cellValue, out parsed, out parseError))
+                    {
+                        error = token + " 单元格值无法计算：" + parseError;
+                        return null;
+                    }
+
+                    builder.Append(parsed.ToString(CultureInfo.InvariantCulture));
+                    continue;
+                }
+
+                if ("0123456789.+-*/() ".IndexOf(ch) >= 0)
+                {
+                    builder.Append(ch);
+                    i++;
+                    continue;
+                }
+
+                error = "表达式里包含不支持的字符：" + ch;
+                return null;
+            }
+
+            return builder.ToString();
+        }
+
+        private static string ResolveLiveExpression(dynamic sheet, string expression, out string error)
+        {
+            error = null;
+            StringBuilder builder = new StringBuilder();
+            for (int i = 0; i < expression.Length;)
+            {
+                char ch = expression[i];
+                if (Char.IsLetter(ch))
+                {
+                    int start = i;
+                    while (i < expression.Length && Char.IsLetter(expression[i]))
+                    {
+                        i++;
+                    }
+                    while (i < expression.Length && Char.IsDigit(expression[i]))
+                    {
+                        i++;
+                    }
+
+                    string token = expression.Substring(start, i - start).ToUpperInvariant();
+                    CellRef cell;
+                    if (!TryParseCellAddress(token, out cell))
+                    {
+                        error = "表达式里包含无法识别的单元格：" + token;
+                        return null;
+                    }
+
+                    string cellValue;
+                    try
+                    {
+                        dynamic range = sheet.Range[token];
+                        cellValue = ExcelValueToText((object)range.Value2);
+                    }
+                    catch (Exception ex)
+                    {
+                        error = token + " 读取失败：" + ex.Message;
                         return null;
                     }
 
@@ -3553,7 +3730,7 @@ namespace RecoNet
             public string ApiKey;
             public string Model = "deepseek-v4-pro";
             public string BaseUrl = "https://api.deepseek.com";
-            public int TimeoutSeconds = 8;
+            public int TimeoutSeconds = 30;
             public int MaxRowsPerBatch = 8;
 
             public bool IsAvailable

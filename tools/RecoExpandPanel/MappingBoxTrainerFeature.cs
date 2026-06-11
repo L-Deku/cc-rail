@@ -211,10 +211,7 @@ namespace RecoNet
 
         private static string BuildMappingTrainerBoxId(MappingTrainerTarget target)
         {
-            string raw = target == null ? "" : target.TargetKey;
-            int hash = raw.ToLowerInvariant().GetHashCode();
-            long positive = hash == Int32.MinValue ? (long)Int32.MaxValue + 1L : Math.Abs(hash);
-            return "box-" + positive.ToString(CultureInfo.InvariantCulture);
+            return BuildStableMappingBoxId(target == null ? "" : target.TargetKey);
         }
 
         private static void SaveMappingTrainerPairs(List<MappingTrainerPairRow> acceptedRows)
@@ -227,6 +224,9 @@ namespace RecoNet
             string dataDir = FindRecoQuotaDataDir();
             Directory.CreateDirectory(dataDir);
             string path = Path.Combine(dataDir, "mapping-boxes.jsonl");
+
+            WithMappingBoxesLock(delegate
+            {
             BackupMappingTrainerFile(path);
 
             List<Dictionary<string, string>> rows = new List<Dictionary<string, string>>();
@@ -258,7 +258,7 @@ namespace RecoNet
 
                 string quantityUnit = CleanTrainerText(pair.Quantity.Unit);
                 string sampleKey = NormalizeForSignature(quantityName) + "|" + NormalizeForSignature(quantityUnit);
-                string boxId = BuildMappingTrainerBoxId(pair.Target);
+                string boxId = FindExistingMappingBoxId(rows, pair.Target.TargetKey) ?? BuildMappingTrainerBoxId(pair.Target);
                 Dictionary<string, string> existing = rows.FirstOrDefault(row =>
                     String.Equals(GetFlat(row, "box_id"), boxId, StringComparison.OrdinalIgnoreCase) &&
                     String.Equals(GetFlat(row, "target_kind") + ":" + GetFlat(row, "target_code").Trim().ToUpperInvariant(), pair.Target.TargetKey, StringComparison.OrdinalIgnoreCase) &&
@@ -298,6 +298,7 @@ namespace RecoNet
 
             TrimMappingRows(rows, 30);
             File.WriteAllLines(path, rows.Select(ToFlatJson).ToArray(), Encoding.UTF8);
+            });
         }
 
         private static void BackupMappingTrainerFile(string path)

@@ -379,6 +379,9 @@ namespace RecoQuotaRecommend
 
     internal sealed class RecommendDialog : Form
     {
+        // 与 SearchIndexStore.Search 的入选阈值保持一致：本地索引达到该分数即可直接展示，不必等 AI。
+        private const int LocalIndexDisplayScore = 55;
+
         private readonly Form mainForm;
         private readonly DataGridView resultGrid;
         private readonly Label statusLabel;
@@ -890,15 +893,32 @@ namespace RecoQuotaRecommend
                 }
             }
 
-            RecommendationRow row = new RecommendationRow();
-            row.Item = item;
-            row.ConvertedValueText = item.ValueText;
-            row.Score = 0;
-            row.Reason = deepSeekSettings.CanRecommendQuota
-                ? "AI\u63a8\u8350\u7b49\u5f85\u8fd4\u56de"
-                : "DeepSeek AI\u672a\u542f\u7528\uff0c\u8bf7\u5728AI\u8bbe\u7f6e\u4e2d\u914d\u7f6e";
-            row.Source = "empty";
-            row.TargetKind = "quota";
+            // \u672c\u5730\u7d22\u5f15\u9ad8\u5206\u547d\u4e2d\u65f6\u76f4\u63a5\u5c55\u793a\uff08\u6765\u6e90=\u672c\u5730\u7d22\u5f15\uff09\uff0cDeepSeek \u4e0d\u53ef\u7528\u4e5f\u6709\u7ed3\u679c\uff1b
+            // AI \u8fd4\u56de\u4e14\u7f6e\u4fe1\u5ea6\u4e0d\u4f4e\u4e8e\u672c\u5730\u5206\u65f6\u624d\u5728 ApplyDeepSeekResults \u4e2d\u8986\u76d6\u3002
+            RecommendationRow row = null;
+            AiQuotaCandidate topLocal = aiCandidates
+                .Where(c => c != null && c.Quota != null)
+                .OrderByDescending(c => c.LocalScore)
+                .ThenBy(c => c.Quota.SortOrder)
+                .FirstOrDefault();
+            if (topLocal != null && topLocal.LocalScore >= LocalIndexDisplayScore)
+            {
+                row = topLocal.Quota.ToRecommendation(item, topLocal.LocalScore);
+            }
+
+            if (row == null)
+            {
+                row = new RecommendationRow();
+                row.Item = item;
+                row.ConvertedValueText = item.ValueText;
+                row.Score = 0;
+                row.Reason = deepSeekSettings.CanRecommendQuota
+                    ? "AI\u63a8\u8350\u7b49\u5f85\u8fd4\u56de"
+                    : "DeepSeek AI\u672a\u542f\u7528\uff0c\u8bf7\u5728AI\u8bbe\u7f6e\u4e2d\u914d\u7f6e";
+                row.Source = "empty";
+                row.TargetKind = "quota";
+            }
+
             row.AiMappingCandidates = mappingCandidates;
             row.AiCandidates = aiCandidates
                 .Where(c => c != null && c.Quota != null)
@@ -907,7 +927,8 @@ namespace RecoQuotaRecommend
                 .OrderByDescending(c => c.LocalScore)
                 .Take(deepSeekSettings.MaxCandidatesPerRow)
                 .ToList();
-            if (row.AiCandidates.Count == 0 && row.AiMappingCandidates.Count == 0)
+            if (String.Equals(row.Source, "empty", StringComparison.OrdinalIgnoreCase) &&
+                row.AiCandidates.Count == 0 && row.AiMappingCandidates.Count == 0)
             {
                 row.Reason = "AI\u65e0\u6709\u6548\u5019\u9009\uff0c\u8bf7\u4eba\u5de5\u6276\u6b63";
                 stats.EmptyRows++;
@@ -5553,13 +5574,25 @@ namespace RecoQuotaRecommend
 
         private void LoadFile()
         {
-            if (!File.Exists(path))
+            List<MappingBox> parsed = null;
+            WithMappingBoxesLock(delegate
             {
-                return;
+                parsed = ParseFile(path);
+            });
+            boxes.Clear();
+            boxes.AddRange(CanonicalizeBoxes(parsed));
+        }
+
+        private static List<MappingBox> ParseFile(string filePath)
+        {
+            List<MappingBox> result = new List<MappingBox>();
+            if (!File.Exists(filePath))
+            {
+                return result;
             }
 
             Dictionary<string, MappingBox> byId = new Dictionary<string, MappingBox>(StringComparer.OrdinalIgnoreCase);
-            foreach (string line in File.ReadAllLines(path, Encoding.UTF8))
+            foreach (string line in File.ReadAllLines(filePath, Encoding.UTF8))
             {
                 if (String.IsNullOrWhiteSpace(line))
                 {
@@ -5578,7 +5611,7 @@ namespace RecoQuotaRecommend
                 {
                     box = new MappingBox { BoxId = boxId };
                     byId[boxId] = box;
-                    boxes.Add(box);
+                    result.Add(box);
                 }
 
                 MappingTarget target = new MappingTarget
@@ -5606,11 +5639,96 @@ namespace RecoQuotaRecommend
                     box.Samples.Add(sample);
                 }
             }
+
+            return result;
+        }
+
+        // 旧版 box_id 由 String.GetHashCode 生成，跨进程位数不稳定且可能碰撞；
+        // 加载时按目标组合重算稳定 ID，同一组合的旧框自动合并，实现旧文件无感迁移。
+        private static List<MappingBox> CanonicalizeBoxes(List<MappingBox> parsed)
+        {
+            List<MappingBox> result = new List<MappingBox>();
+            Dictionary<string, MappingBox> byId = new Dictionary<string, MappingBox>(StringComparer.OrdinalIgnoreCase);
+            foreach (MappingBox box in parsed ?? new List<MappingBox>())
+            {
+                if (box.Targets.Count == 0)
+                {
+                    continue;
+                }
+
+                string canonicalId = BuildBoxId(box.Targets);
+                MappingBox existing;
+                if (!byId.TryGetValue(canonicalId, out existing))
+                {
+                    box.BoxId = canonicalId;
+                    byId[canonicalId] = box;
+                    result.Add(box);
+                    continue;
+                }
+
+                MergeBox(existing, box);
+            }
+
+            return result;
+        }
+
+        private static void MergeBox(MappingBox into, MappingBox from)
+        {
+            foreach (MappingTarget target in from.Targets)
+            {
+                if (!into.Targets.Any(t => String.Equals(t.TargetKey, target.TargetKey, StringComparison.OrdinalIgnoreCase)))
+                {
+                    into.Targets.Add(target);
+                }
+            }
+
+            foreach (MappingSample sample in from.Samples)
+            {
+                MappingSample existing = into.FindSample(sample.QuantityName, sample.QuantityUnit);
+                if (existing == null)
+                {
+                    into.Samples.Add(sample);
+                }
+                else if (String.Compare(sample.LastUsedAt ?? "", existing.LastUsedAt ?? "", StringComparison.Ordinal) > 0)
+                {
+                    existing.Weight = sample.Weight;
+                    existing.AcceptedCount = sample.AcceptedCount;
+                    existing.CorrectedCount = sample.CorrectedCount;
+                    existing.RejectedCount = sample.RejectedCount;
+                    existing.LastUsedAt = sample.LastUsedAt;
+                }
+            }
         }
 
         private void Save()
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path));
+            WithMappingBoxesLock(delegate
+            {
+                MergeFromDisk();
+                WriteFile();
+            });
+        }
+
+        // Excel联动AI匹配和扶正训练器也会写这个文件；整文件重写前先合并磁盘上的新增记录，避免覆盖丢失。
+        private void MergeFromDisk()
+        {
+            foreach (MappingBox diskBox in CanonicalizeBoxes(ParseFile(path)))
+            {
+                MappingBox memory = boxes.FirstOrDefault(b => String.Equals(b.BoxId, diskBox.BoxId, StringComparison.OrdinalIgnoreCase));
+                if (memory == null)
+                {
+                    boxes.Add(diskBox);
+                }
+                else
+                {
+                    MergeBox(memory, diskBox);
+                }
+            }
+        }
+
+        private void WriteFile()
+        {
             string temp = path + ".tmp";
             using (StreamWriter writer = new StreamWriter(temp, false, Encoding.UTF8))
             {
@@ -5650,13 +5768,55 @@ namespace RecoQuotaRecommend
             File.Move(temp, path);
         }
 
+        private const string MappingBoxesMutexName = "RecoQuotaData.mapping-boxes.lock";
+
+        // 学习库有多个写入方（本窗口扶正、RecoExpandPanel 的 Excel联动与训练器），
+        // 用跨程序集一致的命名互斥锁串行化读改写，名称必须与 RecoExpandPanel 保持一致。
+        private static void WithMappingBoxesLock(Action action)
+        {
+            Mutex mutex = new Mutex(false, MappingBoxesMutexName);
+            bool acquired = false;
+            try
+            {
+                try
+                {
+                    acquired = mutex.WaitOne(5000);
+                }
+                catch (AbandonedMutexException)
+                {
+                    acquired = true;
+                }
+
+                action();
+            }
+            finally
+            {
+                if (acquired)
+                {
+                    mutex.ReleaseMutex();
+                }
+                mutex.Dispose();
+            }
+        }
+
+        // 与 RecoExpandPanel 的 BuildStableMappingBoxId 使用同一套规则：对小写化目标键做 SHA1。
         private static string BuildBoxId(List<MappingTarget> targets)
         {
             string raw = String.Join("|", targets
                 .OrderBy(t => t.TargetKey, StringComparer.OrdinalIgnoreCase)
                 .Select(t => t.TargetKey)
                 .ToArray());
-            return "box-" + Math.Abs(raw.ToLowerInvariant().GetHashCode()).ToString(CultureInfo.InvariantCulture);
+            using (System.Security.Cryptography.SHA1 sha = System.Security.Cryptography.SHA1.Create())
+            {
+                byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(raw.ToLowerInvariant()));
+                StringBuilder builder = new StringBuilder("box-");
+                for (int i = 0; i < 8; i++)
+                {
+                    builder.Append(hash[i].ToString("x2", CultureInfo.InvariantCulture));
+                }
+
+                return builder.ToString();
+            }
         }
 
         public static int TargetSortRank(string targetKind, string code)
