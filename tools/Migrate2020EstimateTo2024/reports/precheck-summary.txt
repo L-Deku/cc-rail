@@ -1,17 +1,19 @@
 ﻿2020 概算/估算定额迁移预检
-BuiltAt: 2026-06-10 18:02:48
+BuiltAt: 2026-06-11 21:27:43
 Source: RecoData2020
 Target: RecoData2024
 Books: 21
 Sections: 713
 Quotas: 7385
-ConsumeRows: 289461
+ConsumeRows: 288467
 ResourceCodes: 4484
 DirectOrUnitDiffMappings: 3853
-UnitDifferences: 480
-SupplementResources: 631
+UnitDifferences: 511
+SupplementResources: 40
+AliasResourcesForOver9DigitTargets: 2
+ManualOverrideResources: 591
 SupplementResourcesWithoutCandidate: 0
-LowConfidenceSupplementCandidates: 60
+LowConfidenceSupplementCandidates: 21
 UnknownCodes: 0
 Conflicts: 0
 MaterialSupplementRange: 0-1009189999

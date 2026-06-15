@@ -132,21 +132,20 @@ $importerOut = Join-Path $outDir "QuotaLearningImporter.exe"
 $quotaOut = Join-Path $outDir "RecoQuotaRecommend.dll"
 $loaderOut = Join-Path $outDir "RecoPluginLoader.dll"
 $expandOut = Join-Path $outDir "RecoExpandPanel.dll"
-$guangcaiBridgeOut = Join-Path $outDir "GuangcaiBridge.exe"
 
 $npoi = Join-Path $referenceDir "NPOI.dll"
 $npoiOoxml = Join-Path $referenceDir "NPOI.OOXML.dll"
 $npoiOpenXml4Net = Join-Path $referenceDir "NPOI.OpenXml4Net.dll"
 $npoiOpenXmlFormats = Join-Path $referenceDir "NPOI.OpenXmlFormats.dll"
 $sharpZipLib = Join-Path $referenceDir "ICSharpCode.SharpZipLib.dll"
-$uiAutomationClient = Get-ChildItem -LiteralPath "$env:WINDIR\Microsoft.NET\assembly\GAC_MSIL\UIAutomationClient" -Recurse -Filter "UIAutomationClient.dll" |
+$harmony = Join-Path $PSScriptRoot "packages\Lib.Harmony.2.3.3\package\lib\net452\0Harmony.dll"
+if (-not (Test-Path -LiteralPath $harmony)) {
+  throw "Could not find Harmony runtime: $harmony"
+}
+$systemRuntime = Get-ChildItem -LiteralPath "$env:WINDIR\Microsoft.NET\assembly\GAC_MSIL\System.Runtime" -Recurse -Filter "System.Runtime.dll" |
   Select-Object -First 1 -ExpandProperty FullName
-$uiAutomationTypes = Get-ChildItem -LiteralPath "$env:WINDIR\Microsoft.NET\assembly\GAC_MSIL\UIAutomationTypes" -Recurse -Filter "UIAutomationTypes.dll" |
-  Select-Object -First 1 -ExpandProperty FullName
-$windowsBase = Get-ChildItem -LiteralPath "$env:WINDIR\Microsoft.NET\assembly\GAC_MSIL\WindowsBase" -Recurse -Filter "WindowsBase.dll" |
-  Select-Object -First 1 -ExpandProperty FullName
-if (-not $uiAutomationClient -or -not $uiAutomationTypes -or -not $windowsBase) {
-  throw "Could not find .NET UI Automation assemblies"
+if (-not $systemRuntime) {
+  throw "Could not find System.Runtime.dll"
 }
 $expandSources = Get-ChildItem -LiteralPath (Join-Path $root "tools\RecoExpandPanel") -Filter "*.cs" |
   Sort-Object Name |
@@ -165,6 +164,8 @@ Assert-NativeSuccess "Build QuotaLearningImporter"
   /reference:System.Drawing.dll `
   /reference:System.Data.dll `
   /reference:System.Web.Extensions.dll `
+  /reference:$systemRuntime `
+  /reference:$harmony `
   (Join-Path $PSScriptRoot "QuotaRecommendPanel.cs")
 Assert-NativeSuccess "Build RecoQuotaRecommend"
 
@@ -190,26 +191,18 @@ Assert-NativeSuccess "Build RecoPluginLoader"
   $expandSources
 Assert-NativeSuccess "Build RecoExpandPanel"
 
-& $csc /nologo /target:exe /platform:x86 /out:$guangcaiBridgeOut `
-  /reference:System.Windows.Forms.dll `
-  /reference:System.Drawing.dll `
-  /reference:$windowsBase `
-  /reference:$uiAutomationClient `
-  /reference:$uiAutomationTypes `
-  (Join-Path $root "GuangcaiBridge\GuangcaiBridge.cs")
-Assert-NativeSuccess "Build GuangcaiBridge"
-
 Copy-Item -LiteralPath $npoi -Destination $outDir -Force
 Copy-Item -LiteralPath $npoiOoxml -Destination $outDir -Force
 Copy-Item -LiteralPath $npoiOpenXml4Net -Destination $outDir -Force
 Copy-Item -LiteralPath $npoiOpenXmlFormats -Destination $outDir -Force
 Copy-Item -LiteralPath $sharpZipLib -Destination $outDir -Force
+Copy-Item -LiteralPath $harmony -Destination $outDir -Force
 
 foreach ($softwareDir in $targets) {
   Copy-Item -LiteralPath $loaderOut -Destination $softwareDir -Force
   Copy-Item -LiteralPath $expandOut -Destination $softwareDir -Force
   Copy-Item -LiteralPath $quotaOut -Destination $softwareDir -Force
-  Copy-Item -LiteralPath $guangcaiBridgeOut -Destination $softwareDir -Force
+  Copy-Item -LiteralPath $harmony -Destination $softwareDir -Force
 
   $iconSource = Join-Path $root "tools\RecoExpandPanel\icons"
   if (Test-Path -LiteralPath $iconSource) {
@@ -230,6 +223,13 @@ foreach ($softwareDir in $targets) {
     if (-not (Test-Path -LiteralPath $mappingPath)) {
       New-Item -ItemType File -Path $mappingPath -Force | Out-Null
     }
+    # 2024 targets still need the chapter-entry library files (kept per-method inside the files)
+    foreach ($chapterFile in @("chapter-entries.jsonl", "chapter-quota-library.jsonl")) {
+      $chapterSource = Join-Path (Join-Path $root "RecoQuotaData") $chapterFile
+      if (Test-Path -LiteralPath $chapterSource) {
+        Copy-Item -LiteralPath $chapterSource -Destination $dataTarget -Force
+      }
+    }
   }
 
   Ensure-TargetConfigs -SoftwareDir $softwareDir
@@ -240,4 +240,3 @@ Write-Host "Built $importerOut"
 Write-Host "Built $quotaOut"
 Write-Host "Built $loaderOut"
 Write-Host "Built $expandOut"
-Write-Host "Built $guangcaiBridgeOut"

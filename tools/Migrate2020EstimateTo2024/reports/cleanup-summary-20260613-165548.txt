@@ -1,0 +1,10 @@
+﻿Cleanup completed at 2026-06-13 16:55:56
+Deleted 定额库消耗: 288467
+Deleted 定额库: 7385
+Deleted 定额节索引: 713
+Deleted 定额库索引: 21
+Deleted 材料单价库 supplements: 39
+Deleted 台班定额库 supplements: 1
+Remaining migrated rows: 0
+Before report: C:\Users\谢刚\Desktop\自动预算\tools\Migrate2020EstimateTo2024\reports\cleanup-before-20260613-165548.csv
+Resource candidate report: C:\Users\谢刚\Desktop\自动预算\tools\Migrate2020EstimateTo2024\reports\cleanup-resource-candidates-20260613-165548.csv

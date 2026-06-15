@@ -13,7 +13,11 @@ $source = Join-Path $PSScriptRoot "Migrate2020EstimateTo2024.cs"
 
 & $csc /nologo /platform:x86 /target:exe /out:$out `
   /reference:System.Data.dll `
+  /reference:System.IO.Compression.dll `
+  /reference:System.IO.Compression.FileSystem.dll `
   /reference:System.Web.Extensions.dll `
+  /reference:System.Xml.dll `
+  /reference:System.Xml.Linq.dll `
   $source
 
 if ($LASTEXITCODE -ne 0) {

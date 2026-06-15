@@ -109,7 +109,6 @@ namespace RecoNet
                     InstallAllContextMenus(mainForm);
                     InstallTreeMouseHook(mainForm);
                     InstallNativeTreeMenuFilter(mainForm);
-                    EnsureGuangcaiLinkRuntime(mainForm);
                     return;
                 }
 
@@ -118,7 +117,6 @@ namespace RecoNet
                 InstallNativeTreeMenuFilter(mainForm);
                 InstallQuotaGridShortcuts(mainForm);
                 EnsureExcelLinkRuntime(mainForm);
-                EnsureGuangcaiLinkRuntime(mainForm);
                 if (menus == 0)
                 {
                     Log("Context menus not found.");

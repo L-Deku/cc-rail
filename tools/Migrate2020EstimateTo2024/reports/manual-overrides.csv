@@ -1,0 +1,592 @@
+﻿kind,old_code,new_code,source_name,target_name,source_unit,target_unit,manual_rule
+Material,1010003,1070901,普通水泥 42.5 级,普通硅酸盐水泥 P·O42.5,kg,kg,L列指定电算代号
+Material,1240014,1086657,碎石 40以内,碎石 ≤40 (圬工用),m3,m3,L列指定电算代号
+Material,1260022,1080313,中粗砂,中粗砂 (圬工用),m3,m3,L列指定电算代号
+Material,1260132,1093701,粉煤灰(混凝土工程),粉煤灰Ⅱ级,kg,t,L列指定电算代号
+Material,3005008,1174931,萘系减水剂,减水剂,kg,kg,1=使用best_candidate
+Material,3613025,1067101,六角螺母 Q345（16Mn),六角螺母 Q345,kg,kg,1=使用best_candidate
+Material,3710013,1250001,电焊条 钢,钢电焊条,kg,kg,1=使用best_candidate
+Machine,9102614,9102625,单筒慢速卷扬机 ≤50kN,单筒慢速卷扬机 ≤50kN/170m,台班,台班,1=使用best_candidate
+Machine,9105306,9105326,单级离心清水泵 ≤25m3/h-50m,单级离心清水泵 ≤25m³/h-50m,台班,台班,1=使用best_candidate
+Machine,9105305,9105325,单级离心清水泵 ≤25m3/h-32m,单级离心清水泵 ≤25m³/h-32m,台班,台班,1=使用best_candidate
+Machine,9100003,9100010,履带式液压单斗挖掘机 ≤1.0m3,履带式液压单斗挖掘机 ≤1.0m³,台班,台班,1=使用best_candidate
+Material,6000094,8065833,Ｕ形挂环 U-7,U形挂环 U-7,个,个,1=使用best_candidate
+Material,4840015,1064551,Ｕ形螺丝 U-1880 L=110,Ｕ形螺栓 U-1880,个,个,1=使用best_candidate
+Material,4826050,8060649,Ｕ形抱箍,Ｕ形抱箍 φ300,套,套,L列指定电算代号
+Material,2000024,1013433,钢板 16Mnq δ=6～10,钢板 Q345q δ=6～10,kg,kg,1=使用best_candidate
+Material,2920013,1168881,工业用凡士林 40号,凡士林 40号,kg,kg,1=使用best_candidate
+Material,4842130,7052861,防震锤 FD-1,防振锤 FD-1,个,个,1=使用best_candidate
+Material,4842131,7052883,防震锤 FD-2,防振锤 FD-2,个,个,1=使用best_candidate
+Material,3711012,1251111,紫铜电焊条 铜107 Φ3.2,紫铜电焊条 铜107,kg,kg,1=使用best_candidate
+Material,1240011,1086241,碎石 16以内,碎石 ≤16 (圬工用),m3,m3,L列指定电算代号
+Machine,9108641,9107641,吹风机 ≤4m3/min,吹风机 ≤4m³/min,台班,台班,1=使用best_candidate
+Material,3005035,1177991,固壁剂 利钻宝 NDM-1,固壁剂 NDM-1,kg,kg,1=使用best_candidate
+Material,3372212,1224289,聚乙烯给水管（PE） 0.6MPa   de160,聚乙烯给水管 0.6MPa De160,m,m,1=使用best_candidate
+Material,4020109,1270833,导向水平钻孔拉管机钻杆 Φ73×4570,导向水平钻孔拉管机钻杆 φ73 L=4.57m,根,根,1=使用best_candidate
+Machine,9105351,9105381,离心式泥浆泵 ≤47m3/h-19m,离心式泥浆泵 ≤47m³/h-19m,台班,台班,1=使用best_candidate
+Material,1423504,1135293,单电缆混凝土槽 1000×160×160(80直型),单电缆混凝土槽 1000×160×160,根,个,1=使用best_candidate
+Material,1240012,1086449,碎石 25以内,碎石 ≤25 (圬工用),m3,m3,L列指定电算代号
+Material,1960027,1012913,镀锌角钢,镀锌角钢 Q235-A,kg,kg,L列指定电算代号
+Material,2030003,1013901,镀锌钢板 δ=0.3～5,镀锌钢板,kg,kg,1=使用best_candidate
+Machine,9101002,9101002,电动空气压缩机 ≤0.6m3/min,电动活塞式空气压缩机 ≤0.6m³/min,台班,台班,1=使用best_candidate
+Material,4715017,7010571,铜芯塑料线 BV 500V 10mm2,阻燃铜芯塑料线 ZR-BV 500V 10mm2,m,m,1=使用best_candidate
+Material,4741145,1306181,镀锌钢制槽式桥架 400×200,镀彩钢制槽式桥架 400×200,m,m,1=使用best_candidate
+Material,4741146,1306284,镀锌钢制槽式桥架 600×200,镀彩钢制槽式桥架 600×200,m,m,1=使用best_candidate
+Material,4741147,1306387,镀锌钢制槽式桥架 800×200,镀彩钢制槽式桥架 800×200,m,m,1=使用best_candidate
+Material,4741164,1306902,镀锌钢制梯级式桥架 200×150,镀彩钢制梯级式桥架 200×150,m,m,1=使用best_candidate
+Material,4741165,1307005,镀锌钢制梯级式桥架 400×200,镀彩钢制梯级式桥架 400×200,m,m,1=使用best_candidate
+Material,4741166,1307108,镀锌钢制梯级式桥架 600×200,镀彩钢制梯级式桥架 600×200,m,m,1=使用best_candidate
+Material,3380019,1206211,聚苯乙烯泡沫塑料板 100×100×30,聚苯乙烯泡沫塑料板 δ=10～30,kg,m3,1=使用best_candidate
+Material,8800102,6092209,减震橡胶垫,减振橡胶垫,个,个,1=使用best_candidate
+Material,4416023,1310001,铭牌 搪瓷,搪瓷铭牌,个,个,1=使用best_candidate
+Material,4753115,7018950,10kV户外三芯冷缩电缆终端头 25～35mm2,10kV户外三芯冷缩电缆终端头 25～50mm2,个,个,1=使用best_candidate
+Material,4753120,7018703,10kV三芯冷缩中间电缆头 25～35mm2,10kV三芯冷缩中间电缆头 25～50mm2,个,个,1=使用best_candidate
+Material,4753117,7018969,10kV户外三芯冷缩电缆终端头 95～120mm2,10kV户外三芯冷缩电缆终端头 70～120mm2,个,个,1=使用best_candidate
+Material,4753122,7018741,10kV三芯冷缩中间电缆头 95～120mm2,10kV三芯冷缩中间电缆头 70～120mm2,个,个,1=使用best_candidate
+Material,4753119,7019007,10kV户外三芯冷缩电缆终端头 240～400mm2,10kV户外三芯冷缩电缆终端头 300～400mm2,个,个,L列指定电算代号
+Material,4753124,7018779,10kV三芯冷缩中间电缆头 240～300mm2,10kV三芯冷缩中间电缆头 300～400mm2,个,个,1=使用best_candidate
+Material,4753040,7018646,10kV单芯冷缩电缆终端头 T型、插拔式 95～120mm2,10kV单芯冷缩电缆终端头 T型、插拔式 70～120mm2,个,个,L列指定电算代号
+Material,4753132,7018494,10kV单芯冷缩中间电缆头 95～120mm2,10kV单芯冷缩中间电缆头 70～120mm2,个,个,1=使用best_candidate
+Material,4753041,7018665,10kV单芯冷缩电缆终端头 T型、插拔式 150～185mm2,10kV单芯冷缩电缆终端头 T型、插拔式 150～240mm2,个,个,1=使用best_candidate
+Material,4753133,7018513,10kV单芯冷缩中间电缆头 150～185mm2,10kV单芯冷缩中间电缆头 150～240mm2,个,个,1=使用best_candidate
+Material,4753042,7018684,10kV单芯冷缩电缆终端头 T型、插拔式 240～400mm2,10kV单芯冷缩电缆终端头 T型、插拔式 300～400mm2,个,个,L列指定电算代号
+Material,4753134,7018532,10kV单芯冷缩中间电缆头 240～400mm2,10kV单芯冷缩中间电缆头 300～400mm2,个,个,1=使用best_candidate
+Material,2400210,1016761,铜线 16号,铜线,kg,kg,1=使用best_candidate
+Material,4753234,7019425,35kV户内三芯冷缩电缆终端头 50～95mm2,35kV户内三芯冷缩电缆终端头 35～95mm2,个,个,1=使用best_candidate
+Material,4753236,7019577,35kV户内三芯冷缩电缆终端头 240～300mm2,35kV户内三芯热缩电缆终端头 240～400mm2,个,个,1=使用best_candidate
+Material,4753229,7019349,35kV三芯冷缩中间电缆头 240～300mm2,35kV三芯冷缩中间电缆头 240～400mm2,个,个,1=使用best_candidate
+Machine,9102613,9102623,单筒慢速卷扬机 ≤30kN,单筒慢速卷扬机 ≤30kN/150m,台班,台班,1=使用best_candidate
+Material,4812315,7047021,13600#瓷件,13600号瓷件,个,个,1=使用best_candidate
+Material,4715020,7010381,铜芯塑料线 BV 500V 35mm2,铝芯塑料线 BLV 500V 35mm2,m,m,1=使用best_candidate
+Material,4753110,7018874,10kV户内三芯冷缩电缆终端头 25～35mm2,10kV户内三芯冷缩电缆终端头 25～50mm2,个,个,1=使用best_candidate
+Material,4753112,7018893,10kV户内三芯冷缩电缆终端头 95～120mm2,10kV户内三芯冷缩电缆终端头 70～120mm2,个,个,1=使用best_candidate
+Material,4753114,7018931,10kV户内三芯冷缩电缆终端头 240～400mm2,10kV户内三芯冷缩电缆终端头 300～400mm2,个,个,L列指定电算代号
+Material,4715014,7010894,铜芯塑料线 BV 500V 2.5mm2,铜芯塑料软线 BVR 500V 2.5mm2,m,m,1=使用best_candidate
+Machine,9101005,9101005,电动空气压缩机 ≤6m3/min,电动活塞式空气压缩机 ≤6m³/min,台班,台班,1=使用best_candidate
+Material,1280014,1171225,过氯乙烯胶液 G98-1 G98-2,过氯乙烯胶液,kg,kg,1=使用best_candidate
+Material,4740018,7050463,控制电缆头套管 KT2-7 14芯以下,控制电缆头套管 KT2-7 ≤14芯,只,只,1=使用best_candidate
+Material,4740019,7050485,控制电缆头套管 KT2-10 24芯以下,控制电缆头套管 KT2-10 ≤24芯,只,只,1=使用best_candidate
+Material,4822101,7018076,封闭型母线 宽850/360mm2,封闭型母线 宽850/360mm2 单片载流量1125A,m/单相,m/单相,1=使用best_candidate
+Material,4715018,7010362,铜芯塑料线 BV 500V 16mm2,铝芯塑料线 BLV 500V 16mm2,m,m,1=使用best_candidate
+Material,4826016,7054907,Ｕ形抱箍(Ⅴ),Ｕ形抱箍(Ⅴ) BLJ-10,套,套,L列指定电算代号
+Material,4715023,7010685,铜芯塑料线 BV 500V 95mm2,阻燃铜芯塑料线 ZR-BV 500V 95mm2,m,m,1=使用best_candidate
+Material,4715024,7010704,铜芯塑料线 BV 500V 120mm2,阻燃铜芯塑料线 ZR-BV 500V 120mm2,m,m,L列指定电算代号
+Material,4826015,7054885,Ｕ形抱箍(Ⅳ),Ｕ形抱箍(Ⅳ) BLJ-10,套,套,L列指定电算代号
+Material,4828047,7055677,支座抱箍,支座抱箍(双) D193,套,套,L列指定电算代号
+Material,4841019,1064801,Ｕ形螺栓带帽 M16,Ｕ形螺栓带帽 M16×290,套,套,1=使用best_candidate
+Material,3002028,1017307,铝银粉 250目,铝银粉 粒径≤250,kg,kg,1=使用best_candidate
+Material,2700015,3010361,钢轨 38～50kg,钢轨 ≤50kg,t,t,1=使用best_candidate
+Material,4217011,7023301,马路弯灯 臂长1200以下,马路弯灯 臂长≤1200,套,套,1=使用best_candidate
+Material,4217012,7023361,马路弯灯 臂长1200以上,马路弯灯 臂长＞1200,套,套,L列指定电算代号
+Material,5300383,8047151,镀锌钢管柱 焊接 (Q235),镀锌H形钢柱 Q235,t,t,1=使用best_candidate
+Material,2020001,1013875,冷轧钢板 Q235-A δ=0.3～3,冷轧钢板,kg,kg,L列指定电算代号
+Material,2348111,1066151,锁紧螺母 1.5×DN25～32,锁紧螺母 DN25～32×1.5,个,个,1=使用best_candidate
+Material,2348110,1066101,锁紧螺母 1.5×DN15～20,锁紧螺母 DN15～20×1.5,个,个,1=使用best_candidate
+Material,4220010,7023721,隧道灯具 T5D,隧道灯具 IP65,套,套,1=使用best_candidate
+Material,1962001,7023781,型钢,隧道灯具 IP66,kg,套,L列指定电算代号
+Material,2348113,1066251,锁紧螺母 3×DN15～20,锁紧螺母 DN15～20×3,个,个,1=使用best_candidate
+Material,2348117,1066451,锁紧螺母 3×DN80～100,锁紧螺母 DN80～100×3,个,个,1=使用best_candidate
+Material,4715026,7010742,铜芯塑料线 BV 500V 185mm2,阻燃铜芯塑料线 ZR-BV 500V 185mm2,m,m,L列指定电算代号
+Material,2348114,1066301,锁紧螺母 3×DN25～32,锁紧螺母 DN25～32×3,个,个,1=使用best_candidate
+Material,2348115,1066351,锁紧螺母 3×DN40～50,锁紧螺母 DN40～50×3,个,个,1=使用best_candidate
+Material,4715021,7010647,铜芯塑料线 BV 500V 50mm2,阻燃铜芯塑料线 ZR-BV 500V 50mm2,m,m,1=使用best_candidate
+Material,4510010,6060001,避雷针 1.5m,接闪针 1.5m,根,根,1=使用best_candidate
+Material,4510011,6060099,避雷针 3m,接闪针 3m,根,根,1=使用best_candidate
+Material,4510012,6060197,避雷针 7m,接闪针 7m,根,根,1=使用best_candidate
+Material,4510013,6060295,避雷针 12m,接闪针 12m,根,根,1=使用best_candidate
+Material,3647519,1069201,垫片 钢板8×70×70,钢板垫片 70×70×8,块,块,1=使用best_candidate
+Material,4510017,6060393,避雷针 20m BLJ-30,接闪针 20m,座,座,1=使用best_candidate
+Material,6144313,6065685,避雷针底脚 30×260×260,接闪针底脚 30×260×260,块,块,1=使用best_candidate
+Material,4510018,6060491,避雷针 25m BLJ-28/29,接闪针 25m,座,座,1=使用best_candidate
+Material,4510019,6060589,避雷针 30m,接闪针 30m,座,座,1=使用best_candidate
+Material,2523116,1017255,V型镀锌固定条 ≤Φ32,V形镀锌固定条 φ≤32,个,个,1=使用best_candidate
+Material,3394114,1034047,聚四氟乙烯带 0.1×60,聚四氟乙烯带 60×0.1,kg,kg,1=使用best_candidate
+Material,7317214,5037085,低烟无卤耐火屏蔽软线 WDN-RYYP 2芯1.5mm2,低烟无卤耐火屏蔽软线 WDZN-RYYP 2芯1.5mm2,m,m,1=使用best_candidate
+Material,1280010,1173231,玻璃胶,玻璃胶 310g,支,支,1=使用best_candidate
+Material,4114014,7051761,塑料线卡 15以下,塑料线卡 ≤15,百个,百个,1=使用best_candidate
+Machine,9109411,9120135,"数字存储示波器 12GHz～20GHz,＞2通道",数字存储示波器,台班,台班,L列指定电算代号
+Material,1410014,1132053,预应力混凝土电杆 Φ190×24000(上12中6下6),预应力混凝土电杆 φ190×24000,根,根,1=使用best_candidate
+Material,4732014,7016347,铝芯绝缘架空电缆 10kV JKLYJ 120mm2,铝芯架空绝缘电缆 10kV JKLYJ 120mm2,m,m,1=使用best_candidate
+Material,4732015,7016366,铝芯绝缘架空电缆 10kV JKLYJ 150mm2,铝芯架空绝缘电缆 10kV JKLYJ 150mm2,m,m,1=使用best_candidate
+Material,4732016,7016385,铝芯绝缘架空电缆 10kV JKLYJ 185mm2,铝芯架空绝缘电缆 10kV JKLYJ 185mm2,m,m,1=使用best_candidate
+Material,4732017,7016404,铝芯绝缘架空电缆 10kV JKLYJ 240mm2,铝芯架空绝缘电缆 10kV JKLYJ 240mm2,m,m,1=使用best_candidate
+Material,3372265,1224545,高密度聚乙烯管（HDPE） de160,高密度聚乙烯管 De160,m,m,1=使用best_candidate
+Material,4731155,7014960,电力电缆 YJV22 1kV 4×10＋1×6mm2,电力电缆 YJV22 1kV 4×10mm2＋1×6mm2,m,m,1=使用best_candidate
+Material,4731156,7014979,电力电缆 YJV22 1kV 4×16＋1×10mm2,电力电缆 YJV22 1kV 4×16mm2＋1×10mm2,m,m,1=使用best_candidate
+Material,4731157,7015017,电力电缆 YJV22 1kV 4×25＋1×16mm2,电力电缆 YJV22 1kV 4×35mm2＋1×16mm2,m,m,1=使用best_candidate
+Material,4731158,7015017,电力电缆 YJV22 1kV 4×35＋1×16mm2,电力电缆 YJV22 1kV 4×35mm2＋1×16mm2,m,m,1=使用best_candidate
+Material,4731159,7015036,电力电缆 YJV22 1kV 4×50＋1×25mm2,电力电缆 YJV22 1kV 4×50mm2＋1×25mm2,m,m,1=使用best_candidate
+Material,4731160,7015055,电力电缆 YJV22 1kV 4×70＋1×35mm2,电力电缆 YJV22 1kV 4×70mm2＋1×35mm2,m,m,1=使用best_candidate
+Material,4731161,7015074,电力电缆 YJV22 1kV 4×95＋1×50mm2,电力电缆 YJV22 1kV 4×95mm2＋1×50mm2,m,m,1=使用best_candidate
+Material,4731162,7015112,电力电缆 YJV22 1kV 4×120＋1×70mm2,电力电缆 YJV22 1kV 4×150mm2＋1×70mm2,m,m,1=使用best_candidate
+Material,4731163,7015112,电力电缆 YJV22 1kV 4×150＋1×70mm2,电力电缆 YJV22 1kV 4×150mm2＋1×70mm2,m,m,1=使用best_candidate
+Material,4731164,7015131,电力电缆 YJV22 1kV 4×185＋1×95mm2,电力电缆 YJV22 1kV 4×185mm2＋1×95mm2,m,m,1=使用best_candidate
+Material,4731165,7015150,电力电缆 YJV22 1kV 4×240＋1×120mm2,电力电缆 YJV22 1kV 4×240mm2＋1×120mm2,m,m,1=使用best_candidate
+Material,4732653,7012338,电力电缆 WDZN-YJY23 0.6/1kV  5×16mm2,低烟无卤阻燃电力电缆 WDZ-YJY23 0.6/1kV 5×16mm2,m,m,1=使用best_candidate
+Material,4732656,7012395,电力电缆 WDZN-YJY23 0.6/1kV  4×50+1×25mm2,低烟无卤阻燃电力电缆 WDZ-YJY23 0.6/1kV 4×50mm2+1×25mm2,m,m,1=使用best_candidate
+Material,1110550,1290001,木模板(底模和端模),木模板(底模和端模) δ=20,m2,m2,1=使用best_candidate
+Material,1240115,1088321,卵石 80以内,卵石 ≤40（填筑用）,m3,m3,L列指定电算代号
+Material,5100183,1065101,镀锌基础螺栓 Q345(16Mn),镀锌基础螺栓 Q345,kg,kg,1=使用best_candidate
+Machine,9101102,9101055,内燃空气压缩机 ≤9m3/min,内燃活塞式空气压缩机 ≤9m³/min,台班,台班,1=使用best_candidate
+Material,3004035,1172109,氯化钴,氯化钴 100g,瓶,瓶,1=使用best_candidate
+Material,8999007,8999007,电,电(采用地方电源),kWh,kWh,L列指定电算代号
+Machine,9102612,9102622,单筒慢速卷扬机 ≤20kN,单筒慢速卷扬机 ≤20kN/100m,台班,台班,1=使用best_candidate
+Machine,9102661,9102721,液压滑升机械（含50个千斤顶）,液压滑升机械 含50个3t千斤顶,台班,台班,1=使用best_candidate
+Machine,9105521,9105521,水环式真空泵 ≤204m3/h,水环式真空泵 ≤204m³/h,台班,台班,1=使用best_candidate
+Machine,9109631,9120185,SDH/MSTP分析仪（2.5Gb/s及以下）,SDH/MSTP/OTN数字传输分析仪,台班,台班,1=使用best_candidate
+Material,2811035,1297561,钢管脚手架(含扣件等）,钢管脚手架,kg,kg,1=使用best_candidate
+Material,7316640,5036073,低烟无卤阻燃型铜芯聚氯乙烯屏蔽软线 WDZ-RYYP  2芯1.0mm2,低烟无卤阻燃屏蔽软线 WDZ-RYYP 2芯1.0mm2,m,m,1=使用best_candidate
+Material,7316642,5036165,低烟无卤阻燃型铜芯聚氯乙烯屏蔽软线 WDZ-RYYP   4芯1.0mm2,低烟无卤阻燃屏蔽软线 WDZ-RYYP 4芯1.0mm2,m,m,1=使用best_candidate
+Material,7316643,5036211,低烟无卤阻燃型铜芯聚氯乙烯屏蔽软线 WDZ-RYYP   6芯1.0mm2,低烟无卤阻燃屏蔽软线 WDZ-RYYP 6芯1.0mm2,m,m,1=使用best_candidate
+Material,8221046,6037237,塑料配线名牌,塑料配线铭牌,个,个,1=使用best_candidate
+Machine,9100671,9112081,升降平台车  8t载货汽车改制,移动式内燃升降平台车  8~15m,台班,台班,L列指定电算代号
+Machine,9109021,9120019,电视测试信号发生器,视频信号发生器,台班,台班,1=使用best_candidate
+Material,5300385,8047151,镀锌钢管柱 无缝( Q235),镀锌H形钢柱 Q235,t,t,1=使用best_candidate
+Material,4732652,7012319,电力电缆 WDZN-YJY23 0.6/1kV  5×10mm2,低烟无卤阻燃电力电缆 WDZ-YJY23 0.6/1kV 5×10mm2,m,m,1=使用best_candidate
+Material,4732655,7012395,电力电缆 WDZN-YJY23 0.6/1kV  4×35+1×25mm2,低烟无卤阻燃电力电缆 WDZ-YJY23 0.6/1kV 4×50mm2+1×25mm2,m,m,1=使用best_candidate
+Material,1413005,1131405,钢筋混凝土电杆 Φ170×11000,预应力混凝土电杆 φ190×11000,根,根,1=使用best_candidate
+Material,7510113,5050376,光缆终端盒(含接续材料) 28芯,光缆终端盒(含接续材料) 24芯,套,个,L列指定电算代号
+Material,7912034,5042551,室内电缆防护钢槽吊架 宽200,室内电缆防护钢槽吊架 宽200～400,套,套,1=使用best_candidate
+Material,7912035,5042551,室内电缆防护钢槽吊架 宽400,室内电缆防护钢槽吊架 宽200～400,套,套,1=使用best_candidate
+Material,7912060,5042636,室内电缆防护钢槽吊架 宽700,室内电缆防护钢槽吊架 宽500～700,套,套,1=使用best_candidate
+Material,7912092,5042721,室内电缆防护钢槽吊架 宽800,室内电缆防护钢槽吊架 宽800～900,套,套,1=使用best_candidate
+Material,7912090,5042636,室内电缆防护钢槽吊架 宽500,室内电缆防护钢槽吊架 宽500～700,套,套,1=使用best_candidate
+Material,7912094,5042721,室内电缆防护钢槽吊架 宽900,室内电缆防护钢槽吊架 宽800～900,套,套,1=使用best_candidate
+Material,7912032,5042296,室内电缆防护钢槽托臂 宽200,室内电缆防护钢槽托臂 宽200～400,套,套,1=使用best_candidate
+Material,7912033,5042296,室内电缆防护钢槽托臂 宽400,室内电缆防护钢槽托臂 宽200～400,套,套,1=使用best_candidate
+Material,7912061,5042381,室内电缆防护钢槽托臂 宽700,室内电缆防护钢槽托臂 宽500～700,套,套,1=使用best_candidate
+Material,7912093,5042466,室内电缆防护钢槽托臂 宽800,室内电缆防护钢槽托臂 宽800～900,套,套,1=使用best_candidate
+Material,7912091,5042381,室内电缆防护钢槽托臂 宽500,室内电缆防护钢槽托臂 宽500～700,套,套,1=使用best_candidate
+Material,7912095,5042466,室内电缆防护钢槽托臂 宽900,室内电缆防护钢槽托臂 宽800～900,套,套,1=使用best_candidate
+Material,7912073,5092989,PDP屏/LCD屏吊架,LCD屏吊架,套,套,1=使用best_candidate
+Material,7912074,5093321,PDP屏/LCD屏支架,LCD屏支架,套,套,1=使用best_candidate
+Material,7912079,5096309,有柱雨棚吊杆,无柱雨棚吊杆,m,m,1=使用best_candidate
+Material,7912096,5099629,线阵列安装支架(含固定件）,线阵列安装支架,套,套,1=使用best_candidate
+Material,7316580,5035153,低烟无卤阻燃型铜芯聚氯乙烯软线 WDZ-RYY   2芯1.0mm2,低烟无卤阻燃软线 WDZ-RYY 2芯1.0mm2,m,m,1=使用best_candidate
+Material,7316660,5035843,无卤低烟阻燃软线 WDZ-RYYP 2芯2.5mm2,低烟无卤阻燃软线 WDZ-RYY 2芯2.5mm2,m,m,1=使用best_candidate
+Material,7317217,5037131,低烟无卤耐火屏蔽软线 WDN-RYYP 2芯2.5mm2,低烟无卤耐火屏蔽软线 WDZN-RYYP 2芯2.5mm2,m,m,1=使用best_candidate
+Material,3330113,1026777,绝缘橡胶板 δ=6～12,橡胶板 δ=11～12,kg,kg,1=使用best_candidate
+Material,4716448,5034785,阻燃铜芯聚氯乙烯绝缘电缆ZR-BV 3×16+2×10mm2,阻燃铜芯聚氯乙烯绝缘绞型软线 ZR- RVS 2芯1.0mm2,m,m,1=使用best_candidate
+Material,1423912,1037855,PVC标桩（140×140×800）,复合材料标桩 140×140×800,根,根,1=使用best_candidate
+Material,7316657,5035705,无卤低烟阻燃软线 WDZ-RYYP 4芯2.0mm2,低烟无卤阻燃软线 WDZ-RYY 4芯2.0mm2,m,m,1=使用best_candidate
+Material,1240113,1088321,卵石 40以内,卵石 ≤40（填筑用）,m3,m3,1=使用best_candidate
+Machine,9100503,9100403,轮胎式装载机 ≤2m3,轮胎式装载机 ≤2m³,台班,台班,1=使用best_candidate
+Machine,9103302,9103302,混凝土搅拌输送车 ≤6m3,混凝土搅拌输送车 ≤6m³,台班,台班,1=使用best_candidate
+Machine,9104015,9104015,混凝土搅拌站 ≤50m3/h,混凝土搅拌站 ≤50m³/h,台班,台班,1=使用best_candidate
+Machine,9104215,9104125,混凝土输送泵车 ≤75m3/h,混凝土输送泵车 ≤75m³/h,台班,台班,1=使用best_candidate
+Material,1910108,1010079,带肋钢筋(HRB400) Φ18～25,带肋钢筋 HRB400 18≤φ＜28,kg,kg,L列指定电算代号
+Machine,9100002,9100008,履带式液压单斗挖掘机 ≤0.8m3,履带式液压单斗挖掘机 ≤0.8m³,台班,台班,1=使用best_candidate
+Material,1110519,3041249,支撑垫木(硬）,垫木,m3,m3,1=使用best_candidate
+Machine,9105355,9105383,离心式泥浆泵 ≤150m3/h-39m,离心式泥浆泵 ≤150m³/h-39m,台班,台班,1=使用best_candidate
+Machine,9105361,9105391,往复式泥浆泵 ≤15m3/h-250m,往复式泥浆泵 ≤15m³/h-250m,台班,台班,1=使用best_candidate
+Machine,9100001,9100006,履带式液压单斗挖掘机 ≤0.6m3,履带式液压单斗挖掘机 ≤0.6m³,台班,台班,1=使用best_candidate
+Machine,9100501,9100401,轮胎式装载机 ≤1m3,轮胎式装载机 ≤1m³,台班,台班,1=使用best_candidate
+Machine,9102019,9102021,"爬升式塔式起重机 ≤50m×1.2/6t,h=40m","塔式起重机 ≤50m×6t,h≤40m",台班,台班,1=使用best_candidate
+Material,1280036,1174727,303粘结剂,303黏结剂,kg,kg,1=使用best_candidate
+Material,1300259,1122179,金属釉面砖,金属釉面砖 150×200,m2,m2,1=使用best_candidate
+Material,1300074,1106161,190厚混凝土小型空心砌块,混凝土小型空心砌块 δ=190,m3,m3,1=使用best_candidate
+Material,2550502,4032443,竖向龙骨 100×5×0.8,边龙骨TL23×23,m,m,L列指定电算代号
+Material,2550503,4032399,轻钢龙骨 100×40×0.8,轻钢龙骨LLQ-C75 75×50,m,m,L列指定电算代号
+Material,2550552,4033389,通贯横撑龙骨Q-1 30×12,U形轻钢龙骨CB30×12,m,m,1=使用best_candidate
+Material,2550553,4033125,轻钢龙骨支撑卡,T形轻钢龙骨TB24×26,个,m,L列指定电算代号
+Material,2550554,4033477,轻钢龙骨卡托,T形轻钢龙骨挂件CB33-2,个,个,L列指定电算代号
+Material,1252130,4039087,防水石膏板,石膏板 9.5 耐水,m2,m2,L列指定电算代号
+Material,2550518,4030881,硅酸钙板,硅酸钙板 δ=4,m2,m2,1=使用best_candidate
+Material,1130208,1147249,木丝板,木丝板 1830×610×25,m2,m2,L列指定电算代号
+Machine,9102302,9102303,门式起重机 ≤10t-22m,"门式起重机 ≤10t-22m,h≤12m",台班,台班,1=使用best_candidate
+Material,3310011,1225673,高压胶管 d40 Pg=100kg/cm2,高压胶管 D40,m,m,1=使用best_candidate
+Machine,9101006,9101006,电动空气压缩机 ≤9m3/min,电动活塞式空气压缩机 ≤9m³/min,台班,台班,1=使用best_candidate
+Machine,9102303,9102304,门式起重机 ≤20t-22m,"门式起重机 ≤20t-22m,h≤12m",台班,台班,1=使用best_candidate
+Machine,9108301,9107301,超声波探伤机 CTS-22,超声波探伤机,台班,台班,1=使用best_candidate
+Material,3714019,1255921,焊丝,焊锡丝,kg,kg,1=使用best_candidate
+Material,2031069,4035259,T型钢 25×25,T形钢 25×25,kg,kg,1=使用best_candidate
+Material,1280041,1171089,乙酸乙脂,乙酸乙酯,kg,kg,1=使用best_candidate
+Material,1710210,1175883,嵌缝膏CSPE,CSPE嵌缝膏 330ml,支,支,1=使用best_candidate
+Material,2031125,1014395,彩钢压型板 δ=0.8 760型,彩钢压型板 760型 δ=0.8,m2,m2,1=使用best_candidate
+Material,2550523,4034137,聚脂布,聚酯布,m2,m2,1=使用best_candidate
+Material,1170010,1040801,无纺布 14g/m2,聚酯无纺土工布 100g/m2,m2,m2,1=使用best_candidate
+Material,1240111,1088113,卵石 25以内,卵石 ≤25（填筑用）,m3,m3,1=使用best_candidate
+Material,1010007,1073601,白色水泥,白色硅酸盐水泥 42.5,kg,kg,L列指定电算代号
+Material,1300257,1121783,石塑防滑地砖,石塑防滑地砖 300×300,m2,m2,1=使用best_candidate
+Material,3005030,1174761,粘结剂(给水),黏结剂(给水),kg,kg,1=使用best_candidate
+Material,1280050,1084265,干粉型粘结剂,干粉型黏结剂,kg,kg,1=使用best_candidate
+Material,1300263,1122971,釉面砖0.06m2以外,釉面砖 ＞600×100,m2,m2,L列指定电算代号
+Material,3440016,1053969,安全网 锦纶,阻燃型密目式安全网,m2,m2,1=使用best_candidate
+Material,2547211,1012419,镀锌铁丝网 25×25×0.7,镀锌铁丝网 φ0.7 25×25,m2,m2,1=使用best_candidate
+Material,2550904,4015699,不锈钢大门,钢大门,㎡,m2,1=使用best_candidate
+Material,2368135,1017749,铸铁盖板 320×500×18,铸铁盖板,块,kg,L列指定电算代号
+Material,3420010,1050249,线麻(火麻·花麻·魁麻),线麻,kg,kg,1=使用best_candidate
+Material,2368136,1017749,铸铁盖板 490×500×18,铸铁盖板,块,kg,L列指定电算代号
+Material,1130018,1182521,水性封底漆（普通）,水性封底漆,kg,kg,1=使用best_candidate
+Material,1210020,1094441,矿渣粉(高性能混凝土),矿渣粉,kg,kg,1=使用best_candidate
+Material,3005009,1174965,聚羧酸系减水剂,聚羧酸系减水剂 固体含量20%,kg,kg,1=使用best_candidate
+Material,3005045,1177073,HT混凝土复合掺合料（RPC掺合料）,HT混凝土复合掺合料,kg,kg,1=使用best_candidate
+Machine,9104016,9104016,混凝土搅拌站 ≤60m3/h,混凝土搅拌站 ≤60m³/h,台班,台班,1=使用best_candidate
+Material,1280037,1173537,万能胶 309,309万能胶,kg,kg,1=使用best_candidate
+Material,1251059,1089881,白石屑,石屑,kg,m3,1=使用best_candidate
+Material,1710121,4030705,硬木拼花企口席纹地板,硬木企口装饰板,m2,m2,1=使用best_candidate
+Material,2410014,4030001,铝质活动地板 600×600,铝质活动地板,m2,m2,L列指定电算代号
+Material,1710124,4030111,活动木地板,硬木地板,m2,m2,L列指定电算代号
+Material,1300262,1122773,釉面砖0.06m2以内,釉面砖 ≤600×100,m2,m2,L列指定电算代号
+Material,4022012,1015409,金钢砂,钢砂,kg,kg,1=使用best_candidate
+Material,1250211,4032289,预制水磨石块 彩色,水磨石板材 305×305×19,m2,m2,L列指定电算代号
+Material,2410411,1017489,铝合金型材 白色,铝合金型材,kg,kg,1=使用best_candidate
+Material,2344062,1223017,不锈钢弯头Φ60,不锈钢弯头 D60,个,个,1=使用best_candidate
+Material,2368917,1223833,Ｕ字卡 DN100以内,Ｕ字卡 DN≤100,个,个,1=使用best_candidate
+Material,1110527,4035303,硬木扶手（直形）60×60,成品硬木扶手,m,m,L列指定电算代号
+Material,2550481,4035347,钢管扶手Φ50,不锈钢扶手 φ50,m,m,1=使用best_candidate
+Material,2550521,4026649,矿棉吸音板,矿棉吸声板,m2,m2,1=使用best_candidate
+Material,1252110,4039131,石膏板,石膏板 12 普通,m2,m2,1=使用best_candidate
+Material,1110521,1142719,灰板条,灰板条 1000×30×8,百根,百根,1=使用best_candidate
+Material,2550138,4034291,钢骨架 厂库房大门用,钢骨架,kg,kg,1=使用best_candidate
+Material,2550685,4016439,彩板卷帘门,不锈钢卷帘门,m2,m2,L列指定电算代号
+Material,2550672,4018215,平移门自动感应装置,滑轨门自动感应装置,套,套,1=使用best_candidate
+Material,2550673,4018215,圆弧门自动感应装置,滑轨门自动感应装置,套,套,1=使用best_candidate
+Material,2550690,4016735,钢质防火门（成品）,钢质防火门,m2,m2,1=使用best_candidate
+Material,1300261,1122575,釉面砖0.015m2以外,釉面砖 ＞150×100,m2,m2,L列指定电算代号
+Material,1710079,1015071,不锈钢方通18×18,不锈钢方通 18×18×1.5,m,m,1=使用best_candidate
+Machine,9102622,9102652,单筒快速卷扬机 ≤20kN,单筒快速卷扬机 ≤20kN/100m,台班,台班,1=使用best_candidate
+Material,3391035,1028801,橡胶条 小,橡胶密封条,m,m,1=使用best_candidate
+Material,2550740,4036337,镜面不锈钢装饰条30以外,镜面不锈钢装饰条 ≤30,m,m,1=使用best_candidate
+Material,3320127,1225209,橡胶圈 配聚氯乙烯双壁波纹管 D300,排水用聚氯乙烯双壁波纹管 D300,个,m,1=使用best_candidate
+Machine,9100004,9100014,履带式液压单斗挖掘机 ≤1.4m3,履带式液压单斗挖掘机 ≤1.4m³,台班,台班,1=使用best_candidate
+Machine,9100502,9100402,轮胎式装载机 ≤1.5m3,轮胎式装载机 ≤1.5m³,台班,台班,1=使用best_candidate
+Machine,9100804,9112304,轴流通风机 ≤40kW-480m3/min,轴流通风机 ≤40kW-480m³/min,台班,台班,1=使用best_candidate
+Machine,9102011,9102001,"爬升式塔式起重机 ≤50m×1.2/3t,h=40m","塔式起重机 ≤50m×3t,h≤40m",台班,台班,1=使用best_candidate
+Machine,9102642,9102702,单笼升降机 12人-1t ≤100m,单笼升降机 1t ≤100m,台班,台班,1=使用best_candidate
+Machine,9104121,9104103,混凝土湿喷机 ≤7m3/h,混凝土湿喷机 ≤7m³/h,台班,台班,1=使用best_candidate
+Machine,9105245,9105245,搅拌成桩机组（三轴）,浆液喷射搅拌成桩机组（三轴）,台班,台班,1=使用best_candidate
+Machine,9105329,9105351,多级离心清水泵 ≤155m3/h-150m,多级离心清水泵 ≤155m³/h-150m,台班,台班,1=使用best_candidate
+Machine,9105341,9105371,污水泵 ≤90m3/h-26m,污水泵 ≤90m³/h-26m,台班,台班,1=使用best_candidate
+Machine,9105343,9105373,污水泵 ≤160m3/h-26m,污水泵 ≤160m³/h-26m,台班,台班,1=使用best_candidate
+Machine,9105353,9105382,离心式泥浆泵 ≤108m3/h-21m,离心式泥浆泵 ≤108m³/h-21m,台班,台班,1=使用best_candidate
+Material,1300260,1122377,釉面砖0.015m2以内,釉面砖 ≤150×100,m2,m2,L列指定电算代号
+Material,2031123,1014369,彩钢压型板 δ=0.6 900型,彩钢压型板 900型 δ=0.6,m2,m2,1=使用best_candidate
+Machine,9108213,9107213,剪板机 ≤13×3000,剪板机 ≤13×3200,台班,台班,1=使用best_candidate
+Material,2031001,1013953,不锈钢板 δ≤8,不锈钢板,kg,kg,1=使用best_candidate
+Material,2031122,1014343,彩钢压型板 δ=0.6 840型,彩钢压型板 840型 δ=0.6,m2,m2,1=使用best_candidate
+Machine,9102621,9102651,单筒快速卷扬机 ≤10kN,单筒快速卷扬机 ≤10kN/50m,台班,台班,1=使用best_candidate
+Material,3330030,1025369,耐热胶垫 2×38,耐热胶垫 38×2,m,m,1=使用best_candidate
+Material,2700216,3013601,钢轨 60kg 25m U75v （160km/h及以下）,钢轨 60kg 25m U75V (200km/h以下),根,根,1=使用best_candidate
+Material,2700218,3013241,钢轨 60kg 100m U71Mn(350km/h),钢轨 60kg 100m U71Mn (200km/h以下),根,根,1=使用best_candidate
+Machine,9109933,9120275,全站仪 1mm+1ppm/＜0.5秒,全站仪 1mm+1×10⁻⁶测距/<0.5″,台班,台班,1=使用best_candidate
+Material,2700224,3013961,钢轨 60kg 100m U75V(160km/h),钢轨 60kg 100m U75V (200km/h以下),根,根,1=使用best_candidate
+Material,2766020,3044577,60kg WJ-2型弹条扣配件(橡胶垫板),WJ-2型弹条扣配件(橡胶垫板) 60kg,组,组,1=使用best_candidate
+Machine,9102301,9102302,门式起重机 ≤5t-22m,"门式起重机 ≤5t-22m,h≤7.5m",台班,台班,1=使用best_candidate
+Material,2700225,3015941,钢轨 75kg 100m U75V(160km/h),钢轨 75kg 100m U75V,根,根,1=使用best_candidate
+Material,2700016,3010541,6m有孔短轨,有孔短轨 6m,根,根,1=使用best_candidate
+Material,2700401,3019001,60kg25m U71Mn 工具轨,工具轨 60kg 25m U71Mn,根,根,1=使用best_candidate
+Machine,9102311,9102309,门式起重机 ≤75t-36m,"门式起重机 ≤75t-36m,h≤18m",台班,台班,1=使用best_candidate
+Material,2700214,3012881,钢轨 60kg 25m U71Mn （160km/h及以下）,钢轨 60kg 25m U71Mn (200km/h以下),根,根,1=使用best_candidate
+Material,2714111,3040469,防爬支撑(混凝土),混凝土防爬支撑,个,个,L列指定电算代号
+Material,2766550,3048997,坩埚(铝热焊用）,坩埚,个,个,1=使用best_candidate
+Material,2766551,3049049,封箱泥(铝热焊用）,封箱泥,kg,kg,1=使用best_candidate
+Material,2766552,3049101,密封膏(铝热焊用）,密封膏,支,支,1=使用best_candidate
+Material,2766553,3049153,预热装置及支架(铝热焊用）,预热装置及支架,套,套,1=使用best_candidate
+Material,3005017,3048945,引燃助剂(铝热焊用）,引燃助剂,根,根,1=使用best_candidate
+Material,2720227,3021041,单开道岔 60kg 12号 92改进型SC330,单开道岔 60kg 12号 92改进型 SC（07）330,组,组,1=使用best_candidate
+Material,2741402,3033521,混凝土岔枕 60kg12号单开,混凝土岔枕 60kg 12号 单开道岔,组,组,1=使用best_candidate
+Material,2723058,3027021,交叉渡线 50kg 12号 间距5m（混凝土岔枕）专线（01）7659,交叉渡线 50kg 12号 间距5.0m (混凝土岔枕) 专线（01）7659,组,组,1=使用best_candidate
+Material,1010013,1071801,普通水泥 52.5级(高性能混凝土),普通硅酸盐水泥 P·O52.5,kg,kg,1=使用best_candidate
+Material,1200027,1083849,干混料（水泥沥青砂浆用）,干混料,t,t,1=使用best_candidate
+Material,1240022,1086241,碎石 16以内(高性能混凝土),碎石 ≤16 (圬工用),m3,m3,L列指定电算代号
+Material,1260024,1080313,中粗砂(高性能混凝土),中粗砂 (圬工用),m3,m3,L列指定电算代号
+Material,2261015,3048841,精调千斤顶（无砟轨道用）,精调千斤顶,个,个,1=使用best_candidate
+Material,3390165,3048425,凸台挡台填充树脂灌注袋（Ⅰ型板式无砟轨道专用）,凸形挡台填充树脂灌注袋,个,个,1=使用best_candidate
+Machine,9101003,9101003,电动空气压缩机 ≤1m3/min,电动活塞式空气压缩机 ≤1m³/min,台班,台班,1=使用best_candidate
+Machine,9101504,9101316,工业燃煤锅炉 ≤6t/h,工业燃油锅炉 ≤6t/h,台班,台班,1=使用best_candidate
+Machine,9104020,9104022,混凝土搅拌站 ≤120m3/h,混凝土搅拌站 ≤120m³/h,台班,台班,1=使用best_candidate
+Machine,9107653,9114281,轮胎式CA砂浆搅拌运输车 ≤1m3,轮胎式CA砂浆搅拌运输车 ≤1m³,台班,台班,1=使用best_candidate
+Material,1010012,1070901,普通水泥 42.5级(高性能混凝土),普通硅酸盐水泥 P·O42.5,kg,kg,1=使用best_candidate
+Material,1240023,1086449,碎石 25以内(高性能混凝土),碎石 ≤25 (圬工用),m3,m3,L列指定电算代号
+Material,2031062,1015487,锯片（用于切断钢筋）,钢筋切割锯片,对,对,1=使用best_candidate
+Material,2811047,3048373,定位锥（无砟轨道用）,定位锥,个,个,1=使用best_candidate
+Material,3410010,1040201,土工织物(土工布)200g/m2,土工布 200g/m2,m2,m2,1=使用best_candidate
+Material,3440020,1038569,绝缘卡子（用于绑扎钢筋）,绝缘卡子,个,个,1=使用best_candidate
+Material,3440021,1054217,尼龙卡扣（用于绑扎钢筋）,尼龙卡扣,个,个,1=使用best_candidate
+Machine,9102305,9102306,门式起重机 ≤40t-40m,"门式起重机 ≤40t-40m,h≤12m",台班,台班,1=使用best_candidate
+Machine,9103303,9103303,混凝土搅拌输送车 ≤8m3,混凝土搅拌输送车 ≤8m³,台班,台班,1=使用best_candidate
+Machine,9104028,9104028,混凝土搅拌站 ≤180m3/h,混凝土搅拌站 ≤180m³/h,台班,台班,1=使用best_candidate
+Machine,9104213,9104123,混凝土输送泵车 ≤60m3/h,混凝土输送泵车 ≤60m³/h,台班,台班,1=使用best_candidate
+Machine,9105301,9105321,单级离心清水泵 ≤12.5m3/h-20m,单级离心清水泵 ≤12.5m³/h-20m,台班,台班,1=使用best_candidate
+Material,1280088,1177345,粘度改性材料,黏度改性材料,kg,kg,1=使用best_candidate
+Material,2547220,1010755,网片钢筋Φ12(CRB550),网片钢筋 CRB550 φ12,kg,kg,1=使用best_candidate
+Machine,9101502,9101312,工业燃煤锅炉 ≤2t/h,工业燃油锅炉 ≤2t/h,台班,台班,1=使用best_candidate
+Material,2031066,3046449,橡胶套靴 605×297×152 普通型,橡胶套靴 普通型,只,只,1=使用best_candidate
+Material,2031068,1024313,密封圈132×60×21.5（三元乙丙橡胶）,三元乙丙橡胶密封圈 132×60×21.5,只,只,1=使用best_candidate
+Material,2750034,3042237,预埋铁座 普通铁路支承块专用,预埋铁座,个,个,1=使用best_candidate
+Material,2031067,3046501,橡胶套靴 SYTX 重载型,橡胶套靴 重载型,只,只,1=使用best_candidate
+Material,2750035,3042289,预埋铁座 TZ-5 重载铁路支承块专用,预埋铁座 TZ-5,个,个,1=使用best_candidate
+Machine,9100006,9100020,履带式液压单斗挖掘机 ≤2.0m3,履带式液压单斗挖掘机 ≤2.0m³,台班,台班,1=使用best_candidate
+Material,1280023,1174489,聚氨酯粘合剂,聚氨酯黏合剂,kg,kg,1=使用best_candidate
+Material,1280063,1174557,土工布粘合剂,土工布黏合剂,kg,kg,1=使用best_candidate
+Material,1910105,1010339,带肋钢筋(HRB500) Φ18～25,带肋钢筋 HRB500 18≤φ＜28,kg,kg,L列指定电算代号
+Material,2713254,1206886,硬质泡沫塑料板 5cm,硬质泡沫塑料板 δ=50,m2,m2,1=使用best_candidate
+Material,3410012,1040601,土工织物(土工布)400g/m2,土工布 400g/m2,m2,m2,1=使用best_candidate
+Material,3330232,3041821,弹性垫层A δ=8（无砟轨道用）,无砟轨道弹性垫板 δ=8,m2,m2,1=使用best_candidate
+Material,1240010,1085929,碎石,碎石 ≤25（填筑用）,m3,m3,L列指定电算代号
+Material,3330233,3041821,弹性垫层B δ=12（无砟轨道用）,无砟轨道弹性垫板 δ=8,m2,m2,1=使用best_candidate
+Material,3394126,1033690,聚氯乙烯胶带 18×10m×0.13,聚氯乙烯胶带 10m×18×0.13,盘,盘,1=使用best_candidate
+Material,2713255,3042861,微孔发泡橡胶垫板（无砟轨道用）,无砟轨道用微孔发泡橡胶垫板,m2,m2,1=使用best_candidate
+Material,2700014,3010361,钢轨 24kg,钢轨 ≤50kg,t,t,1=使用best_candidate
+Machine,9107521,9116031,电气化安装作业车（液力传动）,电气化安装作业车,台班,台班,1=使用best_candidate
+Machine,9109935,9120277,全站仪 5mm+2ppm/＜0.5秒,全站仪 5mm+2×10⁻⁶测距/<0.5″,台班,台班,1=使用best_candidate
+Material,3613113,1066651,支柱整正专用螺母 M24～M39,螺母 M24,个,个,1=使用best_candidate
+Material,5401827,8063097,定位器电连接线,支撑及定位器等电位电连接,套,件,1=使用best_candidate
+Material,5911015,8065169,承力索电联接线夹 C型,承力索电连接线夹 C型,套,件,1=使用best_candidate
+Material,2100006,1012107,不锈钢丝绳 T3QSSHR-7×19,不锈钢钢丝绳,kg,kg,1=使用best_candidate
+Machine,9107531,9116041,电气化架线作业车（液力传动）,电气化架线作业车,台班,台班,1=使用best_candidate
+Machine,9107542,9116111,接触网检测设备 200km/h,接触网检测车载设备,台班,台班,1=使用best_candidate
+Material,5911031,8065217,并钩电联接线夹,并钩电连接线夹,套,件,1=使用best_candidate
+Material,5911034,8065225,T型电联接线夹,T型电连接线夹,套,件,1=使用best_candidate
+Material,5911021,8065177,承力索电联接线夹 CT型,承力索电连接线夹 CT型,套,件,1=使用best_candidate
+Material,5913030,8062089,平衡论,平衡轮,套,件,1=使用best_candidate
+Machine,9107541,9116101,接触网检测车 200km/h,接触网检测车,台班,台班,1=使用best_candidate
+Material,5908002,8065201,弹性吊索线夹 70A,弹性吊索线夹,套,件,1=使用best_candidate
+Material,5300382,8049621,镀锌角钢桥钢柱、接腿、支架 (Q235),格构式桥钢柱/接腿/支架 Q235,t,t,1=使用best_candidate
+Material,6000201,8065841,U型挂环 U-12,U形挂环 U-12,个,个,1=使用best_candidate
+Material,6200251,1031429,聚丙烯塑料板 5×900×1450,聚丙烯塑料板 1450×900×5,块,块,1=使用best_candidate
+Material,2532012,4018881,插销 P48K 5A,插销 50,个,套,L列指定电算代号
+Material,2532013,4018881,插销 P40K 5A,插销 50,个,套,L列指定电算代号
+Material,4735015,7012680,电力电缆0.6kV BVR-50m㎡,电力电缆0.6kV BVR-50mm2,m,m,1=使用best_candidate
+Material,4732685,7012395,电力电缆 WDZ-YJY23 0.6/1kV  4×35+1×25mm2,低烟无卤阻燃电力电缆 WDZ-YJY23 0.6/1kV 4×50mm2+1×25mm2,m,m,1=使用best_candidate
+Material,4732686,7012395,电力电缆 WDZ-YJY23 0.6/1kV  4×50+1×25mm2,低烟无卤阻燃电力电缆 WDZ-YJY23 0.6/1kV 4×50mm2+1×25mm2,m,m,1=使用best_candidate
+Material,4732688,7012433,电力电缆 WDZ-YJY23 0.6/1kV  4×95+1×50mm2,低烟无卤阻燃电力电缆 WDZ-YJY23 0.6/1kV 4×95mm2+1×50mm2,m,m,1=使用best_candidate
+Material,4732691,7012490,电力电缆 WDZ-YJY23 0.6/1kV  4×185+1×95mm2,低烟无卤阻燃电力电缆 WDZ-YJY23 0.6/1kV 4×185mm2+1×95mm2,m,m,1=使用best_candidate
+Material,4732687,7012414,电力电缆 WDZ-YJY23 0.6/1kV  4×70+1×35mm2,低烟无卤阻燃电力电缆 WDZ-YJY23 0.6/1kV 4×70mm2+1×35mm2,m,m,1=使用best_candidate
+Material,5300392,1012991,H型钢柱Q235(镀锌),H型钢 Q235-B,t,kg,1=使用best_candidate
+Material,5300381,8050001,镀锌角钢钢柱、硬横梁 (Q235),钢管硬横梁 Q235,t,t,1=使用best_candidate
+Material,5811050,8022753,高强铜镁合金绞线 1×19,高强铜镁合金绞线,kg,kg,1=使用best_candidate
+Material,5322041,8051573,架构钢柱、横梁及支架等 Q345,架构钢柱/横梁及支架 Q355,t,t,1=使用best_candidate
+Machine,9105304,9105324,单级离心清水泵 ≤25m3/h-20m,单级离心清水泵 ≤25m³/h-20m,台班,台班,1=使用best_candidate
+Machine,9108631,9107633,鼓风机 ≤18m3/min,鼓风机 ≤18m³/min,台班,台班,1=使用best_candidate
+Material,2368610,1310601,罐壁人孔 Pg25 DN600,罐壁人孔 DN600,个,个,1=使用best_candidate
+Machine,9100803,9112303,轴流通风机 ≤28kW-390m3/min,轴流通风机 ≤28kW-390m³/min,台班,台班,1=使用best_candidate
+Material,1600867,1156497,中碱无捻玻璃纤维布 0.5×900,中碱无捻玻璃纤维布 900×0.5,m2,m2,1=使用best_candidate
+Material,4710019,7010438,铝芯橡皮线 BLX 500V 185mm2,铝芯塑料线 BLV 500V 185mm2,m,m,1=使用best_candidate
+Material,2340907,1222481,制动软管联接器件,制动软管连接器件,个,个,1=使用best_candidate
+Material,1240013,1086553,碎石 31.5以内,碎石 ≤31.5 (圬工用),m3,m3,L列指定电算代号
+Material,8221041,6037201,电缆去向名牌,电缆去向铭牌,个,个,1=使用best_candidate
+Material,1240009,1086345,碎石 20以内,碎石 ≤20 (圬工用),m3,m3,L列指定电算代号
+Material,4715010,7010457,铜芯塑料线 BV 500V 0.5mm2,阻燃铜芯塑料线 ZR-BV 500V 0.5mm2,m,m,1=使用best_candidate
+Machine,9102611,9102621,单筒慢速卷扬机 ≤10kN,单筒慢速卷扬机 ≤10kN/50m,台班,台班,1=使用best_candidate
+Material,4732651,7012300,电力电缆 WDZN-YJY23 0.6/1kV  5×6mm2,低烟无卤阻燃电力电缆 WDZ-YJY23 0.6/1kV 5×6mm2,m,m,1=使用best_candidate
+Material,1240016,1086865,碎石 80以内,碎石 ≤80 (圬工用),m3,m3,L列指定电算代号
+Material,3420011,1050373,青麻(白麻·片麻),青麻,kg,kg,1=使用best_candidate
+Material,1240025,1086657,碎石 40以内(高性能混凝土),碎石 ≤40 (圬工用),m3,m3,L列指定电算代号
+Machine,9101101,9101053,内燃空气压缩机 ≤6m3/min,内燃活塞式空气压缩机 ≤6m³/min,台班,台班,1=使用best_candidate
+Material,2547322,1011795,钢制防护栅栏网片,钢制防护栅栏网片 φ4 75×150,m2,m2,1=使用best_candidate
+Material,2547210,1012393,镀锌铁丝网 10×10×0.9,镀锌铁丝网 φ0.9 10×10,m2,m2,1=使用best_candidate
+Machine,9102632,9102681,双筒慢速卷扬机 ≤30kN,双筒慢速卷扬机 ≤30kN/200m,台班,台班,1=使用best_candidate
+Machine,9105308,9105328,单级离心清水泵 ≤60m3/h-50m,单级离心清水泵 ≤60m³/h-50m,台班,台班,1=使用best_candidate
+Machine,9108634,9107631,鼓风机 ≤8m3/min,鼓风机 ≤8m³/min,台班,台班,1=使用best_candidate
+Material,2300015,1220705,铸铁承插直管 DN200×5000,铸铁承插直管 DN200,m,m,1=使用best_candidate
+Material,2300016,1220713,铸铁承插直管 DN250×5000,铸铁承插直管 DN250,m,m,1=使用best_candidate
+Material,3320012,1020177,橡胶圈 配DN100,铸铁管接口橡胶圈 配DN100,个,个,1=使用best_candidate
+Material,3320014,1020265,橡胶圈 配DN150,铸铁管接口橡胶圈 配DN150,个,个,1=使用best_candidate
+Material,3320016,1020353,橡胶圈 配DN200,铸铁管接口橡胶圈 配DN200,个,个,1=使用best_candidate
+Material,3320019,1020441,橡胶圈 配DN250,铸铁管接口橡胶圈 配DN250,个,个,1=使用best_candidate
+Material,3320020,1020529,橡胶圈 配DN300,铸铁管接口橡胶圈 配DN300,个,个,1=使用best_candidate
+Material,3320022,1020617,橡胶圈 配DN350,铸铁管接口橡胶圈 配DN350,个,个,1=使用best_candidate
+Material,3320023,1020705,橡胶圈 配DN400,铸铁管接口橡胶圈 配DN400,个,个,1=使用best_candidate
+Material,3320024,1020793,橡胶圈 配DN450,铸铁管接口橡胶圈 配DN450,个,个,1=使用best_candidate
+Material,3320025,1020881,橡胶圈 配DN500,铸铁管接口橡胶圈 配DN500,个,个,1=使用best_candidate
+Material,3320026,1020969,橡胶圈 配DN600,铸铁管接口橡胶圈 配DN600,个,个,1=使用best_candidate
+Material,3320027,1021057,橡胶圈 配DN700,铸铁管接口橡胶圈 配DN700,个,个,1=使用best_candidate
+Material,3320028,1021145,橡胶圈 配DN800,铸铁管接口橡胶圈 配DN800,个,个,1=使用best_candidate
+Material,3320029,1021233,橡胶圈 配DN900,铸铁管接口橡胶圈 配DN900,个,个,1=使用best_candidate
+Material,3320030,1021321,橡胶圈 配DN1000,铸铁管接口橡胶圈 配DN1000,个,个,1=使用best_candidate
+Material,3320031,1021409,橡胶圈配DN1200,铸铁管接口橡胶圈 配DN1200,个,个,1=使用best_candidate
+Machine,9105612,9105612,人工挖土法顶管设备 d≤1650,人工挖土法顶管设备 d≤1500,台班,台班,1=使用best_candidate
+Material,2300101,1220769,铸铁单盘直管 DN100×3000,铸铁单盘直管 DN100,m,m,1=使用best_candidate
+Machine,9100523,9100421,履带式装载机 ≤2m3,履带式装载机 ≤2m³,台班,台班,1=使用best_candidate
+Material,3372154,1226337,聚乙烯给水管（PE）de50,聚乙烯给水管件 De50,m,个,1=使用best_candidate
+Material,3372155,1226345,聚乙烯给水管（PE）de63,聚乙烯给水管件 De63,m,个,1=使用best_candidate
+Machine,9102633,9102683,双筒慢速卷扬机 ≤50kN,双筒慢速卷扬机 ≤50kN/340m,台班,台班,1=使用best_candidate
+Material,3320125,1021497,橡胶圈 配聚氯乙烯双壁波纹管 D225,塑料管接口橡胶圈 De225,个,个,L列指定电算代号
+Material,3320126,1021585,橡胶圈 配聚氯乙烯双壁波纹管 D250,塑料管接口橡胶圈 De250,个,个,L列指定电算代号
+Material,3320128,1021761,橡胶圈 配聚氯乙烯双壁波纹管 D400,塑料管接口橡胶圈 De400,个,个,L列指定电算代号
+Material,3320129,1021849,橡胶圈 配聚氯乙烯双壁波纹管 D500,塑料管接口橡胶圈 De500,个,个,L列指定电算代号
+Material,3320130,1021937,橡胶圈 配聚氯乙烯双壁波纹管 D600,塑料管接口橡胶圈 De600,个,个,L列指定电算代号
+Material,3320131,1022025,橡胶圈 配聚氯乙烯双壁波纹管 D700,塑料管接口橡胶圈 De700,个,个,L列指定电算代号
+Material,3320132,1022113,橡胶圈 配聚氯乙烯双壁波纹管 D800,塑料管接口橡胶圈 De800,个,个,L列指定电算代号
+Material,3320133,1022201,橡胶圈 配聚氯乙烯双壁波纹管 D900,塑料管接口橡胶圈 De900,个,个,L列指定电算代号
+Material,3320134,1022289,橡胶圈 配聚氯乙烯双壁波纹管 D1000,塑料管接口橡胶圈 De1000,个,个,L列指定电算代号
+Machine,9105302,9105322,单级离心清水泵 ≤12.5m3/h-32m,单级离心清水泵 ≤12.5m³/h-32m,台班,台班,1=使用best_candidate
+Material,1800304,1200136,石棉 手选 特6级,石棉 机选 5～6级,kg,kg,L列指定电算代号
+Material,2300017,1220721,铸铁承插直管 DN300×5000,铸铁承插直管 DN300,m,m,1=使用best_candidate
+Material,2300022,1220737,铸铁承插直管 DN400×5000,铸铁承插直管 DN400,m,m,1=使用best_candidate
+Material,2300012,1220689,铸铁承插直管 DN100×4000,铸铁承插直管 DN100,m,m,1=使用best_candidate
+Material,2300020,1220753,铸铁承插直管 DN500×5000,铸铁承插直管 DN500,m,m,1=使用best_candidate
+Material,2300013,1220697,铸铁承插直管 DN150×4000,铸铁承插直管 DN150,m,m,1=使用best_candidate
+Material,3410011,1040401,土工织物(土工布)300g/m2,土工布 300g/m2,m2,m2,1=使用best_candidate
+Material,3613125,1069651,解藕装置,解耦装置,m,m,1=使用best_candidate
+Material,5322054,1013225,声屏障H形钢立柱,声屏障H型钢立柱 Q235B,t,t,1=使用best_candidate
+Machine,9103306,9103305,混凝土搅拌输送车 ≤10m3,混凝土搅拌输送车 ≤10m³,台班,台班,1=使用best_candidate
+Material,2031133,4022217,通透单元板 1960×1000×20（桥金属-8323A）,通透单元板 1960×1000×140,m2,m2,1=使用best_candidate
+Material,2031136,4025541,复合吸声板 3960×140×500,铝合金复合吸声板 δ=140,m2,m2,L列指定电算代号
+Material,2031137,4025541,复合吸声板 3960×140×450,铝合金复合吸声板 δ=140,m2,m2,L列指定电算代号
+Material,2031129,4021663,金属声屏障单元板 1960×450×140,金属声屏障单元板 1960×500×140,m2,m2,1=使用best_candidate
+Material,2300411,1220913,柔性接口球墨铸铁承插直管 DN100×5000,柔性接口球墨铸铁承插直管 DN100,m,m,1=使用best_candidate
+Material,2330201,1222353,球墨铸铁管件,铸铁管零件,kg,kg,1=使用best_candidate
+Material,2300401,1220921,柔性接口球墨铸铁直管 DN150×5000,柔性接口球墨铸铁承插直管 DN150,m,m,1=使用best_candidate
+Material,2300402,1220929,柔性接口球墨铸铁直管 DN200×5000,柔性接口球墨铸铁承插直管 DN200,m,m,1=使用best_candidate
+Material,2300403,1220937,柔性接口球墨铸铁直管 DN250×5000,柔性接口球墨铸铁承插直管 DN250,m,m,1=使用best_candidate
+Material,2300412,1220945,柔性接口球墨铸铁承插直管 DN300×5000,柔性接口球墨铸铁承插直管 DN300,m,m,1=使用best_candidate
+Material,2300413,1220953,柔性接口球墨铸铁承插直管 DN350×5000,柔性接口球墨铸铁承插直管 DN350,m,m,1=使用best_candidate
+Material,2300414,1220961,柔性接口球墨铸铁承插直管 DN400×5000,柔性接口球墨铸铁承插直管 DN400,m,m,1=使用best_candidate
+Material,2300415,1220969,柔性接口球墨铸铁承插直管 DN450×5000,柔性接口球墨铸铁承插直管 DN450,m,m,1=使用best_candidate
+Material,2300416,1220977,柔性接口球墨铸铁承插直管 DN500×6000,柔性接口球墨铸铁承插直管 DN500,m,m,1=使用best_candidate
+Material,2300417,1220985,柔性接口球墨铸铁承插直管 DN600×6000,柔性接口球墨铸铁承插直管 DN600,m,m,1=使用best_candidate
+Material,3372251,1224361,聚乙烯给水管（PE） 1.0MPa   de110,聚乙烯给水管 1.0MPa De110,m,m,1=使用best_candidate
+Material,3372510,1225273,HDPE双壁波纹管 SN8 DN/ID225,HDPE增强中空壁缠绕管 SN8 DN/ID225,m,m,1=使用best_candidate
+Material,3372511,1225281,HDPE双壁波纹管 SN8 DN/ID300,HDPE增强中空壁缠绕管 SN8 DN/ID300,m,m,1=使用best_candidate
+Material,3372512,1225289,HDPE双壁波纹管 SN8 DN/ID400,HDPE增强中空壁缠绕管 SN8 DN/ID400,m,m,1=使用best_candidate
+Material,3372513,1225297,HDPE双壁波纹管 SN8 DN/ID500,HDPE增强中空壁缠绕管 SN8 DN/ID500,m,m,1=使用best_candidate
+Material,3372514,1225305,HDPE双壁波纹管 SN8 DN/ID600,HDPE增强中空壁缠绕管 SN8 DN/ID600,m,m,1=使用best_candidate
+Material,3372515,1225313,HDPE双壁波纹管 SN8 DN/ID700,HDPE增强中空壁缠绕管 SN8 DN/ID700,m,m,1=使用best_candidate
+Material,3372516,1225321,HDPE双壁波纹管 SN8 DN/ID800,HDPE增强中空壁缠绕管 SN8 DN/ID800,m,m,1=使用best_candidate
+Material,3372517,1225329,HDPE双壁波纹管 SN8 DN/ID900,HDPE增强中空壁缠绕管 SN8 DN/ID900,m,m,1=使用best_candidate
+Material,3372518,1225337,HDPE双壁波纹管 SN8 DN/ID1000,HDPE增强中空壁缠绕管 SN8 DN/ID1000,m,m,1=使用best_candidate
+Material,3372369,1224457,聚乙烯给水管（PE）1.6MPa de75,聚乙烯给水管 1.6MPa De75,m,m,1=使用best_candidate
+Material,3372371,1224465,聚乙烯给水管（PE）1.6MPa de160,聚乙烯给水管 1.6MPa De160,m,m,1=使用best_candidate
+Material,3372152,1224249,聚乙烯给水管（PE）de32,聚乙烯给水管 0.6MPa De40,m,m,L列指定电算代号
+Material,3372373,1224473,聚乙烯给水管（PE）1.6MPa de225,聚乙烯给水管 1.6MPa De225,m,m,1=使用best_candidate
+Material,3372374,1224481,聚乙烯给水管（PE）1.6MPa de250,聚乙烯给水管 1.6MPa De250,m,m,1=使用best_candidate
+Material,1240030,1086345,碎石 20以内(高性能混凝土),碎石 ≤20 (圬工用),m3,m3,L列指定电算代号
+Material,3330019,1026953,橡胶板 500×500×70,橡胶板 δ=70,m3,m2,L列指定电算代号
+Material,3391025,1029241,闭孔乳胶海棉 δ=5,闭孔乳胶海绵 δ=5,kg,kg,1=使用best_candidate
+Machine,9101503,9101314,工业燃煤锅炉 ≤4t/h,工业燃油锅炉 ≤4t/h,台班,台班,1=使用best_candidate
+Machine,9102308,9102313,门式起重机 ≤80t-36m,"门式起重机 ≤80t-36m,h≤24m",台班,台班,1=使用best_candidate
+Machine,9104207,9104206,混凝土泵 ≤60m3/h,混凝土输送泵 ≤60m³/h,台班,台班,1=使用best_candidate
+Machine,9105617,9102630,单筒慢速卷扬机 ≤100kN,单筒慢速卷扬机 ≤100kN/350m,台班,台班,1=使用best_candidate
+Material,2250001,1220665,金属波纹管（制孔用）,金属波纹管,kg,kg,1=使用best_candidate
+Machine,9102306,9102307,门式起重机 ≤50t-40m,"门式起重机 ≤50t-40m,h≤12m",台班,台班,1=使用best_candidate
+Machine,9104217,9104127,混凝土输送泵车 ≤85m3/h,混凝土输送泵车 ≤85m³/h,台班,台班,1=使用best_candidate
+Machine,9105322,9105342,多级离心清水泵 ≤32m3/h-125m,多级离心清水泵 ≤32m³/h-125m,台班,台班,1=使用best_candidate
+Material,3330121,1027921,三元乙丙橡胶板240×15×837,三元乙丙橡胶板 δ=15,㎡,m2,1=使用best_candidate
+Material,1240024,1086553,碎石 31.5以内(高性能混凝土),碎石 ≤31.5 (圬工用),m3,m3,L列指定电算代号
+Material,3391031,1217105,821BF-E-02橡胶止水带,橡胶止水带 821BF-E-02,m,m,1=使用best_candidate
+Material,3220012,1190001,乳胶炸药,乳化炸药,kg,kg,1=使用best_candidate
+Machine,9101215,9101153,电动螺杆空气压缩机 ≤20m3/min,电动螺杆式空气压缩机 ≤20m³/min,台班,台班,1=使用best_candidate
+Machine,9100812,9112312,轴流通风机 ≤150kW-1250m3/min,轴流通风机 ≤150kW-1250m³/min,台班,台班,1=使用best_candidate
+Machine,9101605,9101405,电力变压器 ≤560kVA,电力变压器 ≤500kVA,台班,台班,1=使用best_candidate
+Machine,9101604,9101407,电力变压器 ≤320kVA,电力变压器 ≤630kVA,台班,台班,1=使用best_candidate
+Machine,9100813,9112313,轴流通风机 ≤220kW-2000m3/min,轴流通风机 ≤220kW-2000m³/min,台班,台班,1=使用best_candidate
+Machine,9101606,9101405,电力变压器 ≤750kVA,电力变压器 ≤500kVA,台班,台班,1=使用best_candidate
+Machine,9100815,9112314,轴流通风机≤270kW-3000m3/min,轴流通风机 ≤270kW-3000m³/min,台班,台班,1=使用best_candidate
+Material,3005007,1174897,"速凝剂(液态,低碱)","速凝剂 (液态,无碱)",t,t,1=使用best_candidate
+Machine,9101011,9101011,电动空气压缩机 ≤20m3/min,电动活塞式空气压缩机 ≤20m³/min,台班,台班,1=使用best_candidate
+Material,1900017,1010573,圆钢筋 16Mn Φ18以上,光圆钢筋 16Mn φ＞18,kg,kg,1=使用best_candidate
+Machine,9103631,9103631,侧卸式矿车 ≤6m3,侧卸式矿车 ≤6m³,台班,台班,1=使用best_candidate
+Machine,9100805,9112305,轴流通风机 ≤75kW-800m3/min,轴流通风机 ≤75kW-800m³/min,台班,台班,1=使用best_candidate
+Machine,9100731,9112189,轨道式液压立爪装岩机 ≤120m3/h,轨道式液压立爪装岩机 ≤120m³/h,台班,台班,1=使用best_candidate
+Machine,9103313,9103313,轨道式混凝土搅拌输送车 ≤6m3,轨道式混凝土搅拌输送车 ≤6m³,台班,台班,1=使用best_candidate
+Machine,9103622,9103622,梭式矿车 ≤14m3,梭式矿车 ≤14m³,台班,台班,1=使用best_candidate
+Machine,9100000,9100004,履带式液压单斗挖掘机 ≤0.4m3,履带式液压单斗挖掘机 ≤0.4m³,台班,台班,1=使用best_candidate
+Machine,9105310,9105330,单级离心清水泵 ≤170m3/h-26m,单级离心清水泵 ≤170m³/h-26m,台班,台班,1=使用best_candidate
+Material,3350212,1247269,聚氯乙烯硬管 D80,聚氯乙烯法兰盘 DN80,kg,个,1=使用best_candidate
+Material,3372210,1224273,聚乙烯给水管（PE） 0.6MPa   de90,聚乙烯给水管 0.6MPa De90,m,m,1=使用best_candidate
+Material,3372211,1224281,聚乙烯给水管（PE） 0.6MPa   de110,聚乙烯给水管 0.6MPa De110,m,m,1=使用best_candidate
+Machine,9109715,9120209,"低频电缆测试仪 800Hz±2％,0～110dB","低频电缆测试仪 800Hz×（1±2%）,0～110dB",台班,台班,1=使用best_candidate
+Material,1423506,1135185,钢筋混凝土接头槽(带盖板) 槽宽250,钢筋混凝土接头槽 槽宽250,套,个,1=使用best_candidate
+Material,7611011,5062841,室内分线盒 NF-1 10对,室内电缆分线盒 10对,只,只,1=使用best_candidate
+Material,7611012,5062841,室内分线盒 NF-1 20对,室内电缆分线盒 10对,只,只,1=使用best_candidate
+Material,7611013,5062841,室内分线盒 NF-1 30对,室内电缆分线盒 10对,只,只,1=使用best_candidate
+Material,7611014,5062841,室内分线盒 NF-1 50对,室内电缆分线盒 10对,只,只,1=使用best_candidate
+Material,7611015,5064261,室内分线盒 NF-1 100对,室内电缆分线盒 100对,只,只,1=使用best_candidate
+Material,7413013,7044861,三沟绝缘子(带铁卡),蝶形绝缘子,只,只,1=使用best_candidate
+Material,7610110,5061421,落地式电缆交接箱 WJD-1 室外300回线,落地式电缆交接箱 300回线,台,台,1=使用best_candidate
+Material,7310113,5027745,射频同轴电缆  LCF78-50J,同轴射频电缆 LCF78-50J,m,m,1=使用best_candidate
+Material,7310114,5027833,射频同轴电缆  LCF158-50J,同轴射频电缆 LCF158-50J,m,m,1=使用best_candidate
+Material,8810106,6054249,1/2英寸超柔跳线,"1/2""超柔跳线",条,条,1=使用best_candidate
+Machine,9109615,9120173,天馈线综合测试仪,天馈线测试仪,台班,台班,1=使用best_candidate
+Material,7413110,7045401,弯头瓷管(带檐) 10×300,直瓷管 φ15×305,个,个,L列指定电算代号
+Material,3360036,1221897,普利卡包塑金属软管 LV4-17#,普利卡包塑金属软管,m,m,1=使用best_candidate
+Material,7310116,5028273,900MHz漏泄同轴电缆13/8英寸,漏泄同轴电缆 13/8英寸,m,m,1=使用best_candidate
+Material,8800063,6039361,U型卡箍,卡箍,套,个,1=使用best_candidate
+Material,8110037,6023191,点灯监测单元（站内）,点灯监测单元（列车）,台,台,1=使用best_candidate
+Material,8110038,6023191,点灯监测单元（区间）,点灯监测单元（列车）,台,台,1=使用best_candidate
+Material,2260008,1221449,走线管,走线管 φ50 1m,根,根,1=使用best_candidate
+Material,8800081,6036877,接近、预告、中继站标志牌（不带基础桩）,接近、预告、中继站标志牌,个,个,1=使用best_candidate
+Material,8310023,6044561,电动转辙机安装装置内锁闭  （60kg/m、9、12号、AT轨、1个牵引点）,电动转辙机安装装置内锁闭 （60kg/m、9号、12号、AT轨、1个牵引点）,套,套,1=使用best_candidate
+Material,8310022,6044713,电动转辙机安装装置内锁闭 （60kg/m、9、12号、AT轨、2个牵引点）,电动转辙机安装装置内锁闭 （60kg/m、9号、12号、AT轨、2个牵引点）,套,套,1=使用best_candidate
+Material,8310019,6044865,电动转辙机安装装置（60kg/m、18号、5个牵引点）,电动转辙机安装装置内锁闭 （60kg/m、18号、5个牵引点）,套,套,1=使用best_candidate
+Material,8310116,6045929,道岔外锁闭装置（60kg/m、18、5个牵引点号）,电动转辙机道岔外锁闭装置 （60kg/m、18号、5个牵引点号）,套,组,1=使用best_candidate
+Material,8310028,6040001,电动转辙机安装装置 （50kg/m、9、12号复式交分、AT轨）,电动转辙机安装装置 （50kg/m、9号、12号复式交分、AT轨）,套,套,1=使用best_candidate
+Material,8310029,6040153,电动转辙机安装装置 （60kg/m、9、12号复式交分、AT轨）,电动转辙机安装装置 （60kg/m、9号、12号复式交分、AT轨）,套,套,1=使用best_candidate
+Material,8310030,6043953,电空转辙机安装装置ZK4,ZK4电空转辙机安装装置,组,组,1=使用best_candidate
+Material,8310053,6042433,电液转辙机安装装置 （60kg/m、9、12号、AT轨、1个牵引点）,电液转辙机安装装置 （60kg/m、9号、12号、AT轨、1个牵引点）,套,套,1=使用best_candidate
+Material,8310060,6042129,电液转辙机安装装置 （50kg/m、9、12号复式交分、AT轨）,电液转辙机安装装置 （50kg/m、9号、12号复式交分、AT轨）,套,套,1=使用best_candidate
+Material,8310061,6042281,电液转辙机安装装置 （60kg/m、9、12号复式交分、AT轨）,电液转辙机安装装置 （60kg/m、9号、12号复式交分、AT轨）,套,套,1=使用best_candidate
+Material,8310054,6042585,电液转辙机安装装置 （60kg/m、9、12号、AT轨、2个牵引点）,电液转辙机安装装置 （60kg/m、9号、12号、AT轨、2个牵引点）,套,套,1=使用best_candidate
+Material,8711063,6039253,JM-A道岔密贴检查器,JM道岔密贴检查器（中间）,个,个,1=使用best_candidate
+Material,8800092,6091473,设备连接管U型或Y型,设备连接管 U形或Y形,个,个,1=使用best_candidate
+Material,8320027,6048209,道岔缺口检查报警器,道岔缺口检查报警器（视频）,个,个,1=使用best_candidate
+Material,8217038,6056625,扼流适配器 ESP4 非重载普速铁路,扼流适配器 ESP4,台,台,1=使用best_candidate
+Material,8519009,6057669,双体防护盒（含基础桩）,双体防护盒（含底座）,套,套,1=使用best_candidate
+Material,8751128,6096441,HVU粘结剂,HVU黏结剂,筒,筒,1=使用best_candidate
+Material,8221036,6037021,室内继电器名牌,室内继电器铭牌,个,个,1=使用best_candidate
+Material,8114010,6022971,道口信号机,道口信号机 铸铁机构,台,台,1=使用best_candidate
+Material,8221037,6037057,室内组合名牌,室内组合铭牌,个,个,1=使用best_candidate
+Material,8221038,6037093,室内组合排架名牌,室内组合排架铭牌,个,个,1=使用best_candidate
+Material,7910211,1159542,环氧酚醛玻璃布板 3240 δ=8,环氧酚醛玻璃布板,kg,kg,1=使用best_candidate
+Material,8012054,6015791,信号电缆 PTYA23 (PTYAH23)型 12芯,数字信号电缆SPTYWA23型 12芯,m,m,1=使用best_candidate
+Material,8012053,6015761,信号电缆 PTYA23 (PTYAH23)型 9芯,数字信号电缆SPTYWA23型 9芯,m,m,1=使用best_candidate
+Material,7910212,1159745,环氧酚醛玻璃布管 3640 Φ50,环氧酚醛玻璃布管,kg,kg,1=使用best_candidate
+Material,8113020,6080001,机车信号机车接收线圈,驼峰无线机车信号车载连接线缆（含插接件）,台,根,1=使用best_candidate
+Material,8113048,6057417,移频机车信号电源盒 JY·HYT,移频信号区间电源盒 ZP·HYQ-D,台,台,1=使用best_candidate
+Material,1960029,1012939,热镀锌扁钢 40×4,热镀锌扁钢,kg,kg,L列指定电算代号
+Material,2400215,1016865,铜箔带δ 0.2×20,铜箔带 20×0.2,m,m,1=使用best_candidate
+Material,2030004,1014109,镀锌铁板 δ≥0.6,镀锌铁板,kg,kg,1=使用best_candidate
+Material,8012084,6016391,信号电缆 PTYL23 (PTYLH23)型 12芯,数字信号电缆SPTYWL23型 12芯,m,m,1=使用best_candidate
+Material,8012088,6016511,信号电缆 PTYL23 (PTYLH23)型 21芯,数字信号电缆SPTYWL23型 21芯,m,m,1=使用best_candidate
+Material,8012050,6015671,信号电缆 PTYA23 (PTYAH23)型 4芯,数字信号电缆SPTYWA23型 4芯,m,m,1=使用best_candidate
+Material,8012051,6015701,信号电缆 PTYA23 (PTYAH23)型 6芯,数字信号电缆SPTYWA23型 6芯,m,m,1=使用best_candidate
+Material,8012055,6015821,信号电缆 PTYA23 (PTYAH23)型 14芯,数字信号电缆SPTYWA23型 14芯,m,m,1=使用best_candidate
+Material,8012092,6016631,信号电缆 PTYL23 (PTYLH23)型 33芯,数字信号电缆SPTYWL23型 33芯,m,m,1=使用best_candidate
+Material,8012513,6017231,信号电缆 PTYL23 (PTYLH23)型 33芯(低烟无卤阻燃型),数字信号电缆SPTYWL23型 33芯(低烟无卤阻燃型),m,m,1=使用best_candidate
+Material,8012505,6016991,信号电缆 PTYL23 (PTYLH23)型 12芯(低烟无卤阻燃型),数字信号电缆SPTYWL23型 12芯(低烟无卤阻燃型),m,m,1=使用best_candidate
+Material,8010053,6016391,信号电缆PJZL23型 12芯,数字信号电缆SPTYWL23型 12芯,m,m,1=使用best_candidate
+Material,8012052,6015731,信号电缆 PTYA23 (PTYAH23)型 8芯,数字信号电缆SPTYWA23型 8芯,m,m,1=使用best_candidate
+Material,8012059,6015941,信号电缆 PTYA23 (PTYAH23)型 24芯,数字信号电缆SPTYWA23型 24芯,m,m,1=使用best_candidate
+Material,8012086,6010061,信号电缆 PTYL23 (PTYLH23)型 16芯,信号电缆 PTYL23-1 6芯,m,m,1=使用best_candidate
+Material,8012511,6017171,信号电缆 PTYL23 (PTYLH23)型 28芯(低烟无卤阻燃型),数字信号电缆SPTYWL23型 28芯(低烟无卤阻燃型),m,m,1=使用best_candidate
+Material,8012514,6017261,信号电缆 PTYL23 (PTYLH23)型 37芯(低烟无卤阻燃型),数字信号电缆SPTYWL23型 37芯(低烟无卤阻燃型),m,m,1=使用best_candidate
+Material,8012063,6016061,信号电缆 PTYA23 (PTYAH23)型 37芯,数字信号电缆SPTYWA23型 37芯,m,m,1=使用best_candidate
+Material,8012089,6016541,信号电缆 PTYL23 (PTYLH23)型 24芯,数字信号电缆SPTYWL23型 24芯,m,m,1=使用best_candidate
+Material,8012515,6017291,信号电缆 PTYL23 (PTYLH23)型 42芯(低烟无卤阻燃型),数字信号电缆SPTYWL23型 42芯(低烟无卤阻燃型),m,m,1=使用best_candidate
+Material,8012517,6017351,信号电缆 PTYL23 (PTYLH23)型 48芯(低烟无卤阻燃型),数字信号电缆SPTYWL23型 48芯(低烟无卤阻燃型),m,m,1=使用best_candidate
+Material,8012506,6017021,信号电缆 PTYL23 (PTYLH23)型 14芯(低烟无卤阻燃型),数字信号电缆SPTYWL23型 14芯(低烟无卤阻燃型),m,m,1=使用best_candidate
+Material,8012507,6017051,信号电缆 PTYL23 (PTYLH23)型 16芯(低烟无卤阻燃型),数字信号电缆SPTYWL23型 16芯(低烟无卤阻燃型),m,m,1=使用best_candidate
+Material,8012508,6017081,信号电缆 PTYL23 (PTYLH23)型 19芯(低烟无卤阻燃型),数字信号电缆SPTYWL23型 19芯(低烟无卤阻燃型),m,m,1=使用best_candidate
+Material,8012510,6017141,信号电缆 PTYL23 (PTYLH23)型 24芯(低烟无卤阻燃型),数字信号电缆SPTYWL23型 24芯(低烟无卤阻燃型),m,m,1=使用best_candidate
+Material,8012090,6016571,信号电缆 PTYL23 (PTYLH23)型 28芯,数字信号电缆SPTYWL23型 28芯,m,m,1=使用best_candidate
+Material,8012091,6016601,信号电缆 PTYL23 (PTYLH23)型 30芯,数字信号电缆SPTYWL23型 30芯,m,m,1=使用best_candidate
+Material,8012516,6017321,信号电缆 PTYL23 (PTYLH23)型 44芯(低烟无卤阻燃型),数字信号电缆SPTYWL23型 44芯(低烟无卤阻燃型),m,m,1=使用best_candidate
+Material,8012056,6015851,信号电缆 PTYA23 (PTYAH23)型 16芯,数字信号电缆SPTYWA23型 16芯,m,m,1=使用best_candidate
+Material,8012058,6015911,信号电缆 PTYA23 (PTYAH23)型 21芯,数字信号电缆SPTYWA23型 21芯,m,m,1=使用best_candidate
+Material,8012060,6015971,信号电缆 PTYA23 (PTYAH23)型 28芯,数字信号电缆SPTYWA23型 28芯,m,m,1=使用best_candidate
+Material,8012512,6017201,信号电缆 PTYL23 (PTYLH23)型 30芯(低烟无卤阻燃型),数字信号电缆SPTYWL23型 30芯(低烟无卤阻燃型),m,m,1=使用best_candidate
+Material,8012502,6016901,信号电缆 PTYL23 (PTYLH23)型 6芯(低烟无卤阻燃型),数字信号电缆SPTYWL23型 6芯(低烟无卤阻燃型),m,m,1=使用best_candidate
+Material,8012503,6016931,信号电缆 PTYL23 (PTYLH23)型 8芯(低烟无卤阻燃型),数字信号电缆SPTYWL23型 8芯(低烟无卤阻燃型),m,m,1=使用best_candidate
+Material,8012066,6016151,信号电缆 PTYA23 (PTYAH23)型 48芯,数字信号电缆SPTYWA23型 48芯,m,m,1=使用best_candidate
+Material,8012061,6016001,信号电缆 PTYA23 (PTYAH23)型 30芯,数字信号电缆SPTYWA23型 30芯,m,m,1=使用best_candidate
+Material,8012062,6016031,信号电缆 PTYA23 (PTYAH23)型 33芯,数字信号电缆SPTYWA23型 33芯,m,m,1=使用best_candidate
+Material,8012064,6016091,信号电缆 PTYA23 (PTYAH23)型 42芯,数字信号电缆SPTYWA23型 42芯,m,m,1=使用best_candidate
+Material,8012065,6016121,信号电缆 PTYA23 (PTYAH23)型 44芯,数字信号电缆SPTYWA23型 44芯,m,m,1=使用best_candidate
+Material,8012057,6015881,信号电缆 PTYA23 (PTYAH23)型 19芯,数字信号电缆SPTYWA23型 19芯,m,m,1=使用best_candidate
+Material,8800100,1061651,高强度尼龙螺栓,高强螺栓,套,kg,1=使用best_candidate
+Material,8012080,6016271,信号电缆 PTYL23 (PTYLH23)型 4芯,数字信号电缆SPTYWL23型 4芯,m,m,1=使用best_candidate
+Material,8012081,6016301,信号电缆 PTYL23 (PTYLH23)型 6芯,数字信号电缆SPTYWL23型 6芯,m,m,1=使用best_candidate
+Material,8012082,6016331,信号电缆 PTYL23 (PTYLH23)型 8芯,数字信号电缆SPTYWL23型 8芯,m,m,1=使用best_candidate
+Material,8012085,6010031,信号电缆 PTYL23 (PTYLH23)型 14芯,信号电缆 PTYL23-1 4芯,m,m,1=使用best_candidate
+Material,8012509,6017111,信号电缆 PTYL23 (PTYLH23)型 21芯(低烟无卤阻燃型),数字信号电缆SPTYWL23型 21芯(低烟无卤阻燃型),m,m,1=使用best_candidate
+Material,8012083,6016361,信号电缆 PTYL23 (PTYLH23)型 9芯,数字信号电缆SPTYWL23型 9芯,m,m,1=使用best_candidate
+Material,8012087,6010121,信号电缆 PTYL23 (PTYLH23)型 19芯,信号电缆 PTYL23-1 9芯,m,m,1=使用best_candidate
+Material,8214021,6030685,整流式缓放继电器 JZXC-H18,整流式继电器 JZXC-480,台,台,1=使用best_candidate
+Material,8214028,6030613,继电器 JPXC-H270,继电器 JWXC-H340,台,台,1=使用best_candidate
+Material,1240015,1086761,碎石 63以内,碎石 ≤63 (圬工用),m3,m3,1=使用best_candidate
+Material,1260131,1094071,粉煤灰(非混凝土工程),粉煤灰Ⅲ级,t,t,L列指定电算代号
+Machine,9100431,9105404,稳定土拌合机 ≤120kW,泥浆搅拌机 ≤2200L,台班,台班,L列指定电算代号
+Material,1240119,1087593,级配砾石 40以内,级配砾石 ≤40,m3,m3,1=使用best_candidate
