@@ -3247,6 +3247,7 @@ namespace RecoQuotaRecommend
         private readonly MappingStore mappingStore;
         private readonly ChapterLibraryStore chapterLibrary;
         private readonly Label entryScopeLabel;
+        private readonly ToolTip entryScopeTip = new ToolTip();
         private DeepSeekSettings deepSeekSettings;
         private readonly List<RecommendationRow> recommendations = new List<RecommendationRow>();
         private ExcelSelection currentSelection;
@@ -3261,7 +3262,7 @@ namespace RecoQuotaRecommend
             mainForm = owner;
             Text = "\u6279\u91cf\u63a8\u8350\u5b9a\u989d";
             StartPosition = FormStartPosition.CenterParent;
-            Width = 1160;
+            Width = 1280;
             Height = 680;
             MinimizeBox = false;
 
@@ -3342,19 +3343,22 @@ namespace RecoQuotaRecommend
                 }
             };
 
+            // 条目信息标签随窗口拉宽而变宽（Anchor 含 Right），并挂 ToolTip 以便窄窗时悬停查看完整内容
             entryScopeLabel = new Label();
             entryScopeLabel.Left = 894;
             entryScopeLabel.Top = 15;
-            entryScopeLabel.Width = 176;
+            entryScopeLabel.Width = 162;
             entryScopeLabel.Height = 17;
             entryScopeLabel.AutoEllipsis = true;
+            entryScopeLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             entryScopeLabel.Text = "";
 
             Button refreshEntryButton = new Button();
             refreshEntryButton.Text = "刷新条目";
-            refreshEntryButton.Left = 1072;
-            refreshEntryButton.Top = 10;
             refreshEntryButton.Width = 66;
+            refreshEntryButton.Left = 1264 - 12 - refreshEntryButton.Width; // 贴右
+            refreshEntryButton.Top = 10;
+            refreshEntryButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             refreshEntryButton.Click += delegate
             {
                 if (currentSelection != null)
@@ -3370,7 +3374,7 @@ namespace RecoQuotaRecommend
             resultGrid = new DataGridView();
             resultGrid.Left = 12;
             resultGrid.Top = 48;
-            resultGrid.Width = 1120;
+            resultGrid.Width = 1240;
             resultGrid.Height = 555;
             resultGrid.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             resultGrid.AllowUserToAddRows = false;
@@ -3386,7 +3390,7 @@ namespace RecoQuotaRecommend
             statusLabel = new Label();
             statusLabel.Left = 12;
             statusLabel.Top = 612;
-            statusLabel.Width = 1120;
+            statusLabel.Width = 1240;
             statusLabel.Height = 36;
             statusLabel.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
 
@@ -3739,20 +3743,60 @@ namespace RecoQuotaRecommend
             {
                 entryScopeLabel.Text = "条目库未启用";
                 entryScopeLabel.ForeColor = SystemColors.GrayText;
+                entryScopeTip.SetToolTip(entryScopeLabel, "未找到章节条目库（chapter-entries.jsonl），按全库推荐。");
                 return;
             }
 
             if (currentEntryScope != null && currentEntryScope.Strict)
             {
-                entryScopeLabel.Text = "条目:" + currentEntryScope.MatchedEntryCode + " " + (currentEntryScope.EntryName ?? "")
+                string text = "条目:" + currentEntryScope.MatchedEntryCode + " " + (currentEntryScope.EntryName ?? "")
                     + "｜池" + currentEntryScope.PoolKeys.Count.ToString(CultureInfo.InvariantCulture) + "条 严格";
+                entryScopeLabel.Text = text;
                 entryScopeLabel.ForeColor = Color.FromArgb(46, 96, 49);
+                string tip = text;
+                if (!String.Equals(currentEntryScope.ProjectEntryCode, currentEntryScope.MatchedEntryCode, StringComparison.Ordinal))
+                {
+                    tip += "\r\n（当前条目 " + currentEntryScope.ProjectEntryCode + " 为新建/复制条目，采用来源条目 " + currentEntryScope.MatchedEntryCode + " 的定额池）";
+                }
+                entryScopeTip.SetToolTip(entryScopeLabel, tip);
             }
             else
             {
                 entryScopeLabel.Text = "条目:未识别（全库推荐）";
                 entryScopeLabel.ForeColor = SystemColors.GrayText;
+                entryScopeTip.SetToolTip(entryScopeLabel, "未识别到当前定额行所属的小计/指标条目，按全库推荐。可在主程序选中定额行后点“刷新条目”。");
             }
+        }
+
+        private Dictionary<string, bool> SnapshotCheckStates()
+        {
+            Dictionary<string, bool> states = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < resultGrid.Rows.Count && i < recommendations.Count; i++)
+            {
+                RecommendationRow rec = recommendations[i];
+                if (rec == null || String.IsNullOrWhiteSpace(rec.QuotaCode))
+                {
+                    continue;
+                }
+
+                object value = resultGrid.Rows[i].Cells["Checked"].Value;
+                states[CheckStateKey(rec)] = value is bool && (bool)value;
+            }
+
+            return states;
+        }
+
+        private static string CheckStateKey(RecommendationRow row)
+        {
+            if (row == null || row.Item == null)
+            {
+                return "";
+            }
+
+            string nameForKey = String.IsNullOrWhiteSpace(row.Item.OriginalName) ? row.Item.Name : row.Item.OriginalName;
+            string codeKey = (String.IsNullOrWhiteSpace(row.TargetKind) ? QuotaEntry.GuessKind(row.QuotaCode) : row.TargetKind)
+                + ":" + (row.QuotaCode ?? "").Trim().ToUpperInvariant();
+            return LearningStore.BuildQuantitySignature(nameForKey, row.Item.Unit) + "|" + codeKey;
         }
 
         private void FillRecommendations(ExcelSelection selection, bool normalizeNames)
@@ -3762,6 +3806,8 @@ namespace RecoQuotaRecommend
             RefreshEntryScope();
             EntryScope scope = currentEntryScope;
             lastScopeKeyUsed = scope != null && scope.Strict ? scope.Tag : "";
+            // 重建前快照各行勾选状态，避免用户手动取消的勾选在刷新后又被自动勾上
+            Dictionary<string, bool> priorChecks = SnapshotCheckStates();
             recommendations.Clear();
             resultGrid.Rows.Clear();
             if (normalizeNames)
@@ -3802,8 +3848,11 @@ namespace RecoQuotaRecommend
                     {
                         bool isContinuation = itemRowIndex > 0 && String.Equals(recommendation.Source, "mapping", StringComparison.OrdinalIgnoreCase);
                         recommendations.Add(recommendation);
+                        bool defaultChecked = recommendation.Score >= 60 && !String.IsNullOrWhiteSpace(recommendation.QuotaCode);
+                        bool priorChecked;
+                        bool checkedValue = priorChecks.TryGetValue(CheckStateKey(recommendation), out priorChecked) ? priorChecked : defaultChecked;
                         int gridRowIndex = resultGrid.Rows.Add(
-                            recommendation.Score >= 60,
+                            checkedValue,
                             isContinuation ? "" : "\u6276\u6b63",
                             isContinuation ? "" : item.Name,
                             item.Unit,
@@ -4030,14 +4079,41 @@ namespace RecoQuotaRecommend
             return rows;
         }
 
+        // 工程量名称含“模板/模版”视为模板工程量，不配定额
+        private static bool IsFormworkQuantity(string name)
+        {
+            string text = name ?? "";
+            return text.IndexOf("模板", StringComparison.Ordinal) >= 0 || text.IndexOf("模版", StringComparison.Ordinal) >= 0;
+        }
+
         private List<RecommendationRow> BuildRecommendations(ExcelQuantityItem item, string categoryFilter, EntryScope scope, RecommendationBatchStats stats)
         {
             List<AiQuotaCandidate> aiCandidates = new List<AiQuotaCandidate>();
+            // 人工扶正过的对应框优先（即便是模板，也按用户指定的定额显示）
             List<RecommendationRow> mapped = mappingStore.Find(item, categoryFilter, searchIndex, scope);
             if (mapped.Count > 0)
             {
                 stats.MappingHits++;
                 return mapped;
+            }
+
+            // 模板类工程量按规则不配定额：保留工程量行，推荐定额留空，且不走 AI 补推
+            if (IsFormworkQuantity(item.Name))
+            {
+                RecommendationRow skip = new RecommendationRow();
+                skip.Item = item;
+                skip.QuotaCode = "";
+                skip.QuotaName = "";
+                skip.QuotaUnit = "";
+                skip.ConvertedValueText = item.ValueText;
+                skip.Score = 0;
+                skip.Reason = "模板工程量按规则不推荐定额";
+                skip.Source = "skip";
+                skip.TargetKind = "quota";
+                skip.AiCandidates = new List<AiQuotaCandidate>();
+                skip.AiMappingCandidates = new List<AiMappingCandidate>();
+                stats.EmptyRows++;
+                return new List<RecommendationRow> { skip };
             }
 
             List<AiMappingCandidate> mappingCandidates = deepSeekSettings.CanDetectMapping
@@ -4049,6 +4125,18 @@ namespace RecoQuotaRecommend
                 if (!aiCandidates.Any(c => c != null && c.Quota != null && candidate != null && candidate.Quota != null && String.Equals(c.Quota.QuotaCode, candidate.Quota.QuotaCode, StringComparison.OrdinalIgnoreCase)))
                 {
                     aiCandidates.Add(candidate);
+                }
+            }
+
+            // 严格条目模式：把整条目定额池补进候选，确保池里相关定额都能被本地匹配或 AI 选中（关键词没命中也不漏）
+            if (scope != null && scope.Strict)
+            {
+                foreach (AiQuotaCandidate candidate in searchIndex.BuildScopeCandidates(item, scope, deepSeekSettings.MaxCandidatesPerRow))
+                {
+                    if (!aiCandidates.Any(c => c != null && c.Quota != null && candidate != null && candidate.Quota != null && String.Equals(c.Quota.QuotaCode, candidate.Quota.QuotaCode, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        aiCandidates.Add(candidate);
+                    }
                 }
             }
 
@@ -4155,6 +4243,10 @@ namespace RecoQuotaRecommend
             {
                 return "\u672a\u5339\u914d";
             }
+            if (String.Equals(row.Source, "skip", StringComparison.OrdinalIgnoreCase))
+            {
+                return "\u6a21\u677f\u514d\u63a8";
+            }
             if (String.Equals(row.Source, "index", StringComparison.OrdinalIgnoreCase))
             {
                 return "\u672c\u5730\u7d22\u5f15";
@@ -4219,8 +4311,9 @@ namespace RecoQuotaRecommend
             int currentCost = 0;
             foreach (AiPendingRecommendation item in pending ?? new List<AiPendingRecommendation>())
             {
+                // 每批控制在较小规模，让单次 AI 请求能在超时时间内返回，减少超时行
                 int cost = EstimateDeepSeekRowCost(item);
-                if (current.Count > 0 && (current.Count >= 12 || currentCost + cost > 90))
+                if (current.Count > 0 && (current.Count >= 6 || currentCost + cost > 50))
                 {
                     batches.Add(current);
                     current = new List<AiPendingRecommendation>();
@@ -6794,7 +6887,7 @@ namespace RecoQuotaRecommend
         public string ApiKey;
         public string Model = "deepseek-v4-pro";
         public string BaseUrl = "https://api.deepseek.com";
-        public int TimeoutSeconds = 8;
+        public int TimeoutSeconds = 20;
         public int MaxRowsPerBatch = 8;
         public int MaxCandidatesPerRow = 12;
         public int LocalHighScore = 80;
@@ -6866,7 +6959,7 @@ namespace RecoQuotaRecommend
                 settings.ApiKey = ReadString(values, "api_key", "");
                 settings.Model = ReadString(values, "model", settings.Model);
                 settings.BaseUrl = ReadString(values, "base_url", settings.BaseUrl).TrimEnd('/');
-                settings.TimeoutSeconds = Clamp(ReadInt(values, "timeout_seconds", settings.TimeoutSeconds), 2, 60);
+                settings.TimeoutSeconds = Clamp(ReadInt(values, "timeout_seconds", settings.TimeoutSeconds), 2, 120);
                 settings.MaxRowsPerBatch = Clamp(ReadInt(values, "max_rows_per_batch", settings.MaxRowsPerBatch), 1, 20);
                 settings.MaxCandidatesPerRow = Clamp(ReadInt(values, "max_candidates_per_row", settings.MaxCandidatesPerRow), 3, 20);
                 settings.LocalHighScore = Clamp(ReadInt(values, "local_high_score", settings.LocalHighScore), 60, 120);
@@ -7063,7 +7156,7 @@ namespace RecoQuotaRecommend
             baseUrlText = AddTextBox(Settings.BaseUrl, 180, 96, 280);
 
             AddLabel("\u8d85\u65f6\u79d2\u6570", 24, 136, 150);
-            timeoutInput = AddNumber(Settings.TimeoutSeconds, 180, 132, 2, 60);
+            timeoutInput = AddNumber(Settings.TimeoutSeconds, 180, 132, 2, 120);
 
             AddLabel("\u6bcf\u884c\u5019\u9009\u6570", 24, 172, 150);
             candidatesInput = AddNumber(Settings.MaxCandidatesPerRow, 180, 168, 3, 20);
@@ -7733,10 +7826,43 @@ namespace RecoQuotaRecommend
         public string QuotaName;
         public string QuotaUnit;
 
-        public static string GuessKind(string code)
+        // 去掉 *乘数 / ×乘数 与 参/换/借 调整后缀，取原始编号（用于判类与索引查找）
+        public static string NormalizeCode(string code)
         {
             string value = (code ?? "").Trim();
-            return value.Length > 0 && value.All(Char.IsDigit) ? "material" : "quota";
+            if (value.Length == 0)
+            {
+                return "";
+            }
+
+            int cut = value.IndexOfAny(new[] { '*', '×' });
+            if (cut >= 0)
+            {
+                value = value.Substring(0, cut);
+            }
+            value = value.Replace("参", "").Replace("换", "").Replace("借", "");
+            return value.Trim();
+        }
+
+        // 三类：纯数字=材料；含横杠=定额（所有真实定额编号都带横杠，已核对全库无例外）；
+        // 其余字母代号（GF/ZLF/LF/JF/SF/YF/TLF/XGT1…）=辅助代号，按材料一样与定额配套使用。
+        public static string GuessKind(string code)
+        {
+            string value = NormalizeCode(code);
+            if (value.Length == 0)
+            {
+                return "quota";
+            }
+            if (value.All(Char.IsDigit))
+            {
+                return "material";
+            }
+            return value.IndexOf('-') >= 0 ? "quota" : "aux";
+        }
+
+        public static bool IsQuotaKind(string kind)
+        {
+            return String.Equals(kind, "quota", StringComparison.OrdinalIgnoreCase);
         }
 
         public string TargetKey
@@ -7834,13 +7960,14 @@ namespace RecoQuotaRecommend
         public bool IsMappingTargetAllowed(string targetKind, string code, string categoryFilter)
         {
             string kind = String.IsNullOrWhiteSpace(targetKind) ? QuotaEntry.GuessKind(code) : targetKind;
-            if (!String.Equals(kind, "quota", StringComparison.OrdinalIgnoreCase))
+            if (!QuotaEntry.IsQuotaKind(kind))
             {
-                return true;
+                return true; // 材料与辅助代号随定额一起带出，不受定额类别过滤
             }
 
+            // 扶正时可能带 *乘数（如 LY-25*9），查索引前先归一化取原始编号
             IndexQuota quota;
-            if (!quotasByCode.TryGetValue((code ?? "").Trim(), out quota))
+            if (!quotasByCode.TryGetValue(QuotaEntry.NormalizeCode(code), out quota))
             {
                 return false;
             }
@@ -7862,6 +7989,32 @@ namespace RecoQuotaRecommend
                 .OrderByDescending(c => c.LocalScore)
                 .ThenBy(c => c.Quota.SortOrder)
                 .Take(max)
+                .ToList();
+        }
+
+        // 严格条目模式：把整条目定额池作为候选（不依赖关键词命中），按名称相似度打分。
+        // 这样池里相关定额即使名称不完全匹配也能进候选，既提高本地直接命中率，也让 AI 拿到聚焦的小候选集，更快更准。
+        public List<AiQuotaCandidate> BuildScopeCandidates(ExcelQuantityItem item, EntryScope scope, int limit)
+        {
+            if (item == null || scope == null || !scope.Strict)
+            {
+                return new List<AiQuotaCandidate>();
+            }
+
+            List<AiQuotaCandidate> candidates = new List<AiQuotaCandidate>();
+            foreach (string code in scope.QuotaPoolCodes)
+            {
+                IndexQuota quota;
+                if (quotasByCode.TryGetValue((code ?? "").Trim(), out quota))
+                {
+                    candidates.Add(new AiQuotaCandidate { Quota = quota, LocalScore = ScoreQuota(item, quota) });
+                }
+            }
+
+            return candidates
+                .OrderByDescending(c => c.LocalScore)
+                .ThenBy(c => c.Quota.SortOrder)
+                .Take(Math.Max(1, limit))
                 .ToList();
         }
 
@@ -8524,7 +8677,27 @@ namespace RecoQuotaRecommend
             }
 
             string kind = String.IsNullOrWhiteSpace(targetKind) ? QuotaEntry.GuessKind(code) : targetKind;
-            return PoolKeys.Contains(kind.ToLowerInvariant() + ":" + (code ?? "").Trim().ToUpperInvariant());
+            return PoolKeys.Contains(kind.ToLowerInvariant() + ":" + QuotaEntry.NormalizeCode(code).ToUpperInvariant());
+        }
+
+        // 条目定额池里所有 quota 类定额编号（去掉 "quota:" 前缀），用于把整池作为候选喂给本地匹配/AI
+        public IEnumerable<string> QuotaPoolCodes
+        {
+            get
+            {
+                if (PoolKeys == null)
+                {
+                    yield break;
+                }
+
+                foreach (string key in PoolKeys)
+                {
+                    if (key.StartsWith("quota:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        yield return key.Substring("quota:".Length);
+                    }
+                }
+            }
         }
     }
 
@@ -9211,10 +9384,12 @@ namespace RecoQuotaRecommend
                     box.EntryCodes.Add(entryTag.Trim());
                 }
 
+                // 类别由编号确定地推导（覆盖旧文件里把 ZLF/TLF 等辅助代号误存成 quota 的记录）
+                string parsedCode = LearningStore.Get(values, "target_code");
                 MappingTarget target = new MappingTarget
                 {
-                    TargetKind = LearningStore.Get(values, "target_kind"),
-                    Code = LearningStore.Get(values, "target_code"),
+                    TargetKind = QuotaEntry.GuessKind(parsedCode),
+                    Code = parsedCode,
                     Name = LearningStore.Get(values, "target_name"),
                     Unit = LearningStore.Get(values, "target_unit")
                 };
