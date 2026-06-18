@@ -38,24 +38,24 @@
     <ServerIP>192.168.2.13</ServerIP>
     <FtpPort>21</FtpPort>
     <SqlPort>1433</SqlPort>
-    <ReportSavePath>C:\Users\谢刚\Desktop\报表</ReportSavePath>
+    <ReportSavePath>D:\桌面文件\桌面文件夹\报表</ReportSavePath>
     <StartDeHelp>1</StartDeHelp>
     <OpenDeHelp>1</OpenDeHelp>
   </ServerSetting>
   <项目打开记录>
     <序号>1</序号>
-    <内容>董</内容>
+    <内容>经开</内容>
   </项目打开记录>
   <项目打开记录>
     <序号>2</序号>
-    <内容>董伟光</内容>
+    <内容>乍</内容>
   </项目打开记录>
   <项目打开记录>
     <序号>3</序号>
-    <内容>巢马</内容>
+    <内容>沪</内容>
   </项目打开记录>
   <项目打开记录>
     <序号>4</序号>
-    <内容>淮宿蚌</内容>
+    <内容>董</内容>
   </项目打开记录>
 </ServerSetting>

@@ -39,6 +39,9 @@ Desktop.ini
 /RecoQuotaData/
 /**/RecoQuotaData/
 
+# ChapterQuotaLibrary scan outputs (regenerable; raw dumps can exceed GitHub size limits)
+/tools/ChapterQuotaLibrary/reports/
+
 # Decompiled or extracted temporary sources
 /extracted-src/
 
