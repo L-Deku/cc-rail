@@ -317,8 +317,13 @@ namespace RecoNet
                 }
 
                 string valueText = FormatDecimal(converted);
+                decimal writeValue;
+                if (!TryEvaluateQuantity(valueText, out writeValue))
+                {
+                    writeValue = converted;
+                }
 
-                WriteQuantity(row, targetColumnIndex, valueText, converted);
+                WriteQuantity(row, targetColumnIndex, valueText, writeValue);
                 string status = "\u5df2\u5199\u5165\uff1a" + valueText + " (" + CleanDisplayUnit(excelCell.UnitText) + " -> " + CleanDisplayUnit(quotaUnit) + ")";
                 ShowStatus(status);
                 Log("Excel instant quantity applied: row=" + targetRowIndex.ToString(CultureInfo.InvariantCulture)
