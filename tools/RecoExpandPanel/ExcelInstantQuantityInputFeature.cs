@@ -142,7 +142,6 @@ namespace RecoNet
                 ClearQuantityTargets();
                 if (enabled)
                 {
-                    lastExcelKey = TryReadCurrentSpreadsheetKey();
                     CaptureCurrentQuantityTarget(false);
                     pollTimer.Start();
                     ShowStatus("\u5df2\u5f00\u542fExcel\u70b9\u9009\u5373\u586b\uff1a\u5148\u70b9\u8f6f\u4ef6\u5de5\u7a0b\u6570\u91cf\u683c\uff0c\u518d\u70b9Excel\u6570\u91cf\u683c\u3002");
@@ -181,13 +180,9 @@ namespace RecoNet
                 quantityTargets.AddRange(selectedTargets);
                 if (changed)
                 {
-                    wasSpreadsheetForeground = false;
                     if (enabled)
                     {
-                        lastExcelKey = TryReadCurrentSpreadsheetKey();
-                        waitingForSpreadsheetClick = true;
-                        awaitingSpreadsheetActivation = true;
-                        waitingForSoftwareBlur = !hasReusableSpreadsheetSelection;
+                        ArmSpreadsheetSelectionForCurrentTarget();
                     }
                     else
                     {
@@ -204,12 +199,21 @@ namespace RecoNet
                 }
                 else if (enabled && !waitingForSpreadsheetClick)
                 {
-                    wasSpreadsheetForeground = false;
-                    lastExcelKey = TryReadCurrentSpreadsheetKey();
-                    waitingForSpreadsheetClick = true;
-                    awaitingSpreadsheetActivation = true;
-                    waitingForSoftwareBlur = !hasReusableSpreadsheetSelection;
+                    ArmSpreadsheetSelectionForCurrentTarget();
                 }
+            }
+
+            private void ArmSpreadsheetSelectionForCurrentTarget()
+            {
+                wasSpreadsheetForeground = false;
+                if (!hasReusableSpreadsheetSelection)
+                {
+                    lastExcelKey = TryReadCurrentSpreadsheetKey();
+                }
+
+                waitingForSpreadsheetClick = true;
+                awaitingSpreadsheetActivation = true;
+                waitingForSoftwareBlur = !hasReusableSpreadsheetSelection;
             }
 
             private void ClearQuantityTargets()
