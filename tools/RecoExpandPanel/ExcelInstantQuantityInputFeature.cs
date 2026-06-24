@@ -49,6 +49,7 @@ namespace RecoNet
             private string lastExcelKey = "";
             private bool wasSpreadsheetForeground;
             private bool waitingForSpreadsheetClick;
+            private string lastStatusMessage = "";
             private DateTime lastStatusUtc = DateTime.MinValue;
             private DateTime nextConnectionAttemptUtc = DateTime.MinValue;
 
@@ -138,15 +139,16 @@ namespace RecoNet
                 enabled = !enabled;
                 wasSpreadsheetForeground = false;
                 waitingForSpreadsheetClick = false;
-                lastExcelKey = TryReadCurrentSpreadsheetKey();
                 if (enabled)
                 {
+                    lastExcelKey = TryReadCurrentSpreadsheetKey();
                     CaptureCurrentQuantityTarget(false);
                     pollTimer.Start();
                     ShowStatus("\u5df2\u5f00\u542fExcel\u70b9\u9009\u5373\u586b\uff1a\u5148\u70b9\u8f6f\u4ef6\u5de5\u7a0b\u6570\u91cf\u683c\uff0c\u518d\u70b9Excel\u6570\u91cf\u683c\u3002");
                 }
                 else
                 {
+                    lastExcelKey = "";
                     pollTimer.Stop();
                     ShowStatus("\u5df2\u5173\u95edExcel\u70b9\u9009\u5373\u586b\u3002");
                 }
@@ -162,6 +164,11 @@ namespace RecoNet
                 DataGridViewCell cell = grid.CurrentCell;
                 if (!IsQuantityColumn(cell.ColumnIndex))
                 {
+                    targetRowIndex = -1;
+                    targetColumnIndex = -1;
+                    waitingForSpreadsheetClick = false;
+                    wasSpreadsheetForeground = false;
+                    lastExcelKey = "";
                     return;
                 }
 
@@ -171,8 +178,17 @@ namespace RecoNet
                 if (changed)
                 {
                     wasSpreadsheetForeground = false;
-                    lastExcelKey = TryReadCurrentSpreadsheetKey();
-                    waitingForSpreadsheetClick = enabled;
+                    if (enabled)
+                    {
+                        lastExcelKey = TryReadCurrentSpreadsheetKey();
+                        waitingForSpreadsheetClick = true;
+                    }
+                    else
+                    {
+                        lastExcelKey = "";
+                        waitingForSpreadsheetClick = false;
+                    }
+
                     if (notify)
                     {
                         ShowStatus("\u5df2\u9009\u5b9a\u8f6f\u4ef6\u6570\u91cf\u683c\uff0c\u8bf7\u70b9\u51fbExcel\u5de5\u7a0b\u6570\u91cf\u5355\u5143\u683c\u3002");
@@ -723,19 +739,21 @@ namespace RecoNet
 
             private void ShowStatus(string message)
             {
+                DateTime now = DateTime.UtcNow;
+                if (String.Equals(lastStatusMessage, message, StringComparison.Ordinal) &&
+                    (now - lastStatusUtc).TotalMilliseconds < 600)
+                {
+                    return;
+                }
+
+                lastStatusMessage = message;
+                lastStatusUtc = now;
                 Log("Excel instant quantity status: " + message);
                 if (grid == null || grid.IsDisposed)
                 {
                     return;
                 }
 
-                DateTime now = DateTime.UtcNow;
-                if ((now - lastStatusUtc).TotalMilliseconds < 600)
-                {
-                    return;
-                }
-
-                lastStatusUtc = now;
                 try
                 {
                     statusTip.Show(message, grid, 12, 12, 1800);
