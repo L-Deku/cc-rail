@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.Linq;
@@ -15,6 +16,8 @@ namespace RecoQuotaRecommend
         private const int VisibleRows = 8;
         private const int MaxCandidates = 100;
         private const int PreferredPopupWidth = 820;
+        private const int MinimumPopupWidth = 420;
+        private const int ResizeGripSize = 6;
         private const string AllCategories = "\u5168\u90e8";
         private static readonly Dictionary<Form, Runtime> Runtimes = new Dictionary<Form, Runtime>();
 
@@ -42,17 +45,71 @@ namespace RecoQuotaRecommend
             QuotaRecommendPanel.Log("Inline quota search installed.");
         }
 
+        private sealed class BufferedCandidateGrid : DataGridView
+        {
+            public BufferedCandidateGrid()
+            {
+                DoubleBuffered = true;
+                SetStyle(ControlStyles.OptimizedDoubleBuffer |
+                    ControlStyles.AllPaintingInWmPaint |
+                    ControlStyles.ResizeRedraw, true);
+                UpdateStyles();
+            }
+        }
+
+        private sealed class CandidatePopupForm : Form
+        {
+            private const int WsExNoActivate = 0x08000000;
+
+            public CandidatePopupForm(DataGridView grid)
+            {
+                if (grid == null) throw new ArgumentNullException("grid");
+                Text = "\u5019\u9009\u5b9a\u989d";
+                StartPosition = FormStartPosition.Manual;
+                FormBorderStyle = FormBorderStyle.SizableToolWindow;
+                ShowInTaskbar = false;
+                MinimizeBox = false;
+                MaximizeBox = false;
+                ControlBox = false;
+                BackColor = SystemColors.Control;
+                Padding = Padding.Empty;
+                SizeGripStyle = SizeGripStyle.Show;
+                grid.Dock = DockStyle.Fill;
+                Controls.Add(grid);
+            }
+
+            protected override bool ShowWithoutActivation
+            {
+                get { return true; }
+            }
+
+            protected override CreateParams CreateParams
+            {
+                get
+                {
+                    CreateParams parameters = base.CreateParams;
+                    parameters.ExStyle |= WsExNoActivate;
+                    return parameters;
+                }
+            }
+
+            public Size GetWindowSizeForClient(Size clientSize)
+            {
+                return SizeFromClientSize(clientSize);
+            }
+        }
         private sealed class Runtime : IDisposable
         {
             private readonly Form mainForm;
             private readonly DataGridView grid;
             private readonly Timer timer;
             private readonly DataGridView candidateGrid;
-            private readonly ToolStripDropDown popup;
-            private readonly ToolStripControlHost host;
+            private readonly CandidatePopupForm popup;
             private readonly SearchIndexStore searchIndex;
             private readonly ChapterLibraryStore chapterLibrary;
             private readonly Dictionary<string, bool> methodCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            private Size rememberedPopupSize = Size.Empty;
+            private bool settingPopupSize;
             private TextBox editor;
             private int rowIndex = -1;
             private int colIndex = -1;
@@ -67,22 +124,16 @@ namespace RecoQuotaRecommend
                 timer.Interval = SearchDelayMs;
                 timer.Tick += TimerTick;
                 candidateGrid = CreateCandidateGrid();
-                host = new ToolStripControlHost(candidateGrid);
-                host.Margin = Padding.Empty;
-                host.Padding = Padding.Empty;
-                host.AutoSize = false;
-                popup = new ToolStripDropDown();
-                popup.AutoClose = false;
-                popup.Margin = Padding.Empty;
-                popup.Padding = Padding.Empty;
-                popup.Items.Add(host);
+                popup = new CandidatePopupForm(candidateGrid);
+                popup.SizeChanged += PopupSizeChanged;
+                popup.Deactivate += PopupDeactivate;
                 searchIndex = SearchIndexStore.LoadOrBuild();
                 chapterLibrary = ChapterLibraryStore.Load();
             }
 
             private DataGridView CreateCandidateGrid()
             {
-                DataGridView candidate = new DataGridView();
+                DataGridView candidate = new BufferedCandidateGrid();
                 candidate.BorderStyle = BorderStyle.FixedSingle;
                 candidate.BackgroundColor = SystemColors.Window;
                 candidate.Font = grid.Font;
@@ -183,6 +234,8 @@ namespace RecoQuotaRecommend
                 mainForm.Deactivate -= MainFormDeactivate;
                 timer.Stop();
                 timer.Dispose();
+                popup.SizeChanged -= PopupSizeChanged;
+                popup.Deactivate -= PopupDeactivate;
                 popup.Dispose();
             }
 
@@ -233,9 +286,8 @@ namespace RecoQuotaRecommend
             private bool IsInteractingWithCandidateGrid()
             {
                 if (!popup.Visible || candidateGrid.IsDisposed) return false;
-                if (candidateGrid.Focused || candidateGrid.ContainsFocus) return true;
-                Point point = candidateGrid.PointToClient(Control.MousePosition);
-                return candidateGrid.ClientRectangle.Contains(point);
+                if (popup.ContainsFocus || candidateGrid.Focused || candidateGrid.ContainsFocus) return true;
+                return popup.Bounds.Contains(Control.MousePosition);
             }
 
             private void HandleKeys(KeyEventArgs e)
@@ -374,14 +426,73 @@ namespace RecoQuotaRecommend
                 int rowHeight = Math.Max(candidateGrid.RowTemplate.Height, 21);
                 int visibleCount = Math.Min(VisibleRows, candidateGrid.Rows.Count);
                 int height = candidateGrid.ColumnHeadersHeight + visibleCount * rowHeight + 3;
-                candidateGrid.Size = new Size(width, height);
-                host.Size = candidateGrid.Size;
-                if (popup.Visible) popup.Close(ToolStripDropDownCloseReason.CloseCalled);
-                Point gridScreen = grid.PointToScreen(Point.Empty);
-                int overflow = gridScreen.X + rect.Left + width - workingArea.Right;
-                int popupLeft = overflow > 0 ? Math.Max(0, rect.Left - overflow) : rect.Left;
-                popup.Show(grid, new Point(popupLeft, rect.Bottom));
+                int minimumHeight = candidateGrid.ColumnHeadersHeight + rowHeight + 3;
+                popup.MinimumSize = popup.GetWindowSizeForClient(new Size(MinimumPopupWidth, minimumHeight));
+                Size defaultPopupSize = popup.GetWindowSizeForClient(new Size(width, height));
+                Size popupSize = ResolvePopupSize(defaultPopupSize, workingArea);
+                if (popup.Visible) popup.Hide();
+                Point screenLocation = grid.PointToScreen(new Point(rect.Left, rect.Bottom));
+                int overflow = screenLocation.X + popupSize.Width - workingArea.Right;
+                int popupLeft = overflow > 0 ? Math.Max(workingArea.Left, screenLocation.X - overflow) : screenLocation.X;
+                int popupTop = Math.Min(screenLocation.Y, Math.Max(workingArea.Top, workingArea.Bottom - popupSize.Height));
+                settingPopupSize = true;
+                try
+                {
+                    popup.Size = popupSize;
+                    popup.Location = new Point(popupLeft, popupTop);
+                    ResizePopupContent();
+                }
+                finally
+                {
+                    settingPopupSize = false;
+                }
+                if (!popup.Visible) popup.Show(mainForm);
+                popup.Location = new Point(popupLeft, popupTop);
+                ResizePopupContent();
                 editor.Focus();
+            }
+
+            private Size ResolvePopupSize(Size defaultSize, Rectangle workingArea)
+            {
+                Size requested = rememberedPopupSize.IsEmpty ? defaultSize : rememberedPopupSize;
+                int minimumWidth = Math.Max(1, popup.MinimumSize.Width);
+                int minimumHeight = Math.Max(1, popup.MinimumSize.Height);
+                int maximumWidth = Math.Max(minimumWidth, workingArea.Width - 16);
+                int maximumHeight = Math.Max(minimumHeight, workingArea.Height - 16);
+                return new Size(
+                    Math.Min(maximumWidth, Math.Max(minimumWidth, requested.Width)),
+                    Math.Min(maximumHeight, Math.Max(minimumHeight, requested.Height)));
+            }
+
+            private void PopupSizeChanged(object sender, EventArgs e)
+            {
+                ResizePopupContent();
+                if (popup.Visible && !settingPopupSize)
+                {
+                    RememberCurrentPopupSize();
+                }
+            }
+
+            private void PopupDeactivate(object sender, EventArgs e)
+            {
+                if (applying || IsInteractingWithCandidateGrid()) return;
+                HidePopup();
+            }
+
+            private void ResizePopupContent()
+            {
+                if (candidateGrid.Dock != DockStyle.Fill) candidateGrid.Dock = DockStyle.Fill;
+                popup.PerformLayout();
+                candidateGrid.Invalidate();
+                popup.Invalidate();
+            }
+
+            private void RememberCurrentPopupSize()
+            {
+                if (!popup.IsDisposed && popup.Size.Width > 0 && popup.Size.Height > 0)
+                {
+                    rememberedPopupSize = popup.Size;
+                }
             }
 
             private void ApplySelected()
@@ -412,6 +523,7 @@ namespace RecoQuotaRecommend
                 }
 
                 applying = true;
+                Stopwatch applyTimer = Stopwatch.StartNew();
                 try
                 {
                     HidePopup();
@@ -419,16 +531,21 @@ namespace RecoQuotaRecommend
                     try { grid.CancelEdit(); }
                     catch { }
 
-                    if (TryApplyViaQuotaCodeCell(recommendation))
+                    if (TryApplyViaNativeEnterCommit(recommendation))
                     {
+                        QuotaRecommendPanel.Log("Inline quota apply completed via native single-enter: " + recommendation.QuotaCode.Trim()
+                            + " totalMs=" + applyTimer.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture));
                         return;
                     }
 
-                    if (TryApplyDirectRecommendation(recommendation))
+                    if (TryApplyViaQuotaCodeCell(recommendation))
                     {
+                        QuotaRecommendPanel.Log("Inline quota apply completed: " + recommendation.QuotaCode.Trim()
+                            + " totalMs=" + applyTimer.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture));
                         return;
                     }
-                    QuotaRecommendPanel.Log("Inline quota apply failed: native submit and direct fill both failed for " + recommendation.QuotaCode);
+
+                    QuotaRecommendPanel.Log("Inline quota apply failed: native single-enter and keyboard fallback both failed for " + recommendation.QuotaCode);
                 }
                 catch (Exception ex)
                 {
@@ -439,6 +556,65 @@ namespace RecoQuotaRecommend
                     applying = false;
                     rowIndex = -1;
                     colIndex = -1;
+                }
+            }
+
+            private bool TryApplyViaNativeEnterCommit(RecommendationRow recommendation)
+            {
+                if (recommendation == null || String.IsNullOrWhiteSpace(recommendation.QuotaCode))
+                {
+                    return false;
+                }
+
+                int targetRowIndex = rowIndex >= 0 && rowIndex < grid.Rows.Count ? rowIndex : -1;
+                int codeColumn = FindColumnIndex(QuotaCodeColumns());
+                if (targetRowIndex < 0 || codeColumn < 0 || codeColumn >= grid.Columns.Count)
+                {
+                    return false;
+                }
+
+                Stopwatch timer = Stopwatch.StartNew();
+                try
+                {
+                    bool targetWasLastRow = targetRowIndex == grid.Rows.Count - 1;
+                    grid.Focus();
+                    grid.ClearSelection();
+                    grid.CurrentCell = grid.Rows[targetRowIndex].Cells[codeColumn];
+                    grid.Rows[targetRowIndex].Selected = true;
+                    bool beganEdit = grid.BeginEdit(true);
+                    long beginEditMs = timer.ElapsedMilliseconds;
+                    TextBoxBase editControl = grid.EditingControl as TextBoxBase;
+                    if (!beganEdit || editControl == null)
+                    {
+                        QuotaRecommendPanel.Log("Inline quota native edit unavailable: " + recommendation.QuotaCode.Trim()
+                            + " row=" + targetRowIndex.ToString(CultureInfo.InvariantCulture)
+                            + " beganEdit=" + beganEdit.ToString()
+                            + " elapsedMs=" + timer.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture));
+                        return false;
+                    }
+
+                    editControl.Text = recommendation.QuotaCode.Trim();
+                    editControl.SelectionStart = editControl.TextLength;
+                    editControl.SelectionLength = 0;
+                    grid.NotifyCurrentCellDirty(true);
+                    SendKeys.SendWait("{ENTER}");
+                    long enterMs = timer.ElapsedMilliseconds - beginEditMs;
+                    Application.DoEvents();
+
+                    bool filled = TargetRowLooksFullyNativeCommitted(targetRowIndex, recommendation, targetWasLastRow);
+                    QuotaRecommendPanel.Log("Inline quota native single-enter submitted: " + recommendation.QuotaCode.Trim()
+                        + " row=" + targetRowIndex.ToString(CultureInfo.InvariantCulture)
+                        + " filled=" + filled.ToString()
+                        + " beginEditMs=" + beginEditMs.ToString(CultureInfo.InvariantCulture)
+                        + " enterMs=" + enterMs.ToString(CultureInfo.InvariantCulture)
+                        + " elapsedMs=" + timer.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture)
+                        + " data=" + DescribeInputRow(targetRowIndex));
+                    return filled;
+                }
+                catch (Exception ex)
+                {
+                    QuotaRecommendPanel.Log("Inline quota native single-enter failed: " + ex.Message);
+                    return false;
                 }
             }
 
@@ -458,108 +634,43 @@ namespace RecoQuotaRecommend
 
                 try
                 {
+                    bool targetWasLastRow = targetRowIndex == grid.Rows.Count - 1;
+                    Stopwatch stageTimer = Stopwatch.StartNew();
                     grid.Focus();
                     grid.ClearSelection();
                     grid.CurrentCell = grid.Rows[targetRowIndex].Cells[codeColumn];
                     grid.Rows[targetRowIndex].Selected = true;
                     Application.DoEvents();
+                    long focusMs = stageTimer.ElapsedMilliseconds;
 
                     grid.BeginEdit(true);
                     Application.DoEvents();
-                    Clipboard.SetText(recommendation.QuotaCode.Trim());
-                    SendKeys.SendWait("^a");
-                    SendKeys.SendWait("^v");
-                    SendKeys.SendWait("{ENTER}");
-                    Application.DoEvents();
+                    long editMs = stageTimer.ElapsedMilliseconds - focusMs;
 
-                    bool filled = TargetRowLooksNativeFilled(targetRowIndex, recommendation);
+                    Clipboard.SetText(recommendation.QuotaCode.Trim());
+                    long clipboardMs = stageTimer.ElapsedMilliseconds - focusMs - editMs;
+
+                    SendKeys.SendWait("^a^v{ENTER}");
+                    Application.DoEvents();
+                    long submitMs = stageTimer.ElapsedMilliseconds - focusMs - editMs - clipboardMs;
+
+                    bool filled = TargetRowLooksFullyNativeCommitted(targetRowIndex, recommendation, targetWasLastRow);
+                    long verifyMs = stageTimer.ElapsedMilliseconds - focusMs - editMs - clipboardMs - submitMs;
                     QuotaRecommendPanel.Log("Inline quota code-cell submitted: " + recommendation.QuotaCode.Trim()
                         + " row=" + targetRowIndex.ToString(CultureInfo.InvariantCulture)
                         + " filled=" + filled.ToString()
+                        + " focusMs=" + focusMs.ToString(CultureInfo.InvariantCulture)
+                        + " editMs=" + editMs.ToString(CultureInfo.InvariantCulture)
+                        + " clipboardMs=" + clipboardMs.ToString(CultureInfo.InvariantCulture)
+                        + " submitMs=" + submitMs.ToString(CultureInfo.InvariantCulture)
+                        + " verifyMs=" + verifyMs.ToString(CultureInfo.InvariantCulture)
+                        + " nativeTotalMs=" + stageTimer.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture)
                         + " data=" + DescribeInputRow(targetRowIndex));
                     return filled;
                 }
                 catch (Exception ex)
                 {
                     QuotaRecommendPanel.Log("Inline quota code-cell submit failed: " + ex.Message);
-                    return false;
-                }
-            }
-
-            private void MoveCurrentCellAwayFromCode(int targetRowIndex, int codeColumn)
-            {
-                if (targetRowIndex < 0 || targetRowIndex >= grid.Rows.Count)
-                {
-                    return;
-                }
-
-                int nextColumn = FindColumnIndex(QuotaNameColumns());
-                if (nextColumn < 0 || nextColumn == codeColumn || !grid.Columns[nextColumn].Visible)
-                {
-                    foreach (DataGridViewColumn column in grid.Columns)
-                    {
-                        if (column.Visible && column.Index != codeColumn)
-                        {
-                            nextColumn = column.Index;
-                            break;
-                        }
-                    }
-                }
-                if (nextColumn >= 0 && nextColumn < grid.Columns.Count)
-                {
-                    grid.CurrentCell = grid.Rows[targetRowIndex].Cells[nextColumn];
-                }
-            }
-
-            private bool TryApplyDirectRecommendation(RecommendationRow recommendation)
-            {
-                if (recommendation == null || String.IsNullOrWhiteSpace(recommendation.QuotaCode))
-                {
-                    return false;
-                }
-
-                int targetRowIndex = rowIndex >= 0 && rowIndex < grid.Rows.Count ? rowIndex : -1;
-                if (targetRowIndex < 0 || targetRowIndex >= grid.Rows.Count)
-                {
-                    return false;
-                }
-
-                try
-                {
-                    DataGridViewRow row = grid.Rows[targetRowIndex];
-                    double oldQuantity;
-                    bool hasQuantity = TryParseDouble(GetRowValue(row, QuantityColumns()), out oldQuantity);
-                    double convertedQuantity;
-                    if (!hasQuantity && TryParseDouble(recommendation.ConvertedValueText, out convertedQuantity))
-                    {
-                        SetRowValue(row, QuantityColumns(), convertedQuantity);
-                        oldQuantity = convertedQuantity;
-                        hasQuantity = true;
-                    }
-
-                    SetRowValue(row, QuotaCodeColumns(), recommendation.QuotaCode.Trim());
-                    SetRowValue(row, QuotaNameColumns(), recommendation.QuotaName ?? "");
-                    SetRowValue(row, QuotaUnitColumns(), recommendation.QuotaUnit ?? "");
-                    if (recommendation.BasePrice > 0.000001d)
-                    {
-                        SetRowValue(row, UnitPriceColumns(), recommendation.BasePrice);
-                        if (hasQuantity)
-                        {
-                            SetRowValue(row, new[] { "\u5408\u4ef7" }, oldQuantity * recommendation.BasePrice);
-                        }
-                    }
-
-                    grid.CurrentCell = row.Cells[Math.Max(0, FindColumnIndex(QuotaCodeColumns()))];
-                    grid.EndEdit();
-                    grid.InvalidateRow(targetRowIndex);
-                    QuotaRecommendPanel.Log("Inline quota direct-filled: " + recommendation.QuotaCode
-                        + " row=" + targetRowIndex.ToString(CultureInfo.InvariantCulture)
-                        + " data=" + DescribeInputRow(targetRowIndex));
-                    return TargetRowLooksNativeFilled(targetRowIndex, recommendation);
-                }
-                catch (Exception ex)
-                {
-                    QuotaRecommendPanel.Log("Inline quota direct fill failed: " + ex.Message);
                     return false;
                 }
             }
@@ -576,7 +687,34 @@ namespace RecoQuotaRecommend
                     + "|name=" + GetRowValue(row, QuotaNameColumns())
                     + "|unit=" + GetRowValue(row, QuotaUnitColumns())
                     + "|qty=" + GetRowValue(row, QuantityColumns())
-                    + "|price=" + GetRowValue(row, UnitPriceColumns());
+                    + "|price=" + GetRowValue(row, UnitPriceColumns())
+                    + "|weight=" + GetRowValue(row, SingleWeightColumns())
+                    + "|compiler=" + GetRowValue(row, CompilerColumns())
+                    + "|modified=" + GetRowValue(row, ModifiedDateColumns())
+                    + "|rows=" + grid.Rows.Count.ToString(CultureInfo.InvariantCulture)
+                    + "|nextBlank=" + IsBlankRow(targetRowIndex + 1).ToString();
+            }
+
+            private bool TargetRowLooksFullyNativeCommitted(int targetRowIndex, RecommendationRow recommendation, bool targetWasLastRow)
+            {
+                if (!TargetRowLooksNativeFilled(targetRowIndex, recommendation))
+                {
+                    return false;
+                }
+
+                DataGridViewRow targetRow = grid.Rows[targetRowIndex];
+                if (!ColumnValuePresentWhenAvailable(targetRow, CompilerColumns()) ||
+                    !ColumnValuePresentWhenAvailable(targetRow, ModifiedDateColumns()))
+                {
+                    return false;
+                }
+
+                return !targetWasLastRow || IsBlankRow(targetRowIndex + 1);
+            }
+
+            private bool ColumnValuePresentWhenAvailable(DataGridViewRow row, string[] columns)
+            {
+                return FindColumnIndex(columns) < 0 || !String.IsNullOrWhiteSpace(GetRowValue(row, columns));
             }
 
             private bool TargetRowLooksNativeFilled(int targetRowIndex, RecommendationRow recommendation)
@@ -626,7 +764,7 @@ namespace RecoQuotaRecommend
             private void HidePopup()
             {
                 timer.Stop();
-                if (popup.Visible) popup.Close(ToolStripDropDownCloseReason.CloseCalled);
+                if (popup.Visible) popup.Hide();
                 candidateGrid.Rows.Clear();
             }
 
@@ -856,49 +994,6 @@ namespace RecoQuotaRecommend
             return "";
         }
 
-        private static void SetRowValue(DataGridViewRow row, int columnIndex, object value)
-        {
-            if (row == null || row.DataGridView == null || columnIndex < 0 || columnIndex >= row.DataGridView.Columns.Count) return;
-            DataRowView rowView = row.DataBoundItem as DataRowView;
-            DataGridViewColumn column = row.DataGridView.Columns[columnIndex];
-            if (rowView != null && !String.IsNullOrWhiteSpace(column.DataPropertyName) && rowView.DataView.Table.Columns.Contains(column.DataPropertyName))
-            {
-                rowView[column.DataPropertyName] = value ?? DBNull.Value;
-                return;
-            }
-            row.Cells[columnIndex].Value = value;
-        }
-
-        private static bool SetRowValue(DataGridViewRow row, string[] names, object value)
-        {
-            if (row == null || row.DataGridView == null)
-            {
-                return false;
-            }
-
-            foreach (DataGridViewColumn column in row.DataGridView.Columns)
-            {
-                if (ColumnMatches(column, names))
-                {
-                    SetRowValue(row, column.Index, value);
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        private static bool TryParseDouble(string text, out double value)
-        {
-            value = 0d;
-            if (String.IsNullOrWhiteSpace(text))
-            {
-                return false;
-            }
-
-            return Double.TryParse(text.Replace(",", "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value) ||
-                Double.TryParse(text.Replace(",", "").Trim(), NumberStyles.Float, CultureInfo.CurrentCulture, out value);
-        }
-
         private static T GetField<T>(object target, string name) where T : class
         {
             if (target == null) return null;
@@ -919,5 +1014,8 @@ namespace RecoQuotaRecommend
         private static string[] QuotaUnitColumns() { return new[] { "\u5355\u4f4d" }; }
         private static string[] QuantityColumns() { return new[] { "\u5de5\u7a0b\u6570\u91cf\u8f93\u5165", "\u5de5\u7a0b\u6570\u91cf" }; }
         private static string[] UnitPriceColumns() { return new[] { "\u5355\u4ef7", "\u57fa\u671f\u4ef7\u683c" }; }
+        private static string[] SingleWeightColumns() { return new[] { "\u5355\u91cd(t)", "\u5355\u91cd" }; }
+        private static string[] CompilerColumns() { return new[] { "\u7f16\u5236\u4eba" }; }
+        private static string[] ModifiedDateColumns() { return new[] { "\u4fee\u6539\u65e5\u671f" }; }
     }
 }
