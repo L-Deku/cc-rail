@@ -44,11 +44,11 @@ namespace RecoNet
             private DataGridView grid;
             private object spreadsheetApplication;
             private bool enabled;
-            private int targetRowIndex = -1;
-            private int targetColumnIndex = -1;
+            private readonly List<InstantQuantityTarget> quantityTargets = new List<InstantQuantityTarget>();
             private string lastExcelKey = "";
             private bool wasSpreadsheetForeground;
             private bool waitingForSpreadsheetClick;
+            private bool applyingQuantity;
             private string lastStatusMessage = "";
             private DateTime lastStatusUtc = DateTime.MinValue;
             private DateTime nextConnectionAttemptUtc = DateTime.MinValue;
@@ -84,7 +84,7 @@ namespace RecoNet
                 pollTimer.Dispose();
                 statusTip.Dispose();
                 spreadsheetApplication = null;
-                waitingForSpreadsheetClick = false;
+                ClearQuantityTargets();
                 if (grid != null)
                 {
                     grid.KeyDown -= GridKeyDown;
@@ -128,9 +128,7 @@ namespace RecoNet
 
             private void GridDataSourceChanged(object sender, EventArgs e)
             {
-                targetRowIndex = -1;
-                targetColumnIndex = -1;
-                waitingForSpreadsheetClick = false;
+                ClearQuantityTargets();
                 CaptureCurrentQuantityTarget(false);
             }
 
@@ -138,7 +136,7 @@ namespace RecoNet
             {
                 enabled = !enabled;
                 wasSpreadsheetForeground = false;
-                waitingForSpreadsheetClick = false;
+                ClearQuantityTargets();
                 if (enabled)
                 {
                     lastExcelKey = TryReadCurrentSpreadsheetKey();
@@ -156,6 +154,11 @@ namespace RecoNet
 
             private void CaptureCurrentQuantityTarget(bool notify)
             {
+                if (applyingQuantity)
+                {
+                    return;
+                }
+
                 if (grid == null || grid.CurrentCell == null)
                 {
                     return;
@@ -164,17 +167,14 @@ namespace RecoNet
                 DataGridViewCell cell = grid.CurrentCell;
                 if (!IsQuantityColumn(cell.ColumnIndex))
                 {
-                    targetRowIndex = -1;
-                    targetColumnIndex = -1;
-                    waitingForSpreadsheetClick = false;
-                    wasSpreadsheetForeground = false;
-                    lastExcelKey = "";
+                    ClearQuantityTargets();
                     return;
                 }
 
-                bool changed = targetRowIndex != cell.RowIndex || targetColumnIndex != cell.ColumnIndex;
-                targetRowIndex = cell.RowIndex;
-                targetColumnIndex = cell.ColumnIndex;
+                List<InstantQuantityTarget> selectedTargets = CollectSelectedQuantityTargets(cell);
+                bool changed = !SameTargets(quantityTargets, selectedTargets);
+                quantityTargets.Clear();
+                quantityTargets.AddRange(selectedTargets);
                 if (changed)
                 {
                     wasSpreadsheetForeground = false;
@@ -191,7 +191,7 @@ namespace RecoNet
 
                     if (notify)
                     {
-                        ShowStatus("\u5df2\u9009\u5b9a\u8f6f\u4ef6\u6570\u91cf\u683c\uff0c\u8bf7\u70b9\u51fbExcel\u5de5\u7a0b\u6570\u91cf\u5355\u5143\u683c\u3002");
+                        ShowStatus("\u5df2\u9009\u5b9a" + quantityTargets.Count.ToString(CultureInfo.InvariantCulture) + "\u4e2a\u8f6f\u4ef6\u6570\u91cf\u683c\uff0c\u8bf7\u70b9\u51fbExcel\u5de5\u7a0b\u6570\u91cf\u5355\u5143\u683c\u3002");
                     }
                 }
                 else if (enabled && !waitingForSpreadsheetClick)
@@ -200,6 +200,92 @@ namespace RecoNet
                     lastExcelKey = TryReadCurrentSpreadsheetKey();
                     waitingForSpreadsheetClick = true;
                 }
+            }
+
+            private void ClearQuantityTargets()
+            {
+                quantityTargets.Clear();
+                waitingForSpreadsheetClick = false;
+                wasSpreadsheetForeground = false;
+                lastExcelKey = "";
+            }
+
+            private List<InstantQuantityTarget> CollectSelectedQuantityTargets(DataGridViewCell currentCell)
+            {
+                List<InstantQuantityTarget> targets = new List<InstantQuantityTarget>();
+                if (grid == null || currentCell == null)
+                {
+                    return targets;
+                }
+
+                AddQuantityTarget(targets, currentCell.RowIndex, currentCell.ColumnIndex);
+
+                foreach (DataGridViewCell selectedCell in grid.SelectedCells)
+                {
+                    AddQuantityTarget(targets, selectedCell.RowIndex, selectedCell.ColumnIndex);
+                }
+
+                if (IsQuantityColumn(currentCell.ColumnIndex))
+                {
+                    foreach (DataGridViewRow selectedRow in grid.SelectedRows)
+                    {
+                        AddQuantityTarget(targets, selectedRow.Index, currentCell.ColumnIndex);
+                    }
+                }
+
+                targets.Sort(delegate(InstantQuantityTarget left, InstantQuantityTarget right)
+                {
+                    int rowCompare = left.RowIndex.CompareTo(right.RowIndex);
+                    return rowCompare != 0 ? rowCompare : left.ColumnIndex.CompareTo(right.ColumnIndex);
+                });
+                return targets;
+            }
+
+            private void AddQuantityTarget(List<InstantQuantityTarget> targets, int rowIndex, int columnIndex)
+            {
+                if (grid == null ||
+                    rowIndex < 0 ||
+                    rowIndex >= grid.Rows.Count ||
+                    columnIndex < 0 ||
+                    columnIndex >= grid.Columns.Count ||
+                    !IsQuantityColumn(columnIndex))
+                {
+                    return;
+                }
+
+                DataGridViewRow row = grid.Rows[rowIndex];
+                if (row == null || row.IsNewRow)
+                {
+                    return;
+                }
+
+                foreach (InstantQuantityTarget target in targets)
+                {
+                    if (target.RowIndex == rowIndex && target.ColumnIndex == columnIndex)
+                    {
+                        return;
+                    }
+                }
+
+                targets.Add(new InstantQuantityTarget(rowIndex, columnIndex));
+            }
+
+            private static bool SameTargets(List<InstantQuantityTarget> left, List<InstantQuantityTarget> right)
+            {
+                if (left == null || right == null || left.Count != right.Count)
+                {
+                    return false;
+                }
+
+                for (int i = 0; i < left.Count; i++)
+                {
+                    if (left[i].RowIndex != right[i].RowIndex || left[i].ColumnIndex != right[i].ColumnIndex)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
             }
 
             private bool IsQuantityColumn(int columnIndex)
@@ -278,12 +364,24 @@ namespace RecoNet
 
             private bool HasValidTarget()
             {
-                return grid != null &&
-                    targetRowIndex >= 0 &&
-                    targetRowIndex < grid.Rows.Count &&
-                    targetColumnIndex >= 0 &&
-                    targetColumnIndex < grid.Columns.Count &&
-                    IsQuantityColumn(targetColumnIndex);
+                if (grid == null || quantityTargets.Count == 0)
+                {
+                    return false;
+                }
+
+                foreach (InstantQuantityTarget target in quantityTargets)
+                {
+                    if (target.RowIndex >= 0 &&
+                        target.RowIndex < grid.Rows.Count &&
+                        target.ColumnIndex >= 0 &&
+                        target.ColumnIndex < grid.Columns.Count &&
+                        IsQuantityColumn(target.ColumnIndex))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
             }
 
             private bool ApplySpreadsheetCell(InstantExcelCell excelCell)
@@ -296,48 +394,71 @@ namespace RecoNet
                     return false;
                 }
 
-                DataGridViewRow row = grid.Rows[targetRowIndex];
-                if (row == null || row.IsNewRow)
+                List<InstantQuantityTarget> targets = new List<InstantQuantityTarget>(quantityTargets);
+                int applied = 0;
+                int skipped = 0;
+                foreach (InstantQuantityTarget target in targets)
                 {
-                    return false;
-                }
+                    if (target.RowIndex < 0 || target.RowIndex >= grid.Rows.Count ||
+                        target.ColumnIndex < 0 || target.ColumnIndex >= grid.Columns.Count ||
+                        !IsQuantityColumn(target.ColumnIndex))
+                    {
+                        skipped++;
+                        continue;
+                    }
 
-                string quotaUnit = ReadSoftwareUnit(row);
-                decimal converted = quantity;
-                if (!TryConvertQuantity(quantity, excelCell.UnitText, quotaUnit, out converted))
-                {
-                    ShowStatus("WPS\u5355\u4f4d " + CleanDisplayUnit(excelCell.UnitText) + " \u4e0e\u5b9a\u989d\u5355\u4f4d " + CleanDisplayUnit(quotaUnit) + " \u4e0d\u5339\u914d\uff0c\u672a\u5199\u5165\u3002");
-                    Log("Excel instant quantity blocked unit mismatch: row=" + targetRowIndex.ToString(CultureInfo.InvariantCulture)
-                        + " col=" + targetColumnIndex.ToString(CultureInfo.InvariantCulture)
+                    DataGridViewRow row = grid.Rows[target.RowIndex];
+                    if (row == null || row.IsNewRow)
+                    {
+                        skipped++;
+                        continue;
+                    }
+
+                    string quotaUnit = ReadSoftwareUnit(row, target.ColumnIndex);
+                    decimal converted = quantity;
+                    if (!TryConvertQuantity(quantity, excelCell.UnitText, quotaUnit, out converted))
+                    {
+                        skipped++;
+                        Log("Excel instant quantity blocked unit mismatch: row=" + target.RowIndex.ToString(CultureInfo.InvariantCulture)
+                            + " col=" + target.ColumnIndex.ToString(CultureInfo.InvariantCulture)
+                            + " excel=" + excelCell.Key
+                            + " value=" + excelCell.ValueText
+                            + " excelUnit=" + excelCell.UnitText
+                            + " quotaUnit=" + quotaUnit);
+                        continue;
+                    }
+
+                    string valueText = FormatDecimal(converted);
+                    decimal writeValue;
+                    if (!TryEvaluateQuantity(valueText, out writeValue))
+                    {
+                        writeValue = converted;
+                    }
+
+                    WriteQuantity(row, target.ColumnIndex, valueText, writeValue);
+                    applied++;
+                    Log("Excel instant quantity applied: row=" + target.RowIndex.ToString(CultureInfo.InvariantCulture)
+                        + " col=" + target.ColumnIndex.ToString(CultureInfo.InvariantCulture)
                         + " excel=" + excelCell.Key
                         + " value=" + excelCell.ValueText
                         + " excelUnit=" + excelCell.UnitText
-                        + " quotaUnit=" + quotaUnit);
-                    return false;
+                        + " quotaUnit=" + quotaUnit
+                        + " result=" + valueText
+                        + " converted=True");
                 }
 
-                string valueText = FormatDecimal(converted);
-                decimal writeValue;
-                if (!TryEvaluateQuantity(valueText, out writeValue))
+                if (applied > 0)
                 {
-                    writeValue = converted;
+                    ShowStatus("\u5df2\u5199\u5165" + applied.ToString(CultureInfo.InvariantCulture) + "\u884c" +
+                        (skipped > 0 ? "\uff0c\u8df3\u8fc7" + skipped.ToString(CultureInfo.InvariantCulture) + "\u884c" : ""));
+                    return true;
                 }
 
-                WriteQuantity(row, targetColumnIndex, valueText, writeValue);
-                string status = "\u5df2\u5199\u5165\uff1a" + valueText + " (" + CleanDisplayUnit(excelCell.UnitText) + " -> " + CleanDisplayUnit(quotaUnit) + ")";
-                ShowStatus(status);
-                Log("Excel instant quantity applied: row=" + targetRowIndex.ToString(CultureInfo.InvariantCulture)
-                    + " col=" + targetColumnIndex.ToString(CultureInfo.InvariantCulture)
-                    + " excel=" + excelCell.Key
-                    + " value=" + excelCell.ValueText
-                    + " excelUnit=" + excelCell.UnitText
-                    + " quotaUnit=" + quotaUnit
-                    + " result=" + valueText
-                    + " converted=True");
-                return true;
+                ShowStatus("WPS\u5355\u4f4d " + CleanDisplayUnit(excelCell.UnitText) + " \u4e0e\u5df2\u9009\u5b9a\u5b9a\u989d\u5355\u4f4d\u4e0d\u5339\u914d\uff0c\u672a\u5199\u5165\u3002");
+                return false;
             }
 
-            private string ReadSoftwareUnit(DataGridViewRow row)
+            private string ReadSoftwareUnit(DataGridViewRow row, int quantityColumnIndex)
             {
                 string unit = GetRowValue(row, "\u5355\u4f4d", "\u5b9a\u989d\u5355\u4f4d");
                 if (!String.IsNullOrWhiteSpace(unit))
@@ -345,7 +466,7 @@ namespace RecoNet
                     return unit;
                 }
 
-                for (int col = targetColumnIndex - 1; col >= 0 && col >= targetColumnIndex - 5; col--)
+                for (int col = quantityColumnIndex - 1; col >= 0 && col >= quantityColumnIndex - 5; col--)
                 {
                     object value = row.Cells[col].Value;
                     string text = value == null ? "" : Convert.ToString(value, CultureInfo.CurrentCulture);
@@ -386,6 +507,7 @@ namespace RecoNet
 
                 try
                 {
+                    applyingQuantity = true;
                     grid.CurrentCell = row.Cells[visibleColumnIndex];
                     if (grid.IsCurrentCellDirty)
                     {
@@ -413,6 +535,10 @@ namespace RecoNet
                 catch (Exception ex)
                 {
                     Log("Excel instant quantity commit failed: " + ex.Message);
+                }
+                finally
+                {
+                    applyingQuantity = false;
                 }
             }
 
@@ -783,6 +909,18 @@ namespace RecoNet
                 public string UnitText;
                 public string Key;
                 public bool IsForeground;
+            }
+
+            private struct InstantQuantityTarget
+            {
+                public readonly int RowIndex;
+                public readonly int ColumnIndex;
+
+                public InstantQuantityTarget(int rowIndex, int columnIndex)
+                {
+                    RowIndex = rowIndex;
+                    ColumnIndex = columnIndex;
+                }
             }
 
             private struct InstantUnitScale
