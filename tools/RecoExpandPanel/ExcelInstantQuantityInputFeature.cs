@@ -36,7 +36,7 @@ namespace RecoNet
 
         private sealed class ExcelInstantQuantityInputRuntime : IDisposable
         {
-            private const int PollIntervalMs = 250;
+            private const int PollIntervalMs = 100;
             private const int ReconnectDelayMs = 2000;
             private readonly Form mainForm;
             private readonly Timer pollTimer;
@@ -221,6 +221,11 @@ namespace RecoNet
                         return;
                     }
 
+                    if (!waitingForSpreadsheetClick)
+                    {
+                        return;
+                    }
+
                     InstantExcelCell cell;
                     string error;
                     if (!TryReadActiveSpreadsheetCell(out cell, out error))
@@ -229,20 +234,15 @@ namespace RecoNet
                         return;
                     }
 
-                    if (!cell.IsForeground)
+                    bool selectionChanged = !String.Equals(lastExcelKey, cell.Key, StringComparison.OrdinalIgnoreCase);
+                    if (!cell.IsForeground && !selectionChanged)
                     {
                         wasSpreadsheetForeground = false;
                         return;
                     }
 
-                    bool foregroundEntered = !wasSpreadsheetForeground;
-                    wasSpreadsheetForeground = true;
-                    if (!waitingForSpreadsheetClick)
-                    {
-                        lastExcelKey = cell.Key;
-                        return;
-                    }
-
+                    bool foregroundEntered = cell.IsForeground && !wasSpreadsheetForeground;
+                    wasSpreadsheetForeground = cell.IsForeground;
                     if (!foregroundEntered && String.Equals(lastExcelKey, cell.Key, StringComparison.OrdinalIgnoreCase))
                     {
                         return;
@@ -534,12 +534,53 @@ namespace RecoNet
                         return false;
                     }
 
+                    if (SpreadsheetHwndMatchesForegroundProcess(spreadsheet, foreground))
+                    {
+                        return true;
+                    }
+
+                    return WindowContainsExcelGrid(foreground);
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            private static bool SpreadsheetHwndMatchesForegroundProcess(dynamic spreadsheet, IntPtr foreground)
+            {
+                try
+                {
                     uint foregroundPid;
                     InstantGetWindowThreadProcessId(foreground, out foregroundPid);
                     IntPtr spreadsheetHandle = new IntPtr(Convert.ToInt64(spreadsheet.Hwnd, CultureInfo.InvariantCulture));
                     uint spreadsheetPid;
                     InstantGetWindowThreadProcessId(spreadsheetHandle, out spreadsheetPid);
                     return foregroundPid != 0 && foregroundPid == spreadsheetPid;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            private static bool WindowContainsExcelGrid(IntPtr windowHandle)
+            {
+                if (windowHandle == IntPtr.Zero)
+                {
+                    return false;
+                }
+
+                try
+                {
+                    if (String.Equals(GetWindowClassName(windowHandle), "EXCEL7", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+
+                    List<IntPtr> excelWindows = new List<IntPtr>();
+                    CollectExcelChildWindows(windowHandle, excelWindows);
+                    return excelWindows.Count > 0;
                 }
                 catch
                 {
