@@ -48,6 +48,7 @@ namespace RecoNet
             private string lastExcelKey = "";
             private bool wasSpreadsheetForeground;
             private bool waitingForSpreadsheetClick;
+            private bool awaitingSpreadsheetActivation;
             private bool applyingQuantity;
             private string lastStatusMessage = "";
             private DateTime lastStatusUtc = DateTime.MinValue;
@@ -182,11 +183,13 @@ namespace RecoNet
                     {
                         lastExcelKey = TryReadCurrentSpreadsheetKey();
                         waitingForSpreadsheetClick = true;
+                        awaitingSpreadsheetActivation = true;
                     }
                     else
                     {
                         lastExcelKey = "";
                         waitingForSpreadsheetClick = false;
+                        awaitingSpreadsheetActivation = false;
                     }
 
                     if (notify)
@@ -199,6 +202,7 @@ namespace RecoNet
                     wasSpreadsheetForeground = false;
                     lastExcelKey = TryReadCurrentSpreadsheetKey();
                     waitingForSpreadsheetClick = true;
+                    awaitingSpreadsheetActivation = true;
                 }
             }
 
@@ -206,6 +210,7 @@ namespace RecoNet
             {
                 quantityTargets.Clear();
                 waitingForSpreadsheetClick = false;
+                awaitingSpreadsheetActivation = false;
                 wasSpreadsheetForeground = false;
                 lastExcelKey = "";
             }
@@ -344,13 +349,17 @@ namespace RecoNet
                     }
 
                     bool foregroundEntered = cell.IsForeground && !wasSpreadsheetForeground;
+                    bool activationClick = awaitingSpreadsheetActivation && cell.IsForeground;
                     wasSpreadsheetForeground = cell.IsForeground;
-                    if (!foregroundEntered && String.Equals(lastExcelKey, cell.Key, StringComparison.OrdinalIgnoreCase))
+                    if (!foregroundEntered &&
+                        !activationClick &&
+                        String.Equals(lastExcelKey, cell.Key, StringComparison.OrdinalIgnoreCase))
                     {
                         return;
                     }
 
                     lastExcelKey = cell.Key;
+                    awaitingSpreadsheetActivation = false;
                     if (ApplySpreadsheetCell(cell))
                     {
                         waitingForSpreadsheetClick = false;
