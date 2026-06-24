@@ -340,6 +340,14 @@ namespace RecoNet
                         return;
                     }
 
+                    if (hasReusableSpreadsheetSelection &&
+                        !awaitingSpreadsheetActivation &&
+                        IsMainFormForeground())
+                    {
+                        wasSpreadsheetForeground = false;
+                        return;
+                    }
+
                     if (waitingForSoftwareBlur)
                     {
                         if (IsMainFormForeground())
@@ -379,14 +387,19 @@ namespace RecoNet
                     awaitingSpreadsheetActivation = false;
                     if (ApplySpreadsheetCell(cell))
                     {
-                        hasReusableSpreadsheetSelection = true;
-                        waitingForSpreadsheetClick = false;
+                        MarkSpreadsheetCellApplied();
                     }
                 }
                 catch (Exception ex)
                 {
                     Log("Excel instant quantity input poll failed: " + ex);
                 }
+            }
+
+            private void MarkSpreadsheetCellApplied()
+            {
+                hasReusableSpreadsheetSelection = true;
+                waitingForSpreadsheetClick = true;
             }
 
             private bool HasValidTarget()
