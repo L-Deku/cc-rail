@@ -49,6 +49,7 @@ namespace RecoNet
             private bool wasSpreadsheetForeground;
             private bool waitingForSpreadsheetClick;
             private bool awaitingSpreadsheetActivation;
+            private bool waitingForSoftwareBlur;
             private bool applyingQuantity;
             private string lastStatusMessage = "";
             private DateTime lastStatusUtc = DateTime.MinValue;
@@ -184,12 +185,14 @@ namespace RecoNet
                         lastExcelKey = TryReadCurrentSpreadsheetKey();
                         waitingForSpreadsheetClick = true;
                         awaitingSpreadsheetActivation = true;
+                        waitingForSoftwareBlur = true;
                     }
                     else
                     {
                         lastExcelKey = "";
                         waitingForSpreadsheetClick = false;
                         awaitingSpreadsheetActivation = false;
+                        waitingForSoftwareBlur = false;
                     }
 
                     if (notify)
@@ -203,6 +206,7 @@ namespace RecoNet
                     lastExcelKey = TryReadCurrentSpreadsheetKey();
                     waitingForSpreadsheetClick = true;
                     awaitingSpreadsheetActivation = true;
+                    waitingForSoftwareBlur = true;
                 }
             }
 
@@ -211,6 +215,7 @@ namespace RecoNet
                 quantityTargets.Clear();
                 waitingForSpreadsheetClick = false;
                 awaitingSpreadsheetActivation = false;
+                waitingForSoftwareBlur = false;
                 wasSpreadsheetForeground = false;
                 lastExcelKey = "";
             }
@@ -259,7 +264,7 @@ namespace RecoNet
                 }
 
                 DataGridViewRow row = grid.Rows[rowIndex];
-                if (row == null || row.IsNewRow)
+                if (row == null)
                 {
                     return;
                 }
@@ -333,6 +338,16 @@ namespace RecoNet
                         return;
                     }
 
+                    if (waitingForSoftwareBlur)
+                    {
+                        if (IsMainFormForeground())
+                        {
+                            return;
+                        }
+
+                        waitingForSoftwareBlur = false;
+                    }
+
                     InstantExcelCell cell;
                     string error;
                     if (!TryReadActiveSpreadsheetCell(out cell, out error))
@@ -342,14 +357,14 @@ namespace RecoNet
                     }
 
                     bool selectionChanged = !String.Equals(lastExcelKey, cell.Key, StringComparison.OrdinalIgnoreCase);
-                    if (!cell.IsForeground && !selectionChanged)
+                    bool activationClick = awaitingSpreadsheetActivation;
+                    if (!cell.IsForeground && !selectionChanged && !activationClick)
                     {
                         wasSpreadsheetForeground = false;
                         return;
                     }
 
                     bool foregroundEntered = cell.IsForeground && !wasSpreadsheetForeground;
-                    bool activationClick = awaitingSpreadsheetActivation && cell.IsForeground;
                     wasSpreadsheetForeground = cell.IsForeground;
                     if (!foregroundEntered &&
                         !activationClick &&
@@ -417,7 +432,7 @@ namespace RecoNet
                     }
 
                     DataGridViewRow row = grid.Rows[target.RowIndex];
-                    if (row == null || row.IsNewRow)
+                    if (row == null)
                     {
                         skipped++;
                         continue;
@@ -425,7 +440,8 @@ namespace RecoNet
 
                     string quotaUnit = ReadSoftwareUnit(row, target.ColumnIndex);
                     decimal converted = quantity;
-                    if (!TryConvertQuantity(quantity, excelCell.UnitText, quotaUnit, out converted))
+                    bool blankQuotaWithoutUnit = String.IsNullOrWhiteSpace(quotaUnit) && IsBlankQuotaRow(row);
+                    if (!blankQuotaWithoutUnit && !TryConvertQuantity(quantity, excelCell.UnitText, quotaUnit, out converted))
                     {
                         skipped++;
                         Log("Excel instant quantity blocked unit mismatch: row=" + target.RowIndex.ToString(CultureInfo.InvariantCulture)
@@ -488,11 +504,34 @@ namespace RecoNet
                 return "";
             }
 
+            private static bool IsBlankQuotaRow(DataGridViewRow row)
+            {
+                if (row == null)
+                {
+                    return false;
+                }
+
+                string code = GetRowValue(row, "\u7f16\u53f7", "\u5b9a\u989d\u7f16\u53f7", "\u5b9a\u989d\u7f16\u53f7DE");
+                string name = GetRowValue(row, "\u540d\u79f0", "\u5de5\u7a0b\u6216\u8d39\u7528\u9879\u76ee\u540d\u79f0", "\u9879\u76ee\u540d\u79f0");
+                return String.IsNullOrWhiteSpace(code) && String.IsNullOrWhiteSpace(name);
+            }
+
             private void WriteQuantity(DataGridViewRow row, int visibleColumnIndex, string valueText, decimal numericValue)
             {
                 DataRowView rowView = row.DataBoundItem as DataRowView;
                 DataRow dataRow = rowView == null ? null : rowView.Row;
                 bool wroteInput = false;
+                DataGridViewCell previousCell = grid.CurrentCell;
+                int firstDisplayedRowIndex = -1;
+                int horizontalOffset = 0;
+                try
+                {
+                    firstDisplayedRowIndex = grid.FirstDisplayedScrollingRowIndex;
+                    horizontalOffset = grid.HorizontalScrollingOffset;
+                }
+                catch
+                {
+                }
 
                 if (dataRow != null && dataRow.Table != null)
                 {
@@ -536,10 +575,10 @@ namespace RecoNet
                     if (manager != null)
                     {
                         manager.EndCurrentEdit();
-                        manager.Refresh();
                     }
 
                     grid.InvalidateCell(visibleColumnIndex, row.Index);
+                    RestoreGridViewPosition(previousCell, firstDisplayedRowIndex, horizontalOffset);
                 }
                 catch (Exception ex)
                 {
@@ -548,6 +587,42 @@ namespace RecoNet
                 finally
                 {
                     applyingQuantity = false;
+                }
+            }
+
+            private void RestoreGridViewPosition(DataGridViewCell previousCell, int firstDisplayedRowIndex, int horizontalOffset)
+            {
+                if (grid == null || grid.IsDisposed)
+                {
+                    return;
+                }
+
+                try
+                {
+                    if (previousCell != null &&
+                        previousCell.RowIndex >= 0 &&
+                        previousCell.RowIndex < grid.Rows.Count &&
+                        previousCell.ColumnIndex >= 0 &&
+                        previousCell.ColumnIndex < grid.Columns.Count)
+                    {
+                        grid.CurrentCell = grid.Rows[previousCell.RowIndex].Cells[previousCell.ColumnIndex];
+                    }
+
+                    if (firstDisplayedRowIndex >= 0 &&
+                        firstDisplayedRowIndex < grid.Rows.Count &&
+                        !grid.Rows[firstDisplayedRowIndex].IsNewRow)
+                    {
+                        grid.FirstDisplayedScrollingRowIndex = firstDisplayedRowIndex;
+                    }
+
+                    if (horizontalOffset >= 0)
+                    {
+                        grid.HorizontalScrollingOffset = horizontalOffset;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log("Excel instant quantity restore view failed: " + ex.Message);
                 }
             }
 
@@ -696,6 +771,30 @@ namespace RecoNet
                     }
 
                     return WindowContainsExcelGrid(foreground);
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            private bool IsMainFormForeground()
+            {
+                try
+                {
+                    if (mainForm == null || mainForm.IsDisposed || !mainForm.IsHandleCreated)
+                    {
+                        return false;
+                    }
+
+                    IntPtr foreground = InstantGetForegroundWindow();
+                    if (foreground == IntPtr.Zero)
+                    {
+                        return false;
+                    }
+
+                    IntPtr mainHandle = mainForm.Handle;
+                    return foreground == mainHandle || InstantIsChild(mainHandle, foreground);
                 }
                 catch
                 {
@@ -908,6 +1007,9 @@ namespace RecoNet
 
             [DllImport("user32.dll")]
             private static extern uint InstantGetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+            [DllImport("user32.dll", EntryPoint = "IsChild")]
+            private static extern bool InstantIsChild(IntPtr hWndParent, IntPtr hWnd);
 
             private sealed class InstantExcelCell
             {
