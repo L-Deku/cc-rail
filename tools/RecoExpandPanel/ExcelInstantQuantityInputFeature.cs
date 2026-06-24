@@ -50,6 +50,7 @@ namespace RecoNet
             private bool waitingForSpreadsheetClick;
             private bool awaitingSpreadsheetActivation;
             private bool waitingForSoftwareBlur;
+            private bool hasReusableSpreadsheetSelection;
             private bool applyingQuantity;
             private string lastStatusMessage = "";
             private DateTime lastStatusUtc = DateTime.MinValue;
@@ -149,6 +150,7 @@ namespace RecoNet
                 else
                 {
                     lastExcelKey = "";
+                    hasReusableSpreadsheetSelection = false;
                     pollTimer.Stop();
                     ShowStatus("\u5df2\u5173\u95edExcel\u70b9\u9009\u5373\u586b\u3002");
                 }
@@ -185,7 +187,7 @@ namespace RecoNet
                         lastExcelKey = TryReadCurrentSpreadsheetKey();
                         waitingForSpreadsheetClick = true;
                         awaitingSpreadsheetActivation = true;
-                        waitingForSoftwareBlur = true;
+                        waitingForSoftwareBlur = !hasReusableSpreadsheetSelection;
                     }
                     else
                     {
@@ -197,7 +199,7 @@ namespace RecoNet
 
                     if (notify)
                     {
-                        ShowStatus("\u5df2\u9009\u5b9a" + quantityTargets.Count.ToString(CultureInfo.InvariantCulture) + "\u4e2a\u8f6f\u4ef6\u6570\u91cf\u683c\uff0c\u8bf7\u70b9\u51fbExcel\u5de5\u7a0b\u6570\u91cf\u5355\u5143\u683c\u3002");
+                        ShowStatus(BuildTargetStatusMessage());
                     }
                 }
                 else if (enabled && !waitingForSpreadsheetClick)
@@ -206,7 +208,7 @@ namespace RecoNet
                     lastExcelKey = TryReadCurrentSpreadsheetKey();
                     waitingForSpreadsheetClick = true;
                     awaitingSpreadsheetActivation = true;
-                    waitingForSoftwareBlur = true;
+                    waitingForSoftwareBlur = !hasReusableSpreadsheetSelection;
                 }
             }
 
@@ -357,7 +359,7 @@ namespace RecoNet
                     }
 
                     bool selectionChanged = !String.Equals(lastExcelKey, cell.Key, StringComparison.OrdinalIgnoreCase);
-                    bool activationClick = awaitingSpreadsheetActivation;
+                    bool activationClick = awaitingSpreadsheetActivation && hasReusableSpreadsheetSelection;
                     if (!cell.IsForeground && !selectionChanged && !activationClick)
                     {
                         wasSpreadsheetForeground = false;
@@ -377,6 +379,7 @@ namespace RecoNet
                     awaitingSpreadsheetActivation = false;
                     if (ApplySpreadsheetCell(cell))
                     {
+                        hasReusableSpreadsheetSelection = true;
                         waitingForSpreadsheetClick = false;
                     }
                 }
@@ -502,6 +505,17 @@ namespace RecoNet
                 }
 
                 return "";
+            }
+
+            private string BuildTargetStatusMessage()
+            {
+                string countText = quantityTargets.Count.ToString(CultureInfo.InvariantCulture);
+                if (hasReusableSpreadsheetSelection)
+                {
+                    return "\u5df2\u9009\u5b9a" + countText + "\u4e2a\u8f6f\u4ef6\u6570\u91cf\u683c\uff0c\u5c06\u590d\u7528\u5f53\u524dExcel\u5de5\u7a0b\u6570\u91cf\u3002";
+                }
+
+                return "\u5df2\u9009\u5b9a" + countText + "\u4e2a\u8f6f\u4ef6\u6570\u91cf\u683c\uff0c\u8bf7\u70b9\u51fbExcel\u5de5\u7a0b\u6570\u91cf\u5355\u5143\u683c\u3002";
             }
 
             private static bool IsBlankQuotaRow(DataGridViewRow row)
