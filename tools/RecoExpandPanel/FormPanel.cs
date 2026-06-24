@@ -109,6 +109,8 @@ namespace RecoNet
                     InstallAllContextMenus(mainForm);
                     InstallTreeMouseHook(mainForm);
                     InstallNativeTreeMenuFilter(mainForm);
+                    EnsureExcelInstantQuantityInputRuntime(mainForm);
+                    EnsureAgentChatRuntime(mainForm);
                     return;
                 }
 
@@ -117,6 +119,8 @@ namespace RecoNet
                 InstallNativeTreeMenuFilter(mainForm);
                 InstallQuotaGridShortcuts(mainForm);
                 EnsureExcelLinkRuntime(mainForm);
+                EnsureExcelInstantQuantityInputRuntime(mainForm);
+                EnsureAgentChatRuntime(mainForm);
                 if (menus == 0)
                 {
                     Log("Context menus not found.");
@@ -275,15 +279,15 @@ namespace RecoNet
         {
             if (String.IsNullOrWhiteSpace(expression))
             {
-                throw new InvalidOperationException("表达式为空。");
+                throw new InvalidOperationException("\u8868\u8fbe\u5f0f\u4e3a\u7a7a\u3002");
             }
 
             string normalized = expression.Trim()
-                .Replace("×", "*")
+                .Replace("\u00d7", "*")
                 .Replace("X", "*")
                 .Replace("x", "*")
-                .Replace("（", "(")
-                .Replace("）", ")");
+                .Replace("\uff08", "(")
+                .Replace("\uff09", ")");
 
             decimal direct;
             if (Decimal.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out direct) ||
@@ -296,7 +300,7 @@ namespace RecoNet
             object value = computeTable.Compute(normalized, String.Empty);
             if (value == null || value == DBNull.Value)
             {
-                throw new InvalidOperationException("表达式没有计算结果。");
+                throw new InvalidOperationException("\u8868\u8fbe\u5f0f\u6ca1\u6709\u8ba1\u7b97\u7ed3\u679c\u3002");
             }
 
             return Convert.ToDecimal(value, CultureInfo.InvariantCulture);

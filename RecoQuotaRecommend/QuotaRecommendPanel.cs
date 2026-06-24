@@ -2915,6 +2915,8 @@ namespace RecoQuotaRecommend
 
         private static void Install(Form mainForm)
         {
+            QuotaInlineSearchFeature.Install(mainForm);
+            ReferenceQuotaPoolFeature.Install(mainForm);
             int menus = InstallAllContextMenus(mainForm);
             if (menus == 0)
             {
@@ -3812,7 +3814,9 @@ namespace RecoQuotaRecommend
             resultGrid.Rows.Clear();
             if (normalizeNames)
             {
-                NormalizeQuantityNamesWithDeepSeek(selection, true);
+                // 先让 AI 判断列结构并重建多列名称；命中的条目已标记跳过润色，其余条目仍走名称润色。
+                bool layoutApplied = ApplyAiColumnLayout(selection);
+                NormalizeQuantityNamesWithDeepSeek(selection, !layoutApplied);
             }
             else
             {
@@ -3959,6 +3963,94 @@ namespace RecoQuotaRecommend
                 item.Name = item.OriginalName;
                 item.SectionName = item.OriginalName;
                 item.ContextText = item.Name + " " + item.Unit + " " + item.ValueText + " " + item.RawRowText;
+            }
+        }
+
+        // AI 列映射兜底：把整张表的原始网格交给 DeepSeek 判断列结构，再用确定性逻辑(BuildItemsFromColumnLayout)
+        // 重建名称/单位。仅更新已识别条目（按行号对回），保留 OriginalName 以便关闭 AI 时还原。返回是否有改动。
+        private bool ApplyAiColumnLayout(ExcelSelection selection)
+        {
+            if (selection == null || selection.Items.Count == 0
+                || selection.RawRows == null || selection.RawRows.Count == 0
+                || !deepSeekSettings.CanDetectColumns)
+            {
+                return false;
+            }
+
+            statusLabel.Text = "DeepSeek正在识别工程量表列结构...";
+            statusLabel.Refresh();
+            try
+            {
+                DeepSeekClient client = new DeepSeekClient(deepSeekSettings);
+                DeepSeekColumnLayout layout = client.DetectColumnLayout(selection.RawRows);
+                if (layout == null || layout.Confidence < 70 || layout.QuantityColumn <= 0
+                    || layout.NameColumns == null || layout.NameColumns.Length == 0)
+                {
+                    return false;
+                }
+
+                List<int> descColumns = layout.NameColumns
+                    .Where(c => c > 0 && c != layout.QuantityColumn && c != layout.UnitColumn)
+                    .Distinct()
+                    .OrderBy(c => c)
+                    .ToList();
+                if (descColumns.Count == 0)
+                {
+                    return false;
+                }
+
+                List<ExcelQuantityItem> rebuilt = BuildItemsFromColumnLayout(selection.RawRows, descColumns, layout.UnitColumn, layout.QuantityColumn, selection.WorksheetName);
+                Dictionary<int, ExcelQuantityItem> byRow = new Dictionary<int, ExcelQuantityItem>();
+                foreach (ExcelQuantityItem r in rebuilt)
+                {
+                    if (r != null)
+                    {
+                        byRow[r.RowNumber] = r;
+                    }
+                }
+
+                int changed = 0;
+                foreach (ExcelQuantityItem item in selection.Items)
+                {
+                    ExcelQuantityItem mapped;
+                    if (item == null || !byRow.TryGetValue(item.RowNumber, out mapped) || String.IsNullOrWhiteSpace(mapped.Name))
+                    {
+                        continue;
+                    }
+
+                    if (String.IsNullOrWhiteSpace(item.OriginalName))
+                    {
+                        item.OriginalName = item.Name;
+                    }
+
+                    if (String.Equals(item.Name, mapped.Name, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    item.AiName = mapped.Name;
+                    item.Name = mapped.Name;
+                    if (!String.IsNullOrWhiteSpace(mapped.Unit))
+                    {
+                        item.Unit = mapped.Unit;
+                    }
+                    item.SectionName = mapped.SectionName;
+                    item.ContextText = item.Name + " " + item.Unit + " " + item.ValueText + " " + item.RawRowText;
+                    item.SkipAiNameNormalization = true;
+                    changed++;
+                }
+
+                QuotaRecommendPanel.Log("AI column layout. nameCols=[" + String.Join(",", descColumns.Select(c => c.ToString(CultureInfo.InvariantCulture)).ToArray()) + "]"
+                    + ", unitCol=" + layout.UnitColumn.ToString(CultureInfo.InvariantCulture)
+                    + ", qtyCol=" + layout.QuantityColumn.ToString(CultureInfo.InvariantCulture)
+                    + ", conf=" + layout.Confidence.ToString(CultureInfo.InvariantCulture)
+                    + ", changed=" + changed.ToString(CultureInfo.InvariantCulture));
+                return changed > 0;
+            }
+            catch (Exception ex)
+            {
+                QuotaRecommendPanel.Log("AI column layout detection failed: " + ex.Message);
+                return false;
             }
         }
 
@@ -5144,7 +5236,9 @@ namespace RecoQuotaRecommend
                 selection.WorkbookPath = Convert.ToString(workbook.FullName, CultureInfo.InvariantCulture);
                 selection.WorksheetName = Convert.ToString(sheet.Name, CultureInfo.InvariantCulture);
 
-                selection.Items.AddRange(BuildQuantityItemsFromRange(range, selection.WorksheetName));
+                List<List<CellValue>> rawRows;
+                selection.Items.AddRange(BuildQuantityItemsFromRange(range, selection.WorksheetName, out rawRows));
+                selection.RawRows = rawRows;
                 ApplyActiveLeftGroups(selection);
                 NormalizeSelectionItems(selection);
                 LogSelectionSummary("Excel selection", selection);
@@ -5271,7 +5365,9 @@ namespace RecoQuotaRecommend
                 selection.WorkbookPath = Convert.ToString(workbook.FullName, CultureInfo.InvariantCulture);
                 selection.WorksheetName = Convert.ToString(sheet.Name, CultureInfo.InvariantCulture);
 
-                selection.Items.AddRange(BuildQuantityItemsFromRange(range, selection.WorksheetName));
+                List<List<CellValue>> rawRows;
+                selection.Items.AddRange(BuildQuantityItemsFromRange(range, selection.WorksheetName, out rawRows));
+                selection.RawRows = rawRows;
                 ApplyActiveLeftGroups(selection);
                 NormalizeSelectionItems(selection);
                 if (selection.Items.Count == 0)
@@ -5312,7 +5408,9 @@ namespace RecoQuotaRecommend
                 textTable.Add(lines[i].Split('\t').ToList());
             }
 
-            selection.Items.AddRange(BuildQuantityItemsFromTextTable(textTable, selection.WorksheetName));
+            List<List<CellValue>> rawRows;
+            selection.Items.AddRange(BuildQuantityItemsFromTextTable(textTable, selection.WorksheetName, out rawRows));
+            selection.RawRows = rawRows;
             NormalizeSelectionItems(selection);
             return selection;
         }
@@ -5373,7 +5471,9 @@ namespace RecoQuotaRecommend
 
                 selection = new ExcelSelection();
                 selection.WorksheetName = "\u526a\u8d34\u677fHTML";
-                selection.Items.AddRange(BuildQuantityItemsFromTextTable(table, selection.WorksheetName));
+                List<List<CellValue>> rawRows;
+                selection.Items.AddRange(BuildQuantityItemsFromTextTable(table, selection.WorksheetName, out rawRows));
+                selection.RawRows = rawRows;
 
                 NormalizeSelectionItems(selection);
 
@@ -5489,7 +5589,7 @@ namespace RecoQuotaRecommend
             row[index] = value;
         }
 
-        private static List<ExcelQuantityItem> BuildQuantityItemsFromRange(dynamic range, string worksheetName)
+        private static List<ExcelQuantityItem> BuildQuantityItemsFromRange(dynamic range, string worksheetName, out List<List<CellValue>> rawRows)
         {
             List<List<CellValue>> rows = new List<List<CellValue>>();
             int rowCount = Convert.ToInt32(range.Rows.Count, CultureInfo.InvariantCulture);
@@ -5537,10 +5637,11 @@ namespace RecoQuotaRecommend
                 rows.Add(row);
             }
 
+            rawRows = rows;
             return BuildQuantityItemsFromCellRows(rows, worksheetName);
         }
 
-        private static List<ExcelQuantityItem> BuildQuantityItemsFromTextTable(List<List<string>> table, string worksheetName)
+        private static List<ExcelQuantityItem> BuildQuantityItemsFromTextTable(List<List<string>> table, string worksheetName, out List<List<CellValue>> rawRows)
         {
             List<List<CellValue>> rows = new List<List<CellValue>>();
             for (int r = 0; r < table.Count; r++)
@@ -5567,6 +5668,7 @@ namespace RecoQuotaRecommend
                 rows.Add(row);
             }
 
+            rawRows = rows;
             return BuildQuantityItemsFromCellRows(rows, worksheetName);
         }
 
@@ -5585,13 +5687,37 @@ namespace RecoQuotaRecommend
             }
 
             int unitColumn = FindUnitColumn(rows, quantityColumn);
-            int detailColumn = FindDetailColumn(rows, quantityColumn, unitColumn);
-            if (detailColumn < 0)
+            int nameBoundary = unitColumn >= 0 && unitColumn < quantityColumn ? unitColumn : quantityColumn;
+            List<int> descColumns = FindDescriptionColumns(rows, nameBoundary, unitColumn, quantityColumn);
+            if (descColumns.Count == 0)
             {
                 return result;
             }
 
-            int groupColumn = FindGroupColumn(rows, detailColumn, unitColumn, quantityColumn);
+            result = BuildItemsFromColumnLayout(rows, descColumns, unitColumn, quantityColumn, worksheetName);
+
+            QuotaRecommendPanel.Log("Grid parser: rows=" + rows.Count.ToString(CultureInfo.InvariantCulture)
+                + ", qtyCol=" + quantityColumn.ToString(CultureInfo.InvariantCulture)
+                + ", unitCol=" + unitColumn.ToString(CultureInfo.InvariantCulture)
+                + ", descCols=[" + String.Join(",", descColumns.Select(c => c.ToString(CultureInfo.InvariantCulture)).ToArray()) + "]"
+                + ", items=" + result.Count.ToString(CultureInfo.InvariantCulture));
+            return result;
+        }
+
+        // 根据已识别的列布局（多个描述列 + 单位列 + 数量列）逐行构建工程量条目。
+        // descColumns 为升序排列的描述列索引，名称由这些列按列序拼接而成，从而支持超过四列的表。
+        private static List<ExcelQuantityItem> BuildItemsFromColumnLayout(List<List<CellValue>> rows, List<int> descColumns, int unitColumn, int quantityColumn, string worksheetName)
+        {
+            List<ExcelQuantityItem> result = new List<ExcelQuantityItem>();
+            if (rows == null || descColumns == null || descColumns.Count == 0 || quantityColumn < 0)
+            {
+                return result;
+            }
+
+            int sectionColumn = descColumns[0];
+            // 仅当存在两个及以上描述列时，最左侧列才作为"分部/小节"承接（兼容旧的 group 行为）；
+            // 只有一个描述列时按行逐条取名、不做承接，与旧的三列表现完全一致。
+            bool useCarryDown = descColumns.Count >= 2;
             string[] units = BuildUnitsByRow(rows, unitColumn);
             string currentGroup = "";
             for (int i = 0; i < rows.Count; i++)
@@ -5603,36 +5729,45 @@ namespace RecoQuotaRecommend
                     continue;
                 }
 
-                string detail = GetCellText(row, detailColumn);
-                if (String.IsNullOrWhiteSpace(detail) || LooksLikeOrderOrHeader(detail) || LooksLikeUnit(detail))
+                string section = "";
+                if (useCarryDown)
                 {
-                    detail = PickQuantityName(row, quantityCell, unitColumn >= 0 ? GetCell(row, unitColumn) : null);
+                    section = GetCellText(row, sectionColumn);
+                    if (LooksLikeGroupText(section))
+                    {
+                        currentGroup = section;
+                    }
+                    else
+                    {
+                        section = currentGroup;
+                    }
                 }
 
-                if (String.IsNullOrWhiteSpace(detail) || LooksLikeOrderOrHeader(detail))
+                List<string> parts = new List<string>();
+                foreach (int c in descColumns)
+                {
+                    string text = useCarryDown && c == sectionColumn ? section : GetCellText(row, c);
+                    if (!String.IsNullOrWhiteSpace(text) && !LooksLikeOrderOrHeader(text) && !LooksLikeUnit(text))
+                    {
+                        parts.Add(text);
+                    }
+                }
+
+                string name = CombineQuantityNames(parts);
+                if (String.IsNullOrWhiteSpace(name) || LooksLikeOrderOrHeader(name))
+                {
+                    name = PickQuantityName(row, quantityCell, unitColumn >= 0 ? GetCell(row, unitColumn) : null);
+                }
+
+                if (String.IsNullOrWhiteSpace(name) || LooksLikeOrderOrHeader(name))
                 {
                     continue;
                 }
 
-                string group = groupColumn >= 0 ? GetCellText(row, groupColumn) : "";
-                if (LooksLikeGroupText(group))
-                {
-                    currentGroup = group;
-                }
-                else
-                {
-                    group = currentGroup;
-                }
-
-                if (String.Equals(group, detail, StringComparison.Ordinal))
+                string group = useCarryDown ? currentGroup : "";
+                if (String.Equals(group, name, StringComparison.Ordinal))
                 {
                     group = "";
-                }
-
-                string name = CombineQuantityName(group, detail);
-                if (String.IsNullOrWhiteSpace(name))
-                {
-                    continue;
                 }
 
                 ExcelQuantityItem item = new ExcelQuantityItem();
@@ -5644,18 +5779,12 @@ namespace RecoQuotaRecommend
                 item.ValueText = quantityCell.Text;
                 item.Formula = quantityCell.Formula;
                 item.ContextText = name + " " + item.Unit + " " + item.ValueText;
-                item.SectionName = String.IsNullOrWhiteSpace(group) ? detail : group;
+                item.SectionName = String.IsNullOrWhiteSpace(group) ? name : group;
                 item.OriginalName = name;
                 item.RawRowText = BuildRawRowText(row);
                 result.Add(item);
             }
 
-            QuotaRecommendPanel.Log("Grid parser: rows=" + rows.Count.ToString(CultureInfo.InvariantCulture)
-                + ", qtyCol=" + quantityColumn.ToString(CultureInfo.InvariantCulture)
-                + ", unitCol=" + unitColumn.ToString(CultureInfo.InvariantCulture)
-                + ", detailCol=" + detailColumn.ToString(CultureInfo.InvariantCulture)
-                + ", groupCol=" + groupColumn.ToString(CultureInfo.InvariantCulture)
-                + ", items=" + result.Count.ToString(CultureInfo.InvariantCulture));
             return result;
         }
 
@@ -5684,39 +5813,50 @@ namespace RecoQuotaRecommend
             return candidates.Count == 0 ? -1 : candidates[0].Column;
         }
 
-        private static int FindDetailColumn(List<List<CellValue>> rows, int quantityColumn, int unitColumn)
+        // 找出数量列左侧、整列以"组文本"（中文描述、非序号/单位/数量）为主的所有列，作为名称/描述列。
+        // 返回升序列索引；序号列因是数字会被 LooksLikeGroupText 自动排除。支持任意数量的描述列。
+        private static List<int> FindDescriptionColumns(List<List<CellValue>> rows, int nameBoundary, int unitColumn, int quantityColumn)
         {
-            int rightLimit = unitColumn >= 0 && unitColumn < quantityColumn ? unitColumn : quantityColumn;
-            var candidates = rows.SelectMany(r => r)
-                .Where(c => c != null
-                    && c.SourceIndex < rightLimit
-                    && c.SourceIndex != unitColumn
-                    && LooksLikeGroupText(c.Text))
-                .GroupBy(c => c.SourceIndex)
-                .Select(g => new { Column = g.Key, Count = g.Count() })
-                .OrderByDescending(x => x.Column)
-                .ThenByDescending(x => x.Count)
-                .ToList();
-            return candidates.Count == 0 ? -1 : candidates[0].Column;
-        }
+            List<int> columns = new List<int>();
+            if (rows == null)
+            {
+                return columns;
+            }
 
-        private static int FindGroupColumn(List<List<CellValue>> rows, int detailColumn, int unitColumn, int quantityColumn)
-        {
-            var candidates = rows.SelectMany(r => r)
+            var byColumn = rows.SelectMany(r => r ?? new List<CellValue>())
                 .Where(c => c != null
-                    && c.SourceIndex < detailColumn
+                    && c.SourceIndex < nameBoundary
                     && c.SourceIndex != unitColumn
-                    && c.SourceIndex != quantityColumn
-                    && !String.IsNullOrWhiteSpace(c.Text)
-                    && !LooksLikeUnit(c.Text)
-                    && !IsQuantityLike(c.Text)
-                    && !LooksLikeOrderOrHeader(c.Text))
-                .GroupBy(c => c.SourceIndex)
-                .Select(g => new { Column = g.Key, Count = g.Count() })
-                .OrderByDescending(x => x.Column)
-                .ThenByDescending(x => x.Count)
-                .ToList();
-            return candidates.Count == 0 ? -1 : candidates[0].Column;
+                    && c.SourceIndex != quantityColumn)
+                .GroupBy(c => c.SourceIndex);
+
+            foreach (var columnGroup in byColumn)
+            {
+                int groupText = 0;
+                int nonEmpty = 0;
+                foreach (CellValue cell in columnGroup)
+                {
+                    string text = (cell.Text ?? "").Trim();
+                    if (String.IsNullOrEmpty(text))
+                    {
+                        continue;
+                    }
+
+                    nonEmpty++;
+                    if (LooksLikeGroupText(text))
+                    {
+                        groupText++;
+                    }
+                }
+
+                if (nonEmpty > 0 && groupText > 0 && groupText * 2 >= nonEmpty)
+                {
+                    columns.Add(columnGroup.Key);
+                }
+            }
+
+            columns.Sort();
+            return columns;
         }
 
         private static string[] BuildUnitsByRow(List<List<CellValue>> rows, int unitColumn)
@@ -6245,6 +6385,23 @@ namespace RecoQuotaRecommend
             return left + " " + right;
         }
 
+        // 把多个描述列文本按列序折叠成一个工程量名称，复用 CombineQuantityName 的子串去重/空格拼接逻辑。
+        private static string CombineQuantityNames(IEnumerable<string> parts)
+        {
+            string name = "";
+            foreach (string part in parts ?? new string[0])
+            {
+                if (String.IsNullOrWhiteSpace(part))
+                {
+                    continue;
+                }
+
+                name = CombineQuantityName(name, part);
+            }
+
+            return name;
+        }
+
         private static void ApplyActiveLeftGroups(ExcelSelection selection)
         {
             if (selection == null || selection.Items.Count == 0)
@@ -6744,15 +6901,6 @@ namespace RecoQuotaRecommend
             public int AiQueued;
         }
 
-        private sealed class CellValue
-        {
-            public string Text;
-            public string Formula;
-            public string Address;
-            public int RowNumber;
-            public int SourceIndex;
-        }
-
         private struct CarryCell
         {
             public string Text;
@@ -6760,11 +6908,23 @@ namespace RecoQuotaRecommend
         }
     }
 
+    // 单元格快照：保留文本/公式/地址/行号/列索引（列索引从 1 开始，0 为合并表头注入的左侧分组列）。
+    internal sealed class CellValue
+    {
+        public string Text;
+        public string Formula;
+        public string Address;
+        public int RowNumber;
+        public int SourceIndex;
+    }
+
     internal sealed class ExcelSelection
     {
         public string WorkbookPath;
         public string WorksheetName;
         public readonly List<ExcelQuantityItem> Items = new List<ExcelQuantityItem>();
+        // 解析时的原始单元格网格（按行、按列保留结构），供 AI 列映射兜底重新判断列角色。
+        public List<List<CellValue>> RawRows;
     }
 
     internal sealed class ExcelQuantityItem
@@ -6793,6 +6953,10 @@ namespace RecoQuotaRecommend
         public string QuotaCode;
         public string QuotaName;
         public string QuotaUnit;
+        public string BookCode;
+        public string Specialty;
+        public double BasePrice;
+        public string WorkContent;
         public string ConvertedValueText;
         public int Score;
         public string Reason;
@@ -6881,6 +7045,15 @@ namespace RecoQuotaRecommend
         public string Reason;
     }
 
+    // AI 识别出的工程量表列布局：哪些列组成名称、哪列单位、哪列数量（列索引从 1 开始）。
+    internal sealed class DeepSeekColumnLayout
+    {
+        public int[] NameColumns;
+        public int UnitColumn;
+        public int QuantityColumn;
+        public int Confidence;
+    }
+
     internal sealed class DeepSeekSettings
     {
         public bool Enabled;
@@ -6896,6 +7069,7 @@ namespace RecoQuotaRecommend
         public bool EnableNameNormalization = true;
         public bool EnableMappingDetection = true;
         public bool EnableQuotaRecommendation = true;
+        public bool EnableColumnDetection = true;
 
         public bool IsAvailable
         {
@@ -6905,6 +7079,11 @@ namespace RecoQuotaRecommend
         public bool CanNormalizeNames
         {
             get { return IsAvailable && EnableNameNormalization; }
+        }
+
+        public bool CanDetectColumns
+        {
+            get { return IsAvailable && EnableColumnDetection; }
         }
 
         public bool CanRecommendQuota
@@ -6933,7 +7112,8 @@ namespace RecoQuotaRecommend
                 AutoCheckConfidence = AutoCheckConfidence,
                 EnableNameNormalization = EnableNameNormalization,
                 EnableMappingDetection = EnableMappingDetection,
-                EnableQuotaRecommendation = EnableQuotaRecommendation
+                EnableQuotaRecommendation = EnableQuotaRecommendation,
+                EnableColumnDetection = EnableColumnDetection
             };
         }
 
@@ -6968,6 +7148,7 @@ namespace RecoQuotaRecommend
                 settings.EnableNameNormalization = ReadBool(values, "enable_name_normalization", settings.EnableNameNormalization);
                 settings.EnableMappingDetection = ReadBool(values, "enable_mapping_detection", settings.EnableMappingDetection);
                 settings.EnableQuotaRecommendation = ReadBool(values, "enable_quota_recommendation", settings.EnableQuotaRecommendation);
+                settings.EnableColumnDetection = ReadBool(values, "enable_column_detection", settings.EnableColumnDetection);
             }
             catch (Exception ex)
             {
@@ -6996,7 +7177,8 @@ namespace RecoQuotaRecommend
             AppendJson(builder, "auto_check_confidence", AutoCheckConfidence.ToString(CultureInfo.InvariantCulture), false, true);
             AppendJson(builder, "enable_name_normalization", EnableNameNormalization ? "true" : "false", false, true);
             AppendJson(builder, "enable_mapping_detection", EnableMappingDetection ? "true" : "false", false, true);
-            AppendJson(builder, "enable_quota_recommendation", EnableQuotaRecommendation ? "true" : "false", false, false);
+            AppendJson(builder, "enable_quota_recommendation", EnableQuotaRecommendation ? "true" : "false", false, true);
+            AppendJson(builder, "enable_column_detection", EnableColumnDetection ? "true" : "false", false, false);
             builder.AppendLine("}");
             File.WriteAllText(path, builder.ToString(), Encoding.UTF8);
         }
@@ -7307,6 +7489,17 @@ namespace RecoQuotaRecommend
             }
 
             return ParseNameResponse(SendRequest(BuildNameRequestJson(rows)));
+        }
+
+        // 对整张工程量表只调用一次，让模型判断列结构（哪些列组成名称、哪列单位、哪列数量）。
+        public DeepSeekColumnLayout DetectColumnLayout(List<List<CellValue>> rows)
+        {
+            if (rows == null || rows.Count == 0)
+            {
+                return null;
+            }
+
+            return ParseColumnLayoutResponse(SendRequest(BuildColumnLayoutRequestJson(rows)));
         }
 
         public DeepSeekMappingSelection SelectMappingBox(ExcelQuantityItem item, List<AiMappingCandidate> candidates)
@@ -7771,6 +7964,145 @@ namespace RecoQuotaRecommend
             return normalized;
         }
 
+        private string BuildColumnLayoutRequestJson(List<List<CellValue>> rows)
+        {
+            int columnCount = 0;
+            foreach (List<CellValue> row in rows)
+            {
+                if (row == null)
+                {
+                    continue;
+                }
+
+                foreach (CellValue cell in row)
+                {
+                    if (cell != null && cell.SourceIndex > columnCount)
+                    {
+                        columnCount = cell.SourceIndex;
+                    }
+                }
+            }
+
+            List<object> sampleRows = new List<object>();
+            int taken = 0;
+            foreach (List<CellValue> row in rows)
+            {
+                if (row == null || row.Count == 0)
+                {
+                    continue;
+                }
+
+                Dictionary<string, object> cells = new Dictionary<string, object>();
+                foreach (CellValue cell in row)
+                {
+                    if (cell == null)
+                    {
+                        continue;
+                    }
+
+                    string text = Truncate(cell.Text, 40);
+                    if (String.IsNullOrWhiteSpace(text))
+                    {
+                        continue;
+                    }
+
+                    cells[cell.SourceIndex.ToString(CultureInfo.InvariantCulture)] = text;
+                }
+
+                if (cells.Count == 0)
+                {
+                    continue;
+                }
+
+                sampleRows.Add(cells);
+                taken++;
+                if (taken >= 12)
+                {
+                    break;
+                }
+            }
+
+            Dictionary<string, object> body = new Dictionary<string, object>();
+            body["column_count"] = columnCount;
+            body["task"] = "判断该工程量表的列结构：哪些列共同组成工程量名称(name_columns，按从左到右顺序)，哪一列是单位(unit_column)，哪一列是数量(quantity_column)。";
+            body["rules"] = new string[]
+            {
+                "列索引从1开始；name_columns 应包含数量列左侧所有描述/名称类列（如部位、项目名称、规格型号等），不含序号列。",
+                "unit_column 为单位列（m、m2、m3、kg、t、处、个、座、项等）；若无单位列填0。",
+                "quantity_column 为数量/工程量数值列。",
+                "若无法判断填 confidence 0。"
+            };
+            body["rows"] = sampleRows;
+
+            List<object> messages = new List<object>();
+            messages.Add(new Dictionary<string, object>
+            {
+                { "role", "system" },
+                { "content", "你是工程量表结构识别助手。根据给定的数据行（按 列索引->文本 给出，可能含表头行），判断每列的角色。必须严格输出 JSON：{\"name_columns\":[2,3,4],\"unit_column\":5,\"quantity_column\":6,\"confidence\":90}。列索引从1开始。" }
+            });
+            messages.Add(new Dictionary<string, object>
+            {
+                { "role", "user" },
+                { "content", serializer.Serialize(body) }
+            });
+
+            Dictionary<string, object> payload = new Dictionary<string, object>();
+            payload["model"] = settings.Model;
+            payload["stream"] = false;
+            payload["temperature"] = 0.1;
+            payload["max_tokens"] = 400;
+            payload["response_format"] = new Dictionary<string, object> { { "type", "json_object" } };
+            payload["messages"] = messages;
+            return serializer.Serialize(payload);
+        }
+
+        private DeepSeekColumnLayout ParseColumnLayoutResponse(string responseJson)
+        {
+            Dictionary<string, object> root = serializer.DeserializeObject(responseJson) as Dictionary<string, object>;
+            if (root == null)
+            {
+                return null;
+            }
+
+            List<object> choices = GetList(root, "choices");
+            if (choices == null || choices.Count == 0)
+            {
+                return null;
+            }
+
+            Dictionary<string, object> firstChoice = choices[0] as Dictionary<string, object>;
+            Dictionary<string, object> message = firstChoice == null || !firstChoice.ContainsKey("message") ? null : firstChoice["message"] as Dictionary<string, object>;
+            string content = message == null || !message.ContainsKey("content") ? "" : Convert.ToString(message["content"], CultureInfo.InvariantCulture);
+            if (String.IsNullOrWhiteSpace(content))
+            {
+                return null;
+            }
+
+            Dictionary<string, object> resultRoot = serializer.DeserializeObject(content) as Dictionary<string, object>;
+            if (resultRoot == null)
+            {
+                return null;
+            }
+
+            List<int> names = new List<int>();
+            foreach (object o in GetList(resultRoot, "name_columns") ?? new List<object>())
+            {
+                int v;
+                if (Int32.TryParse(Convert.ToString(o, CultureInfo.InvariantCulture), NumberStyles.Integer, CultureInfo.InvariantCulture, out v) && v > 0)
+                {
+                    names.Add(v);
+                }
+            }
+
+            return new DeepSeekColumnLayout
+            {
+                NameColumns = names.ToArray(),
+                UnitColumn = ReadInt(resultRoot, "unit_column"),
+                QuantityColumn = ReadInt(resultRoot, "quantity_column"),
+                Confidence = ReadInt(resultRoot, "confidence")
+            };
+        }
+
         private static List<object> GetList(Dictionary<string, object> values, string key)
         {
             object value;
@@ -7957,6 +8289,167 @@ namespace RecoQuotaRecommend
                 .ToList();
         }
 
+        public List<RecommendationRow> SearchQuotaCandidates(ExcelQuantityItem item, string categoryFilter, EntryScope scope, int limit)
+        {
+            if (item == null)
+            {
+                return new List<RecommendationRow>();
+            }
+
+            int max = Math.Max(1, limit);
+            string chinesePhrase = ExtractChinesePhrase(item.Name);
+            string majorChapter = GetMajorChapterCode(scope);
+            List<ScoredQuota> scopedHits = new List<ScoredQuota>();
+            if (scope != null && scope.Strict)
+            {
+                foreach (string code in scope.QuotaPoolCodes)
+                {
+                    IndexQuota quota;
+                    if (!quotasByCode.TryGetValue((code ?? "").Trim(), out quota) ||
+                        !CategoryAllowed(quota.BookCategory, categoryFilter))
+                    {
+                        continue;
+                    }
+
+                    if (!QuotaMatchesRequiredPhrase(quota, chinesePhrase))
+                    {
+                        continue;
+                    }
+
+                    int score = ScoreQuota(item, quota);
+                    if (score > 0)
+                    {
+                        scopedHits.Add(CreateScoredQuota(quota, score, scope, majorChapter));
+                    }
+                }
+            }
+
+            IEnumerable<ScoredQuota> allHits = GetQuotaCandidates(item, categoryFilter, null)
+                .Select(q => new ScoredQuota { Quota = q, Score = ScoreQuota(item, q) })
+                .Where(q => q.Score > 0)
+                .Where(q => QuotaMatchesRequiredPhrase(q.Quota, chinesePhrase))
+                .Select(q => CreateScoredQuota(q.Quota, q.Score, scope, majorChapter))
+                .Concat(scopedHits);
+
+            return allHits
+                .GroupBy(q => q.Quota.QuotaCode ?? "", StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.OrderBy(x => x.MajorRank).ThenBy(x => x.PoolRank).ThenByDescending(x => x.Score).ThenBy(x => x.Quota.SortOrder).First())
+                .OrderBy(q => q.MajorRank)
+                .ThenBy(q => q.PoolRank)
+                .ThenByDescending(q => q.Score)
+                .ThenBy(q => q.Quota.SortOrder)
+                .Take(max)
+                .Select(q => q.Quota.ToRecommendation(item, q.Score))
+                .ToList();
+        }
+
+        private static ScoredQuota CreateScoredQuota(IndexQuota quota, int score, EntryScope scope, string majorChapter)
+        {
+            ScoredQuota result = new ScoredQuota();
+            result.Quota = quota;
+            result.Score = score;
+            result.PoolRank = scope != null && scope.Strict && scope.Allows("quota", quota == null ? null : quota.QuotaCode) ? 0 : 1;
+            result.MajorRank = SpecialtyMatchesMajorChapter(majorChapter, quota == null ? null : quota.Specialty) ? 0 : 1;
+            return result;
+        }
+
+        private static bool QuotaMatchesRequiredPhrase(IndexQuota quota, string chinesePhrase)
+        {
+            if (String.IsNullOrWhiteSpace(chinesePhrase))
+            {
+                return true;
+            }
+
+            if (quota == null)
+            {
+                return false;
+            }
+
+            string name = ExtractChinesePhrase(quota.QuotaName);
+            string work = ExtractChinesePhrase(quota.WorkContent);
+            return name.Contains(chinesePhrase) || work.Contains(chinesePhrase);
+        }
+
+        private static string ExtractChinesePhrase(string text)
+        {
+            StringBuilder builder = new StringBuilder();
+            foreach (char ch in text ?? "")
+            {
+                if (ch >= 0x4e00 && ch <= 0x9fff)
+                {
+                    builder.Append(ch);
+                }
+            }
+            return builder.ToString();
+        }
+
+        private static string GetMajorChapterCode(EntryScope scope)
+        {
+            if (scope == null)
+            {
+                return "";
+            }
+
+            string code = !String.IsNullOrWhiteSpace(scope.ProjectEntryCode) ? scope.ProjectEntryCode : scope.MatchedEntryCode;
+            if (String.IsNullOrWhiteSpace(code))
+            {
+                return "";
+            }
+
+            Match match = Regex.Match(code.Trim(), "\\d+");
+            if (!match.Success)
+            {
+                return "";
+            }
+
+            string digits = match.Value;
+            if (digits.Length == 1)
+            {
+                return "0" + digits;
+            }
+            return digits.Substring(0, 2);
+        }
+
+        private static bool SpecialtyMatchesMajorChapter(string majorChapter, string specialty)
+        {
+            string text = TextMatcher.Normalize(specialty);
+            if (String.IsNullOrWhiteSpace(majorChapter) || String.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            switch (majorChapter)
+            {
+                case "02":
+                    return text.Contains("\u8def\u57fa");
+                case "03":
+                    return text.Contains("\u6865\u6db5");
+                case "04":
+                    return text.Contains("\u96a7\u9053");
+                case "05":
+                    return text.Contains("\u8f68\u9053");
+                case "06":
+                    return text.Contains("\u901a\u4fe1") ||
+                        text.Contains("\u4fe1\u53f7") ||
+                        text.Contains("\u4fe1\u606f") ||
+                        text.Contains("\u707e\u5bb3\u76d1\u6d4b");
+                case "07":
+                    return text.Contains("\u7535\u529b") ||
+                        text.Contains("\u7535\u529b\u7275\u5f15\u4f9b\u7535");
+                case "08":
+                    return text.Contains("\u623f\u5c4b");
+                case "09":
+                    return text.Contains("\u7ad9\u573a") ||
+                        text.Contains("\u7ed9\u6392\u6c34") ||
+                        text.Contains("\u673a\u52a1") ||
+                        text.Contains("\u8f66\u8f86") ||
+                        text.Contains("\u673a\u68b0") ||
+                        text.Contains("\u8fd0\u8425\u751f\u4ea7\u8bbe\u5907") ||
+                        text.Contains("\u5efa\u7b51\u7269");
+                default:
+                    return false;
+            }
+        }
         public bool IsMappingTargetAllowed(string targetKind, string code, string categoryFilter)
         {
             string kind = String.IsNullOrWhiteSpace(targetKind) ? QuotaEntry.GuessKind(code) : targetKind;
@@ -8077,6 +8570,12 @@ namespace RecoQuotaRecommend
                     quota.SectionNo = LearningStore.Get(values, "section_no");
                     quota.SectionName = LearningStore.Get(values, "section_name");
                     quota.WorkContent = LearningStore.Get(values, "work_content");
+                    double basePrice;
+                    quota.BasePrice = Double.TryParse(
+                        LearningStore.Get(values, "base_price"),
+                        NumberStyles.Float,
+                        CultureInfo.InvariantCulture,
+                        out basePrice) ? basePrice : 0d;
                     quota.SearchText = LearningStore.Get(values, "search_text");
                     int sortOrder;
                     quota.SortOrder = Int32.TryParse(LearningStore.Get(values, "sort_order"), NumberStyles.Integer, CultureInfo.InvariantCulture, out sortOrder) ? sortOrder : Int32.MaxValue;
@@ -8199,9 +8698,14 @@ namespace RecoQuotaRecommend
 
         private static bool UseTokenForCandidateLookup(string token)
         {
-            if (String.IsNullOrWhiteSpace(token) || token.Length < 2)
+            if (String.IsNullOrWhiteSpace(token))
             {
                 return false;
+            }
+
+            if (token.Length == 1)
+            {
+                return TextMatcher.IsPureChinese(token);
             }
 
             return !TextMatcher.IsNumberLikeToken(token);
@@ -8589,6 +9093,8 @@ namespace RecoQuotaRecommend
         {
             public IndexQuota Quota;
             public int Score;
+            public int MajorRank;
+            public int PoolRank;
         }
 
     }
@@ -8604,6 +9110,7 @@ namespace RecoQuotaRecommend
         public string SectionNo;
         public string SectionName;
         public string WorkContent;
+        public double BasePrice;
         public string SearchText;
         public int SortOrder;
 
@@ -8614,6 +9121,10 @@ namespace RecoQuotaRecommend
             row.QuotaCode = QuotaCode;
             row.QuotaName = QuotaName;
             row.QuotaUnit = QuotaUnit;
+            row.BookCode = BookCode;
+            row.Specialty = Specialty;
+            row.BasePrice = BasePrice;
+            row.WorkContent = WorkContent;
             row.ConvertedValueText = RecommendDialog.ConvertQuantityForIndex(item.ValueText, item.Unit, QuotaUnit);
             row.Score = score;
             row.Reason = "\u5168\u91cf\u5b9a\u989d\u7d22\u5f15\u5173\u952e\u8bcd\u5339\u914d";
@@ -8782,7 +9293,14 @@ namespace RecoQuotaRecommend
                         continue;
                     }
 
-                    store.AddPoolKey(entryCode, LearningStore.Get(values, "target_kind"), code);
+                    if (LearningStore.Get(values, "deleted").Trim() == "1")
+                    {
+                        store.RemovePoolKey(entryCode, LearningStore.Get(values, "target_kind"), code);
+                    }
+                    else
+                    {
+                        store.AddPoolKey(entryCode, LearningStore.Get(values, "target_kind"), code);
+                    }
                 }
 
                 store.BuildNameIndex();
@@ -8837,6 +9355,18 @@ namespace RecoQuotaRecommend
 
             string normalizedKind = String.IsNullOrWhiteSpace(kind) ? QuotaEntry.GuessKind(code) : kind.Trim().ToLowerInvariant();
             pool.Add(normalizedKind + ":" + code.ToUpperInvariant());
+        }
+
+        private void RemovePoolKey(string entryCode, string kind, string code)
+        {
+            HashSet<string> pool;
+            if (String.IsNullOrEmpty(entryCode) || String.IsNullOrEmpty(code) || !pools.TryGetValue(entryCode, out pool))
+            {
+                return;
+            }
+
+            string normalizedKind = String.IsNullOrWhiteSpace(kind) ? QuotaEntry.GuessKind(code) : kind.Trim().ToLowerInvariant();
+            pool.Remove(normalizedKind + ":" + code.ToUpperInvariant());
         }
 
         private static bool IsQuotaInputEntryType(string entryType)
@@ -9023,6 +9553,43 @@ namespace RecoQuotaRecommend
             catch (Exception ex)
             {
                 QuotaRecommendPanel.Log("ChapterLibrary user quota append failed: " + ex.Message);
+            }
+        }
+
+        // 用户从参考池删除定额：从内存池移除并追加 deleted=1 墓碑行（软删除，可被后续 add 覆盖恢复）
+        public void RemoveUserQuota(EntryScope scope, string targetKind, string code)
+        {
+            if (scope == null || String.IsNullOrEmpty(scope.MatchedEntryCode) || String.IsNullOrWhiteSpace(code))
+            {
+                return;
+            }
+
+            string kind = String.IsNullOrWhiteSpace(targetKind) ? QuotaEntry.GuessKind(code) : targetKind.Trim().ToLowerInvariant();
+            RemovePoolKey(scope.MatchedEntryCode, kind, code.Trim());
+
+            try
+            {
+                Dictionary<string, string> record = new Dictionary<string, string>();
+                record["record_type"] = "entry_quota";
+                record["method"] = MethodKey;
+                record["method_no"] = MethodNo;
+                record["entry_code"] = scope.MatchedEntryCode;
+                record["entry_name"] = scope.EntryName ?? "";
+                record["target_kind"] = kind;
+                record["quota_code"] = code.Trim();
+                record["quota_name"] = "";
+                record["quota_unit"] = "";
+                record["project_count"] = "0";
+                record["source"] = "user";
+                record["deleted"] = "1";
+                record["last_seen"] = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                string path = Path.Combine(LearningStore.FindDataDir(), "chapter-quota-library.jsonl");
+                File.AppendAllText(path, LearningStore.ToJson(record) + Environment.NewLine, Encoding.UTF8);
+                QuotaRecommendPanel.Log("ChapterLibrary user quota removed. entry=" + scope.MatchedEntryCode + " code=" + code);
+            }
+            catch (Exception ex)
+            {
+                QuotaRecommendPanel.Log("ChapterLibrary user quota remove append failed: " + ex.Message);
             }
         }
     }

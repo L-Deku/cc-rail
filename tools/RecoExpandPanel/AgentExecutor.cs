@@ -305,6 +305,14 @@ namespace RecoNet
                 Log("Agent capture tree selection failed: " + ex.Message);
             }
 
+            // 从章节树按 Ctrl+Q 进入时意图是整个条目，丢弃定额表里"当前行"这类顺带选中，
+            // 让"未明确选定额"回落到当前条目下全部定额（修复只改第一条的问题）。
+            if (s_agentInvokeFromTree)
+            {
+                snapshot.QuotaKeys = new List<QuotaKey>();
+                snapshot.QuotaCodes = new List<string>();
+            }
+
             return snapshot;
         }
 
@@ -750,11 +758,12 @@ namespace RecoNet
 
                     double factor = Convert.ToDouble(command.Factor, CultureInfo.InvariantCulture);
                     double newPrice = command.Operator == "/" ? oldPrice / factor : oldPrice * factor;
-                    double newTotal = newPrice * AgentToDouble(row.Quantity);
+                    newPrice = Math.Round(newPrice, 2, MidpointRounding.AwayFromZero);   // 单价保留两位小数
+                    double newTotal = Math.Round(newPrice * AgentToDouble(row.Quantity), 2, MidpointRounding.AwayFromZero);
                     plan.FieldUpdates.Add(BuildQuotaFieldUpdate(row, "乘单价",
                         new Dictionary<string, object> { { "单价", newPrice }, { "合价", newTotal } },
                         new Dictionary<string, object> { { "单价", row.UnitPrice }, { "合价", DBNull.Value } },
-                        oldPrice.ToString(CultureInfo.InvariantCulture), newPrice.ToString("0.####", CultureInfo.InvariantCulture)));
+                        oldPrice.ToString("0.00", CultureInfo.InvariantCulture), newPrice.ToString("0.00", CultureInfo.InvariantCulture)));
                 }
                 else
                 {
@@ -785,7 +794,7 @@ namespace RecoNet
 
             if (command.Target == "unit_price")
             {
-                plan.Warnings.Add("乘单价是直接改单价列：补充定额(手填单价)长期有效；普通定额会在主程序整体重算时被定额库价覆盖，普通定额建议改用\"乘定额编号\"。");
+                plan.Warnings.Add("单价直接改单价列，保留两位小数：仅对补充定额(SH/SQ/ZLF/LF/SF/TLF 等手填单价)长期有效；普通定额单价为计算值(常为0会被跳过)，会被主程序重算覆盖，建议改用\"定额编号 ×系数\"。");
             }
 
             if (skipped > 0)

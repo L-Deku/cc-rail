@@ -477,7 +477,7 @@ namespace RecoNet
             {
                 command.Type = "clear_quantity";
                 tokens = ExtractAgentQuotaFilter(tokens, command);
-                command.Items = tokens.Count < 1 ? AgentSelectedItems() : SplitAgentList(tokens[0]);
+                ApplyAgentItemQuotaLead(command, tokens);   // [条目编号] [定额编号]，规则同工程数量等
                 result.Commands.Add(command);
                 return true;
             }
@@ -486,7 +486,7 @@ namespace RecoNet
             {
                 command.Type = "delete_quotas";
                 tokens = ExtractAgentQuotaFilter(tokens, command);
-                command.Items = tokens.Count < 1 ? AgentSelectedItems() : SplitAgentList(tokens[0]);
+                ApplyAgentItemQuotaLead(command, tokens);   // [条目编号] [定额编号]，规则同工程数量等
                 result.Commands.Add(command);
                 return true;
             }
@@ -594,20 +594,14 @@ namespace RecoNet
                 tokens = ExtractAgentQuotaFilter(tokens, command);
                 if (tokens.Count < 1)
                 {
-                    result.Error = "用法：设数量 [条目编号] 数值 [定额编号]，例如：设数量 0101-01 100；省略条目编号则作用于当前选中。";
+                    result.Error = "用法：设数量 [条目编号] [定额编号] 数值，例如：设数量 0101-01 LY-21 100；省略条目和定额则作用于当前选中定额。";
                     return true;
                 }
 
-                if (tokens.Count == 1)
-                {
-                    command.Items = AgentSelectedItems();
-                    command.Value = tokens[0].Trim();
-                }
-                else
-                {
-                    command.Items = SplitAgentList(tokens[0]);
-                    command.Value = tokens[1].Trim();
-                }
+                // 末尾是数值；之前的位置参数依次是 [条目编号] [定额编号]，规则同工程数量等。
+                command.Value = tokens[tokens.Count - 1].Trim();
+                tokens.RemoveAt(tokens.Count - 1);
+                ApplyAgentItemQuotaLead(command, tokens);
 
                 result.Commands.Add(command);
                 return true;
@@ -728,17 +722,22 @@ namespace RecoNet
                 else
                 {
                     command.Items = SplitAgentList(tokens[0]);
-                    if (tokens.Count < 2)
+                    if (tokens.Count >= 2)
                     {
-                        result.Error = "缺少方案序号。用法：设运输方案 条目编号 方案序号 [运输参数] 单元=单元名";
-                        return true;
+                        command.Scheme = tokens[1].Trim();
                     }
 
-                    command.Scheme = tokens[1].Trim();
                     if (tokens.Count >= 3)
                     {
                         command.TransportParam = tokens[2].Trim();
                     }
+                }
+
+                if (String.IsNullOrEmpty(command.Scheme) || !IsAgentDigits(command.Scheme))
+                {
+                    result.Error = "运输方案目前只支持方案序号(数字)，例如：设运输方案 4 单元=南江路泵房。" +
+                        "不支持直接用方案名(如\"" + tokens[0].Trim() + "\")。请改用软件里该方案的序号；要支持按名字设置，请告诉我方案名存在哪个表/字段。";
+                    return true;
                 }
 
                 result.Commands.Add(command);

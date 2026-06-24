@@ -15,6 +15,8 @@ namespace RecoNet
     {
         private static readonly Dictionary<Form, AgentChatWindow> AgentChatWindows = new Dictionary<Form, AgentChatWindow>();
         private static readonly HashSet<Control> AgentShortcutHookedControls = new HashSet<Control>();
+        // 记录最近一次 Ctrl+Q 是从章节树还是定额表进入的：树=意图整个条目（忽略定额表里顺带的当前行）。
+        private static bool s_agentInvokeFromTree;
 
         private static void EnsureAgentChatRuntime(Form mainForm)
         {
@@ -34,6 +36,7 @@ namespace RecoNet
             {
                 if (e.Control && !e.Shift && e.KeyCode == Keys.Q)
                 {
+                    s_agentInvokeFromTree = control is TreeView;
                     ShowAgentChatWindow(mainForm);
                     e.Handled = true;
                 }
@@ -721,7 +724,7 @@ namespace RecoNet
                 AppendSystem("    例：工程数量 0101-01 LY-21 *0.85 / 定额编号 0101-01 LY-21 *9 / 单价 LY-21 /1.1 / 工程数量 删除*0.85（当前选中定额）");
                 AppendSystem("    （定额编号字段不管装定额/材料编号/ZLF，操作都只在其后追加或删除乘除；单价为计算值不支持删除）");
                 AppendSystem("  定额调整 0101-01 LY-21 /XG1（整串写入，原样）/ 定额调整 0101-01 LY-21 删除 /XG1（去掉该调整）/ 定额调整 LY-21 /1294861,,1（当前条目该定额）");
-                AppendSystem("  设数量 0101-01 100 [LY-21] / 清空数量 0101-01 / 删除定额 0101-01 [LY-21]");
+                AppendSystem("  设数量 0101-01 LY-21 100 / 清空数量 0101-01 LY-21 / 删除定额 0101-01 LY-21（条目/定额规则同上：省略定额=选中定额，省略条目=当前条目）");
                 AppendSystem("  替换定额 0101-01 LY-21 QY-100 / 复制定额 0101-01 到 0102-01 / 输入定额 [0101-01] LY-21=100（省略条目编号则输入到当前选中条目）");
                 AppendSystem("  设运输方案 0101-01 4 PH0 单元=南江路泵房（PH0为可选运输参数）/ 改材料价 材料 部颁25年4季度 单元=南江路泵房");
                 AppendSystem("  新建单元 新名称 从 源单元名称（源也可用 _ZGS_02 或总概算序号）");

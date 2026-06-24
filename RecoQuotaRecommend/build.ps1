@@ -147,6 +147,11 @@ $systemRuntime = Get-ChildItem -LiteralPath "$env:WINDIR\Microsoft.NET\assembly\
 if (-not $systemRuntime) {
   throw "Could not find System.Runtime.dll"
 }
+$quotaSources = @(
+  (Join-Path $PSScriptRoot "QuotaRecommendPanel.cs"),
+  (Join-Path $PSScriptRoot "RecoQuotaInlineSearchFeature.cs"),
+  (Join-Path $PSScriptRoot "RecoReferenceQuotaPoolFeature.cs")
+)
 $expandSources = Get-ChildItem -LiteralPath (Join-Path $root "tools\RecoExpandPanel") -Filter "*.cs" |
   Sort-Object Name |
   ForEach-Object { $_.FullName }
@@ -166,7 +171,7 @@ Assert-NativeSuccess "Build QuotaLearningImporter"
   /reference:System.Web.Extensions.dll `
   /reference:$systemRuntime `
   /reference:$harmony `
-  (Join-Path $PSScriptRoot "QuotaRecommendPanel.cs")
+  $quotaSources
 Assert-NativeSuccess "Build RecoQuotaRecommend"
 
 & $csc /nologo /target:library /out:$loaderOut `

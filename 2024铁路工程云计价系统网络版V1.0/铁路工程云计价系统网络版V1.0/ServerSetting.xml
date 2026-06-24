@@ -32,10 +32,10 @@
     </xs:element>
   </xs:schema>
   <ServerSetting>
-    <Server>192.168.2.13</Server>
+    <Server>192.168.2.213</Server>
     <User>谢刚</User>
     <Id>工经</Id>
-    <ServerIP>192.168.2.13</ServerIP>
+    <ServerIP>192.168.2.213</ServerIP>
     <FtpPort>21</FtpPort>
     <SqlPort>1433</SqlPort>
     <ReportSavePath>D:\桌面文件\桌面文件夹\报表</ReportSavePath>
