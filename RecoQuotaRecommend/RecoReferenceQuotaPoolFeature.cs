@@ -69,6 +69,7 @@ namespace RecoQuotaRecommend
             private DataGridView refGrid; // 我们自管的只读表格，叠放进"参考定额"框
             private Panel hostPanel;      // 容纳工具条 + refGrid，整体叠放进"参考定额"框
             private DataGridView nativeGrid; // tabPageCommon 里宿主原生 dg_Common，隐藏它以免盖住我们的表
+            private Control refContainer;    // "参考定额"页容器，监听其可见性以便切到该页时重新加载数据
             private ToolStripLabel entryLabel; // 工具条右侧显示当前命中的条目编号
             private List<PoolItem> displayedItems = new List<PoolItem>(); // 与 refGrid 行一一对应，供删除取 code/kind
             private TreeView tree;
@@ -132,12 +133,18 @@ namespace RecoQuotaRecommend
                 hostPanel.Controls.Add(bar);
                 bar.Dock = DockStyle.Top;
                 refGrid.Dock = DockStyle.Fill;
-                bar.BringToFront();
-                refGrid.SendToBack();
+                // z 序：工具条置后(先 Dock 占顶部) + 表格置前(后 Dock 填剩余)，否则工具条会盖住表格列头
+                bar.SendToBack();
+                refGrid.BringToFront();
 
                 container.Controls.Add(hostPanel);
                 HideNativeGrids(container);
                 hostPanel.BringToFront();
+
+                // 强制创建表格句柄，并监听"参考定额"页可见性：切到该页时重新加载（非绑定表格在未激活时 Rows.Add 不生效）
+                refContainer = container;
+                container.VisibleChanged -= OnContainerVisibleChanged;
+                container.VisibleChanged += OnContainerVisibleChanged;
 
                 grid.CurrentCellChanged -= OnGridMove;
                 grid.CurrentCellChanged += OnGridMove;
@@ -169,6 +176,7 @@ namespace RecoQuotaRecommend
                 try { grid.CurrentCellChanged -= OnGridMove; } catch { }
                 try { grid.DataSourceChanged -= OnGridMove; } catch { }
                 try { if (tree != null) tree.AfterSelect -= OnTreeSelect; } catch { }
+                try { if (refContainer != null) refContainer.VisibleChanged -= OnContainerVisibleChanged; } catch { }
                 try { if (nativeGrid != null) { nativeGrid.VisibleChanged -= NativeGridVisibleChanged; nativeGrid.Visible = true; } } catch { }
                 try { if (hostPanel != null && hostPanel.Parent != null) hostPanel.Parent.Controls.Remove(hostPanel); } catch { }
                 try { if (hostPanel != null) hostPanel.Dispose(); } catch { }
@@ -251,36 +259,33 @@ namespace RecoQuotaRecommend
                 g.RowHeadersVisible = false;
                 g.ColumnHeadersVisible = true;
                 g.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+                g.ColumnHeadersHeight = 28; // 固定表头高度，避免 AutoSize 压成 0 导致表头不显示
                 g.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
                 g.MultiSelect = false;
-                g.AutoGenerateColumns = false; // 显式建列，表头固定为 编号/名称/单位/基期价格/内容，不依赖自动生成
                 g.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
                 g.EditMode = DataGridViewEditMode.EditProgrammatically;
                 g.BackgroundColor = SystemColors.Window;
                 try { g.Font = grid.Font; } catch { }
-                g.Columns.Add(MakeColumn("\u7f16\u53f7", "\u7f16\u53f7", 16, false));
-                g.Columns.Add(MakeColumn("\u540d\u79f0", "\u540d\u79f0", 34, false));
-                g.Columns.Add(MakeColumn("\u5355\u4f4d", "\u5355\u4f4d", 9, false));
-                g.Columns.Add(MakeColumn("\u57fa\u671f\u4ef7\u683c", "\u57fa\u671f\u4ef7\u683c", 12, true));
-                g.Columns.Add(MakeColumn("\u5185\u5bb9", "\u5185\u5bb9", 29, false));
+                // 表头加粗 + 蓝底，确保一眼可辨、与数据行区分
+                g.EnableHeadersVisualStyles = false;
+                g.ColumnHeadersDefaultCellStyle.BackColor = SystemColors.GradientActiveCaption;
+                g.ColumnHeadersDefaultCellStyle.ForeColor = SystemColors.ControlText;
+                try { g.ColumnHeadersDefaultCellStyle.Font = new Font(g.Font, FontStyle.Bold); } catch { }
+                // 不绑定 DataSource，按 RecommendDialog 一样的 显式建列 + 手动加行 方式，表头才稳定显示
+                g.Columns.Add("c_code", "\u7f16\u53f7");
+                g.Columns.Add("c_name", "\u540d\u79f0");
+                g.Columns.Add("c_unit", "\u5355\u4f4d");
+                g.Columns.Add("c_price", "\u57fa\u671f\u4ef7\u683c");
+                g.Columns.Add("c_content", "\u5185\u5bb9");
+                g.Columns["c_code"].FillWeight = 16;
+                g.Columns["c_name"].FillWeight = 34;
+                g.Columns["c_unit"].FillWeight = 9;
+                g.Columns["c_price"].FillWeight = 12;
+                g.Columns["c_content"].FillWeight = 29;
+                g.Columns["c_price"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+                foreach (DataGridViewColumn col in g.Columns) { col.SortMode = DataGridViewColumnSortMode.NotSortable; }
                 g.CellDoubleClick += RefGridDoubleClick;
                 return g;
-            }
-
-            private static DataGridViewTextBoxColumn MakeColumn(string header, string prop, int fillWeight, bool rightAlign)
-            {
-                DataGridViewTextBoxColumn c = new DataGridViewTextBoxColumn();
-                c.HeaderText = header;
-                c.DataPropertyName = prop;
-                c.Name = "col_" + prop;
-                c.ReadOnly = true;
-                c.FillWeight = fillWeight;
-                c.SortMode = DataGridViewColumnSortMode.NotSortable;
-                if (rightAlign)
-                {
-                    c.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
-                }
-                return c;
             }
 
             private void TimerTick(object sender, EventArgs e)
@@ -297,6 +302,17 @@ namespace RecoQuotaRecommend
 
             private void OnGridMove(object sender, EventArgs e) { ScheduleRefresh(); }
             private void OnTreeSelect(object sender, TreeViewEventArgs e) { ScheduleRefresh(); }
+
+            // 切到"参考定额"页（容器变可见）时强制重新加载：此时表格已激活，Rows.Add 才会真正加进去
+            private void OnContainerVisibleChanged(object sender, EventArgs e)
+            {
+                if (disposed || refContainer == null || !refContainer.Visible)
+                {
+                    return;
+                }
+                currentKey = null;
+                ScheduleRefresh();
+            }
 
             private void RefreshSafe()
             {
@@ -396,14 +412,18 @@ namespace RecoQuotaRecommend
                 {
                     return;
                 }
-                refGrid.DataSource = BuildTable();
-                ApplyColumnStyles();
+                refGrid.Rows.Clear();
+                refGrid.ClearSelection();
             }
 
             private void BindItems(List<PoolItem> items)
             {
                 displayedItems = new List<PoolItem>(items);
-                DataTable table = BuildTable();
+                if (refGrid == null || refGrid.IsDisposed)
+                {
+                    return;
+                }
+                refGrid.Rows.Clear();
                 foreach (PoolItem it in items)
                 {
                     QuotaInfo info;
@@ -412,10 +432,9 @@ namespace RecoQuotaRecommend
                     string unit = info != null && info.Unit.Length > 0 ? info.Unit : it.Unit;
                     string price = info != null ? info.Price : "";
                     string content = info != null ? info.Content : "";
-                    table.Rows.Add(it.Code, name, unit, price, content);
+                    refGrid.Rows.Add(it.Code, name, unit, price, content);
                 }
-                refGrid.DataSource = table;
-                ApplyColumnStyles();
+                refGrid.ClearSelection();
                 LogRefGridState("after-bind rows=" + items.Count.ToString(CultureInfo.InvariantCulture));
             }
 
@@ -450,8 +469,8 @@ namespace RecoQuotaRecommend
                 catch { ApplyCode(code); }
             }
 
-            // 双击参考定额 -> 走宿主原生粘贴管线把定额写入定额输入表（与智能指令 ExecuteAgentInsertGroup 同一套）。
-            // 程序化写单元格不会触发宿主解析；只有原生粘贴会自动补全名称/单位/单价/消耗等。
+            // 双击参考定额 -> 复用内联检索那套已验证成功的"原生单回车提交"：
+            // 设光标到定额编号列 -> BeginEdit -> 往 EditingControl 写编号 -> 回车，宿主自动解析名称/单位/单价/消耗。
             private void ApplyCode(string code)
             {
                 if (String.IsNullOrWhiteSpace(code) || grid == null)
@@ -460,45 +479,105 @@ namespace RecoQuotaRecommend
                 }
                 try
                 {
-                    if (TryApplyViaQuotaCodeCell(code))
+                    int codeCol = FindColumnIndex(grid, QuotaCodeColumns());
+                    if (codeCol < 0)
                     {
+                        QuotaRecommendPanel.Log("Reference quota apply: code column not found.");
                         return;
                     }
-
-                    if (TryApplyDirectCode(code))
+                    int targetRow = ResolveTargetRow(codeCol);
+                    if (targetRow < 0)
                     {
+                        QuotaRecommendPanel.Log("Reference quota apply: no target row.");
                         return;
                     }
-
-                    grid.Focus();
-                    Application.DoEvents();          // 先让焦点落定，再设单元格
-                    int targetRow = MoveGridToTargetRow();
-                    int beforeRows = grid.Rows.Count;
-                    LogPasteProbe("before", targetRow, code);
-                    // 关键：设好"定额编号"列单元格后，到粘贴之间不能再 DoEvents，否则宿主会把光标移到数量列，粘贴落空
-                    Clipboard.SetText(code.Trim() + "\t\t\t\r\n");
-                    bool viaMenu = TryInvokePasteMenu();
-                    if (!viaMenu)
-                    {
-                        SendKeys.SendWait("^v");
-                    }
-                    Application.DoEvents();
-                    int actualRow = grid.CurrentCell == null ? targetRow : grid.CurrentCell.RowIndex;
-                    QuotaRecommendPanel.Log("Reference quota paste fallback: " + code.Trim()
-                        + " viaMenu=" + viaMenu
-                        + " targetRow=" + targetRow.ToString(CultureInfo.InvariantCulture)
-                        + " allowAdd=" + grid.AllowUserToAddRows
-                        + " newRowIdx=" + grid.NewRowIndex.ToString(CultureInfo.InvariantCulture)
-                        + " curCell=" + (grid.CurrentCell == null ? "null" : (grid.CurrentCell.RowIndex.ToString(CultureInfo.InvariantCulture) + "," + grid.CurrentCell.ColumnIndex.ToString(CultureInfo.InvariantCulture)))
-                        + " focused=" + grid.Focused
-                        + " rows " + beforeRows.ToString(CultureInfo.InvariantCulture) + "->" + grid.Rows.Count.ToString(CultureInfo.InvariantCulture));
-                    LogPasteProbe("after", actualRow, code);
-                    ScheduleDelayedPasteProbe(actualRow, targetRow, code);
+                    bool filled = NativeEnterCommit(code.Trim(), targetRow, codeCol);
+                    QuotaRecommendPanel.Log("Reference quota native-enter: " + code.Trim()
+                        + " row=" + targetRow.ToString(CultureInfo.InvariantCulture)
+                        + " filled=" + filled.ToString()
+                        + " data=" + DescribeInputRow(targetRow));
                 }
                 catch (Exception ex)
                 {
-                    QuotaRecommendPanel.Log("Reference quota apply(native paste) failed: " + ex.Message);
+                    QuotaRecommendPanel.Log("Reference quota apply failed: " + ex.Message);
                 }
+            }
+
+            // 选目标行：当前行若定额编号为空就用当前行；否则找一个空行；都没有用最后一行
+            private int ResolveTargetRow(int codeCol)
+            {
+                int cur = grid.CurrentCell == null ? -1 : grid.CurrentCell.RowIndex;
+                if (cur >= 0 && cur < grid.Rows.Count && !grid.Rows[cur].IsNewRow && IsBlankCode(cur, codeCol))
+                {
+                    return cur;
+                }
+                for (int r = grid.Rows.Count - 1; r >= 0; r--)
+                {
+                    if (grid.Rows[r].IsNewRow)
+                    {
+                        continue;
+                    }
+                    if (IsBlankCode(r, codeCol))
+                    {
+                        return r;
+                    }
+                }
+                return cur >= 0 ? cur : grid.Rows.Count - 1;
+            }
+
+            private bool IsBlankCode(int row, int codeCol)
+            {
+                if (row < 0 || row >= grid.Rows.Count)
+                {
+                    return false;
+                }
+                object v = grid.Rows[row].Cells[codeCol].Value;
+                return v == null || String.IsNullOrWhiteSpace(Convert.ToString(v, CultureInfo.CurrentCulture));
+            }
+
+            // 原生单回车提交：与 QuotaInlineSearchFeature.TryApplyViaNativeEnterCommit 同一套已验证成功的写入
+            private bool NativeEnterCommit(string code, int targetRow, int codeCol)
+            {
+                try
+                {
+                    grid.Focus();
+                    grid.ClearSelection();
+                    grid.CurrentCell = grid.Rows[targetRow].Cells[codeCol];
+                    grid.Rows[targetRow].Selected = true;
+                    bool began = grid.BeginEdit(true);
+                    TextBoxBase ed = grid.EditingControl as TextBoxBase;
+                    if (!began || ed == null)
+                    {
+                        QuotaRecommendPanel.Log("Reference quota native edit unavailable: began=" + began.ToString());
+                        return false;
+                    }
+                    ed.Text = code;
+                    ed.SelectionStart = ed.TextLength;
+                    ed.SelectionLength = 0;
+                    grid.NotifyCurrentCellDirty(true);
+                    SendKeys.SendWait("{ENTER}");
+                    Application.DoEvents();
+                    return RowLooksFilled(targetRow, codeCol);
+                }
+                catch (Exception ex)
+                {
+                    QuotaRecommendPanel.Log("Reference quota native-enter failed: " + ex.Message);
+                    return false;
+                }
+            }
+
+            private bool RowLooksFilled(int row, int codeCol)
+            {
+                if (row < 0 || row >= grid.Rows.Count)
+                {
+                    return false;
+                }
+                string c = Convert.ToString(grid.Rows[row].Cells[codeCol].Value, CultureInfo.CurrentCulture);
+                if (String.IsNullOrWhiteSpace(c))
+                {
+                    return false;
+                }
+                return !String.IsNullOrWhiteSpace(GetRowValue(grid.Rows[row], QuotaNameColumns()));
             }
 
             // 把定额输入表当前单元格移到末尾新增行的"定额编号"列（粘贴落点），与 AgentExecutor.MoveAgentGridToNewRow 一致
