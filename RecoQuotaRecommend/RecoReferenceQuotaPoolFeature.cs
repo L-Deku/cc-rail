@@ -141,7 +141,7 @@ namespace RecoQuotaRecommend
                 HideNativeGrids(container);
                 hostPanel.BringToFront();
 
-                // 强制创建表格句柄，并监听"参考定额"页可见性：切到该页时重新加载（非绑定表格在未激活时 Rows.Add 不生效）
+                // 监听"参考定额"页可见性：切到该页时重新加载（非绑定表格在未激活时 Rows.Add 不生效）
                 refContainer = container;
                 container.VisibleChanged -= OnContainerVisibleChanged;
                 container.VisibleChanged += OnContainerVisibleChanged;
@@ -160,7 +160,6 @@ namespace RecoQuotaRecommend
                 ShowEmpty();
                 ScheduleRefresh();
                 QuotaRecommendPanel.Log("Reference quota pool bound to container: " + container.Name + " pooledEntries=" + poolByEntry.Count.ToString(CultureInfo.InvariantCulture));
-                LogRefGridState("after-install");
                 return true;
             }
 
@@ -222,31 +221,6 @@ namespace RecoQuotaRecommend
                 catch { }
             }
 
-            // 诊断：把覆盖表的真实列/可见性/层级写日志，用于核对"参考定额"框显示
-            private void LogRefGridState(string tag)
-            {
-                try
-                {
-                    StringBuilder cols = new StringBuilder();
-                    if (refGrid != null)
-                    {
-                        foreach (DataGridViewColumn c in refGrid.Columns) { cols.Append("[").Append(c.HeaderText).Append("]"); }
-                    }
-                    int childIndex = hostPanel != null && hostPanel.Parent != null ? hostPanel.Parent.Controls.GetChildIndex(hostPanel) : -99;
-                    QuotaRecommendPanel.Log("RefGrid[" + tag + "] gridVisible=" + (refGrid != null && refGrid.Visible)
-                        + " cols=" + (refGrid == null ? -1 : refGrid.Columns.Count) + cols
-                        + " rows=" + (refGrid == null ? -1 : refGrid.Rows.Count)
-                        + " hostVisible=" + (hostPanel != null && hostPanel.Visible)
-                        + " hostBounds=" + (hostPanel == null ? "" : hostPanel.Bounds.ToString())
-                        + " hostChildIndex=" + childIndex.ToString(CultureInfo.InvariantCulture)
-                        + " nativeVisible=" + (nativeGrid == null ? "n/a" : nativeGrid.Visible.ToString()));
-                }
-                catch (Exception ex)
-                {
-                    QuotaRecommendPanel.Log("RefGrid state log failed: " + ex.Message);
-                }
-            }
-
             private DataGridView BuildRefGrid()
             {
                 DataGridView g = new DataGridView();
@@ -262,7 +236,9 @@ namespace RecoQuotaRecommend
                 g.ColumnHeadersHeight = 28; // 固定表头高度，避免 AutoSize 压成 0 导致表头不显示
                 g.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
                 g.MultiSelect = false;
-                g.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+                g.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None; // 列用自然宽度，不强行铺满整框
+                g.AllowUserToResizeColumns = true;                            // 允许手动拉伸列宽
+                g.ScrollBars = ScrollBars.Both;                               // 放不下时出横向/纵向滚动条
                 g.EditMode = DataGridViewEditMode.EditProgrammatically;
                 g.BackgroundColor = SystemColors.Window;
                 try { g.Font = grid.Font; } catch { }
@@ -277,11 +253,11 @@ namespace RecoQuotaRecommend
                 g.Columns.Add("c_unit", "\u5355\u4f4d");
                 g.Columns.Add("c_price", "\u57fa\u671f\u4ef7\u683c");
                 g.Columns.Add("c_content", "\u5185\u5bb9");
-                g.Columns["c_code"].FillWeight = 16;
-                g.Columns["c_name"].FillWeight = 34;
-                g.Columns["c_unit"].FillWeight = 9;
-                g.Columns["c_price"].FillWeight = 12;
-                g.Columns["c_content"].FillWeight = 29;
+                g.Columns["c_code"].Width = 80;     // 编号
+                g.Columns["c_name"].Width = 240;    // 名称
+                g.Columns["c_unit"].Width = 60;     // 单位
+                g.Columns["c_price"].Width = 90;    // 基期价格
+                g.Columns["c_content"].Width = 220; // 内容
                 g.Columns["c_price"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
                 foreach (DataGridViewColumn col in g.Columns) { col.SortMode = DataGridViewColumnSortMode.NotSortable; }
                 g.CellDoubleClick += RefGridDoubleClick;
@@ -435,21 +411,6 @@ namespace RecoQuotaRecommend
                     refGrid.Rows.Add(it.Code, name, unit, price, content);
                 }
                 refGrid.ClearSelection();
-                LogRefGridState("after-bind rows=" + items.Count.ToString(CultureInfo.InvariantCulture));
-            }
-
-            private void ApplyColumnStyles()
-            {
-                if (refGrid == null || refGrid.Columns.Count < 5)
-                {
-                    return;
-                }
-                refGrid.Columns[0].FillWeight = 16; // 编号
-                refGrid.Columns[1].FillWeight = 34; // 名称
-                refGrid.Columns[2].FillWeight = 9;  // 单位
-                refGrid.Columns[3].FillWeight = 12; // 基期价格
-                refGrid.Columns[4].FillWeight = 29; // 内容
-                refGrid.Columns[3].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
             }
 
             private void RefGridDoubleClick(object sender, DataGridViewCellEventArgs e)
@@ -580,216 +541,6 @@ namespace RecoQuotaRecommend
                 return !String.IsNullOrWhiteSpace(GetRowValue(grid.Rows[row], QuotaNameColumns()));
             }
 
-            // 把定额输入表当前单元格移到末尾新增行的"定额编号"列（粘贴落点），与 AgentExecutor.MoveAgentGridToNewRow 一致
-            private bool TryApplyViaQuotaCodeCell(string code)
-            {
-                if (String.IsNullOrWhiteSpace(code))
-                {
-                    return false;
-                }
-
-                int targetRow = MoveGridToTargetRow();
-                int codeColumn = FindColumnIndex(grid, QuotaCodeColumns());
-                if (targetRow < 0 || targetRow >= grid.Rows.Count || codeColumn < 0)
-                {
-                    return false;
-                }
-
-                try
-                {
-                    grid.Focus();
-                    Application.DoEvents();
-                    grid.BeginEdit(true);
-                    Application.DoEvents();
-                    Clipboard.SetText(code.Trim());
-                    SendKeys.SendWait("^a");
-                    SendKeys.SendWait("^v");
-                    SendKeys.SendWait("{ENTER}");
-                    Application.DoEvents();
-
-                    bool filled = TargetRowLooksNativeFilled(targetRow, code);
-                    QuotaRecommendPanel.Log("Reference quota code-cell submitted: " + code.Trim()
-                        + " row=" + targetRow.ToString(CultureInfo.InvariantCulture)
-                        + " filled=" + filled.ToString()
-                        + " data=" + DescribeInputRow(targetRow));
-                    return filled;
-                }
-                catch (Exception ex)
-                {
-                    QuotaRecommendPanel.Log("Reference quota code-cell submit failed: " + ex.Message);
-                    return false;
-                }
-            }
-
-            private bool TryApplyDirectCode(string code)
-            {
-                if (String.IsNullOrWhiteSpace(code))
-                {
-                    return false;
-                }
-
-                QuotaInfo info;
-                if (!quotaIndex.TryGetValue(code.Trim().ToUpperInvariant(), out info) || info == null)
-                {
-                    QuotaRecommendPanel.Log("Reference quota direct fill skipped: quota index missing " + code);
-                    return false;
-                }
-
-                int targetRow = MoveGridToTargetRow();
-                if (targetRow < 0 || targetRow >= grid.Rows.Count)
-                {
-                    return false;
-                }
-
-                try
-                {
-                    DataGridViewRow row = grid.Rows[targetRow];
-                    double quantity;
-                    bool hasQuantity = TryParseDouble(GetRowValue(row, new[] { "\u5de5\u7a0b\u6570\u91cf\u8f93\u5165", "\u5de5\u7a0b\u6570\u91cf" }), out quantity);
-                    double price;
-                    bool hasPrice = TryParseDouble(info.Price, out price);
-
-                    SetRowValue(row, QuotaCodeColumns(), code.Trim());
-                    SetRowValue(row, QuotaNameColumns(), info.Name ?? "");
-                    SetRowValue(row, QuotaUnitColumns(), info.Unit ?? "");
-                    if (hasPrice)
-                    {
-                        SetRowValue(row, new[] { "\u5355\u4ef7", "\u57fa\u671f\u4ef7\u683c" }, price);
-                        if (hasQuantity)
-                        {
-                            SetRowValue(row, new[] { "\u5408\u4ef7" }, quantity * price);
-                        }
-                    }
-
-                    grid.CurrentCell = row.Cells[Math.Max(0, FindColumnIndex(grid, QuotaCodeColumns()))];
-                    grid.EndEdit();
-                    grid.InvalidateRow(targetRow);
-                    QuotaRecommendPanel.Log("Reference quota direct-filled: " + code
-                        + " row=" + targetRow.ToString(CultureInfo.InvariantCulture)
-                        + " data=" + DescribeInputRow(targetRow));
-                    return TargetRowLooksNativeFilled(targetRow, code);
-                }
-                catch (Exception ex)
-                {
-                    QuotaRecommendPanel.Log("Reference quota direct fill failed: " + ex.Message);
-                    return false;
-                }
-            }
-
-            private bool TargetRowLooksNativeFilled(int targetRowIndex, string code)
-            {
-                if (targetRowIndex < 0 || targetRowIndex >= grid.Rows.Count)
-                {
-                    return false;
-                }
-
-                DataGridViewRow row = grid.Rows[targetRowIndex];
-                if (!String.Equals(NormalizeQuotaCode(GetRowValue(row, QuotaCodeColumns())), NormalizeQuotaCode(code), StringComparison.OrdinalIgnoreCase))
-                {
-                    return false;
-                }
-
-                return !String.IsNullOrWhiteSpace(GetRowValue(row, QuotaNameColumns())) ||
-                    !String.IsNullOrWhiteSpace(GetRowValue(row, QuotaUnitColumns())) ||
-                    !String.IsNullOrWhiteSpace(GetRowValue(row, new[] { "\u5355\u4ef7", "\u57fa\u671f\u4ef7\u683c" }));
-            }
-
-            private int MoveGridToTargetRow()
-            {
-                int rowIndex = grid.CurrentCell == null ? -1 : grid.CurrentCell.RowIndex;
-                if (rowIndex < 0 || rowIndex >= grid.Rows.Count)
-                {
-                    rowIndex = grid.Rows.Count - 1;
-                }
-
-                int columnIndex = FindColumnIndex(grid, QuotaCodeColumns());
-                if (rowIndex < 0 || columnIndex < 0)
-                {
-                    return -1;
-                }
-
-                try
-                {
-                    grid.Focus();
-                    grid.ClearSelection();
-                    grid.CurrentCell = grid.Rows[rowIndex].Cells[columnIndex];
-                    grid.Rows[rowIndex].Selected = true;
-                }
-                catch (Exception ex)
-                {
-                    QuotaRecommendPanel.Log("Reference quota move-to-target-row failed: " + ex.Message);
-                }
-                return rowIndex;
-            }
-
-            private void MoveCurrentCellAwayFromCode(int targetRowIndex, int codeColumn)
-            {
-                if (targetRowIndex < 0 || targetRowIndex >= grid.Rows.Count)
-                {
-                    return;
-                }
-
-                int nextColumn = FindColumnIndex(grid, QuotaNameColumns());
-                if (nextColumn < 0 || nextColumn == codeColumn || !grid.Columns[nextColumn].Visible)
-                {
-                    foreach (DataGridViewColumn column in grid.Columns)
-                    {
-                        if (column.Visible && column.Index != codeColumn)
-                        {
-                            nextColumn = column.Index;
-                            break;
-                        }
-                    }
-                }
-                if (nextColumn >= 0 && nextColumn < grid.Columns.Count)
-                {
-                    grid.CurrentCell = grid.Rows[targetRowIndex].Cells[nextColumn];
-                }
-            }
-
-            private void LogPasteProbe(string phase, int targetRowIndex, string code)
-            {
-                try
-                {
-                    QuotaRecommendPanel.Log("Reference paste probe[" + phase + "] code=" + (code ?? "")
-                        + " row=" + targetRowIndex.ToString(CultureInfo.InvariantCulture)
-                        + " rows=" + grid.Rows.Count.ToString(CultureInfo.InvariantCulture)
-                        + " allowAdd=" + grid.AllowUserToAddRows
-                        + " newRowIdx=" + grid.NewRowIndex.ToString(CultureInfo.InvariantCulture)
-                        + " focused=" + grid.Focused
-                        + " edit=" + (grid.EditingControl == null ? "null" : grid.EditingControl.GetType().FullName)
-                        + " curCell=" + (grid.CurrentCell == null ? "null" : (grid.CurrentCell.RowIndex.ToString(CultureInfo.InvariantCulture) + "," + grid.CurrentCell.ColumnIndex.ToString(CultureInfo.InvariantCulture)))
-                        + " rowData=" + DescribeInputRow(targetRowIndex));
-                }
-                catch (Exception ex)
-                {
-                    QuotaRecommendPanel.Log("Reference paste probe[" + phase + "] failed: " + ex.Message);
-                }
-            }
-
-            private void ScheduleDelayedPasteProbe(int actualRowIndex, int pasteRowIndex, string code)
-            {
-                SchedulePasteProbeOnce("delay-500", 500, actualRowIndex, pasteRowIndex, code);
-                SchedulePasteProbeOnce("delay-1500", 1500, actualRowIndex, pasteRowIndex, code);
-            }
-
-            private void SchedulePasteProbeOnce(string phase, int delayMs, int actualRowIndex, int pasteRowIndex, string code)
-            {
-                Timer probeTimer = new Timer();
-                probeTimer.Interval = delayMs;
-                probeTimer.Tick += delegate
-                {
-                    probeTimer.Stop();
-                    probeTimer.Dispose();
-                    LogPasteProbe(phase + "-actual", actualRowIndex, code);
-                    if (pasteRowIndex != actualRowIndex)
-                    {
-                        LogPasteProbe(phase + "-paste", pasteRowIndex, code);
-                    }
-                };
-                probeTimer.Start();
-            }
-
             private string DescribeInputRow(int targetRowIndex)
             {
                 if (targetRowIndex < 0 || targetRowIndex >= grid.Rows.Count)
@@ -803,35 +554,6 @@ namespace RecoQuotaRecommend
                     + "|unit=" + GetRowValue(row, QuotaUnitColumns())
                     + "|qty=" + GetRowValue(row, new[] { "\u5de5\u7a0b\u6570\u91cf\u8f93\u5165", "\u5de5\u7a0b\u6570\u91cf" })
                     + "|price=" + GetRowValue(row, new[] { "\u5355\u4ef7", "\u57fa\u671f\u4ef7\u683c" });
-            }
-
-            // 调宿主定额输入表右键菜单 contextMenuStripDE 的"粘贴"项，触发原生粘贴解析
-            private bool TryInvokePasteMenu()
-            {
-                ContextMenuStrip menu = GetField<ContextMenuStrip>(mainForm, "contextMenuStripDE");
-                if (menu == null)
-                {
-                    return false;
-                }
-                foreach (ToolStripItem item in menu.Items)
-                {
-                    if (item is ToolStripMenuItem && item.Available && item.Text != null &&
-                        item.Text.IndexOf("\u7c98\u8d34", StringComparison.Ordinal) >= 0)
-                    {
-                        try
-                        {
-                            ((ToolStripMenuItem)item).PerformClick();
-                            QuotaRecommendPanel.Log("Reference quota paste via menu: " + item.Text);
-                            return true;
-                        }
-                        catch (Exception ex)
-                        {
-                            QuotaRecommendPanel.Log("Reference quota paste menu failed: " + ex.Message);
-                            return false;
-                        }
-                    }
-                }
-                return false;
             }
 
             // ===== 增加 / 删除 参考定额池定额 =====
@@ -1154,7 +876,7 @@ namespace RecoQuotaRecommend
                     QuotaRecommendPanel.Log("Reference quota index missing: " + path);
                     return map;
                 }
-                foreach (string line in File.ReadAllLines(path, Encoding.UTF8))
+                foreach (string line in File.ReadLines(path, Encoding.UTF8))
                 {
                     if (String.IsNullOrWhiteSpace(line))
                     {
@@ -1194,7 +916,7 @@ namespace RecoQuotaRecommend
                 {
                     return map;
                 }
-                foreach (string line in File.ReadAllLines(path, Encoding.UTF8))
+                foreach (string line in File.ReadLines(path, Encoding.UTF8))
                 {
                     if (String.IsNullOrWhiteSpace(line))
                     {
@@ -1274,17 +996,6 @@ namespace RecoQuotaRecommend
                 return b.ProjectCount.CompareTo(a.ProjectCount); // 项目数降序
             }
             return String.Compare(a.Code, b.Code, StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static DataTable BuildTable()
-        {
-            DataTable table = new DataTable();
-            table.Columns.Add("\u7f16\u53f7"); // 定额编号
-            table.Columns.Add("\u540d\u79f0");             // 名称
-            table.Columns.Add("\u5355\u4f4d");             // 单位
-            table.Columns.Add("\u57fa\u671f\u4ef7\u683c");       // 项目数
-            table.Columns.Add("\u5185\u5bb9");             // 来源
-            return table;
         }
 
         private static string SourceLabel(string source)
@@ -1494,18 +1205,6 @@ namespace RecoQuotaRecommend
             return false;
         }
 
-        private static bool TryParseDouble(string text, out double value)
-        {
-            value = 0d;
-            if (String.IsNullOrWhiteSpace(text))
-            {
-                return false;
-            }
-
-            return Double.TryParse(text.Replace(",", "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value) ||
-                Double.TryParse(text.Replace(",", "").Trim(), NumberStyles.Float, CultureInfo.CurrentCulture, out value);
-        }
-
         private static string TryGetTagValue(object source, string name)
         {
             if (source == null)
@@ -1535,17 +1234,6 @@ namespace RecoQuotaRecommend
         // 归一化编制办法文号：各种破折号统一成 '-'；'–'=–, '—'=—, '－'=－
         private static string NormalizeMethodNo(string text) { return (text ?? "").Replace('\u2013', '-').Replace('\u2014', '-').Replace('\uff0d', '-').Replace(" ", "").Trim(); }
         private static void EnsureConnectionOpen(SqlConnection conn) { if (conn != null && conn.State != ConnectionState.Open) conn.Open(); }
-
-        private static string NormalizeQuotaCode(string code)
-        {
-            return (code ?? "")
-                .Replace('\u2013', '-')
-                .Replace('\u2014', '-')
-                .Replace('\uff0d', '-')
-                .Replace(" ", "")
-                .Trim()
-                .ToUpperInvariant();
-        }
 
         private static T GetField<T>(object target, string name) where T : class
         {
