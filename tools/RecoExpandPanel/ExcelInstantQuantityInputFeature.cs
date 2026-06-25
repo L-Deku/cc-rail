@@ -54,6 +54,7 @@ namespace RecoNet
             private bool applyingQuantity;
             private string lastStatusMessage = "";
             private DateTime lastStatusUtc = DateTime.MinValue;
+            private DateTime lastToggleShortcutUtc = DateTime.MinValue;
             private DateTime nextConnectionAttemptUtc = DateTime.MinValue;
 
             public ExcelInstantQuantityInputRuntime(Form mainForm)
@@ -143,6 +144,15 @@ namespace RecoNet
                     return false;
                 }
 
+                DateTime now = DateTime.UtcNow;
+                if ((now - lastToggleShortcutUtc).TotalMilliseconds < 250)
+                {
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    return true;
+                }
+
+                lastToggleShortcutUtc = now;
                 ToggleEnabled();
                 e.Handled = true;
                 e.SuppressKeyPress = true;
@@ -174,7 +184,7 @@ namespace RecoNet
                 {
                     CaptureCurrentQuantityTarget(false);
                     pollTimer.Start();
-                    ShowStatus("\u5df2\u5f00\u542fExcel\u70b9\u9009\u5373\u586b\uff1a\u5148\u70b9\u8f6f\u4ef6\u5de5\u7a0b\u6570\u91cf\u683c\uff0c\u518d\u70b9Excel\u6570\u91cf\u683c\u3002");
+                    ShowEnabledDialog("\u5df2\u5f00\u542fExcel\u70b9\u9009\u5373\u586b\uff1a\u5148\u70b9\u8f6f\u4ef6\u5de5\u7a0b\u6570\u91cf\u683c\uff0c\u518d\u70b9Excel\u6570\u91cf\u683c\u3002");
                 }
                 else
                 {
@@ -401,7 +411,7 @@ namespace RecoNet
                     }
 
                     bool selectionChanged = !String.Equals(lastExcelKey, cell.Key, StringComparison.OrdinalIgnoreCase);
-                    bool activationClick = awaitingSpreadsheetActivation && hasReusableSpreadsheetSelection;
+                    bool activationClick = awaitingSpreadsheetActivation;
                     if (!cell.IsForeground && !selectionChanged && !activationClick)
                     {
                         wasSpreadsheetForeground = false;
@@ -1085,6 +1095,22 @@ namespace RecoNet
                 }
             }
 
+            private void ShowEnabledDialog(string message)
+            {
+                ShowStatus(message);
+                if (mainForm == null || mainForm.IsDisposed)
+                {
+                    return;
+                }
+
+                try
+                {
+                    MessageBox.Show(mainForm, message, "Excel点选即时填", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch
+                {
+                }
+            }
             [DllImport("user32.dll")]
             private static extern IntPtr InstantGetForegroundWindow();
 
