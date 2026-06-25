@@ -64,6 +64,7 @@ namespace RecoNet
                 pollTimer.Tick += delegate { PollActiveSpreadsheetCell(); };
                 statusTip = new ToolTip();
                 statusTip.ShowAlways = true;
+                statusTip.IsBalloon = true;
             }
 
             public bool Install()
@@ -947,14 +948,15 @@ namespace RecoNet
                     baseUnit = match.Groups["unit"].Value;
                 }
 
-                baseUnit = NormalizeInstantBaseUnit(baseUnit);
+                decimal unitScale;
+                baseUnit = NormalizeInstantBaseUnit(baseUnit, out unitScale);
                 if (String.IsNullOrEmpty(baseUnit))
                 {
                     return new InstantUnitScale();
                 }
 
                 InstantUnitScale result = new InstantUnitScale();
-                result.Scale = scale <= 0m ? 1m : scale;
+                result.Scale = (scale <= 0m ? 1m : scale) * unitScale;
                 result.BaseUnit = baseUnit;
                 return result;
             }
@@ -971,21 +973,41 @@ namespace RecoNet
                 unit = unit.Replace("\u33a1", "m2").Replace("\u33a5", "m3");
                 unit = unit.Replace("m^2", "m2").Replace("m\uff3e2", "m2");
                 unit = unit.Replace("m^3", "m3").Replace("m\uff3e3", "m3");
+                unit = unit.Replace("\u5343\u7c73", "km").Replace("\u516c\u91cc", "km");
+                unit = unit.Replace("\u767e\u7c73", "hm");
+                unit = unit.Replace("\u5343\u514b", "kg").Replace("\u516c\u65a4", "kg");
+                unit = unit.Replace("\u5428", "t");
                 unit = unit.Replace("\u7acb\u65b9\u7c73", "m3");
                 unit = unit.Replace("\u5e73\u65b9\u7c73", "m2");
                 unit = unit.Replace("\u7c73", "m");
                 return unit;
             }
 
-            private static string NormalizeInstantBaseUnit(string unit)
+            private static string NormalizeInstantBaseUnit(string unit, out decimal unitScale)
             {
+                unitScale = 1m;
                 unit = NormalizeInstantUnit(unit);
-                if (unit == "m" || unit == "m2" || unit == "m3" || unit == "kg" || unit == "t")
+                if (unit == "km")
+                {
+                    unitScale = 1000m;
+                    return "m";
+                }
+                if (unit == "hm")
+                {
+                    unitScale = 100m;
+                    return "m";
+                }
+                if (unit == "t")
+                {
+                    unitScale = 1000m;
+                    return "kg";
+                }
+                if (unit == "m" || unit == "m2" || unit == "m3" || unit == "kg")
                 {
                     return unit;
                 }
 
-                return unit;
+                return "";
             }
 
             private static bool LooksLikeInstantUnit(string text)
@@ -1026,7 +1048,7 @@ namespace RecoNet
 
                 try
                 {
-                    statusTip.Show(message, grid, 12, 12, 1800);
+                    statusTip.Show(message, grid, 12, 12, 2500);
                 }
                 catch
                 {
