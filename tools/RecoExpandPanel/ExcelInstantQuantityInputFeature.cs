@@ -64,7 +64,6 @@ namespace RecoNet
                 pollTimer.Tick += delegate { PollActiveSpreadsheetCell(); };
                 statusTip = new ToolTip();
                 statusTip.ShowAlways = true;
-                statusTip.IsBalloon = true;
             }
 
             public bool Install()
@@ -77,6 +76,7 @@ namespace RecoNet
                 }
 
                 HookGrid();
+                HookMainFormShortcut();
                 CaptureCurrentQuantityTarget(false);
                 Log("Excel instant quantity input installed. Toggle=Ctrl+Shift+Q.");
                 return true;
@@ -96,6 +96,10 @@ namespace RecoNet
                     grid.CurrentCellChanged -= GridCurrentCellChanged;
                     grid.DataSourceChanged -= GridDataSourceChanged;
                 }
+                if (mainForm != null)
+                {
+                    mainForm.KeyDown -= MainFormKeyDown;
+                }
             }
 
             private void HookGrid()
@@ -110,14 +114,39 @@ namespace RecoNet
                 grid.DataSourceChanged += GridDataSourceChanged;
             }
 
+            private void HookMainFormShortcut()
+            {
+                if (mainForm == null)
+                {
+                    return;
+                }
+
+                mainForm.KeyPreview = true;
+                mainForm.KeyDown -= MainFormKeyDown;
+                mainForm.KeyDown += MainFormKeyDown;
+            }
+
+            private void MainFormKeyDown(object sender, KeyEventArgs e)
+            {
+                TryHandleToggleShortcut(e);
+            }
+
             private void GridKeyDown(object sender, KeyEventArgs e)
             {
-                if (e.Control && e.Shift && e.KeyCode == Keys.Q)
+                TryHandleToggleShortcut(e);
+            }
+
+            private bool TryHandleToggleShortcut(KeyEventArgs e)
+            {
+                if (e == null || !e.Control || !e.Shift || e.KeyCode != Keys.Q)
                 {
-                    ToggleEnabled();
-                    e.Handled = true;
-                    e.SuppressKeyPress = true;
+                    return false;
                 }
+
+                ToggleEnabled();
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                return true;
             }
 
             private void GridCellEnter(object sender, DataGridViewCellEventArgs e)
@@ -1041,14 +1070,15 @@ namespace RecoNet
                 lastStatusMessage = message;
                 lastStatusUtc = now;
                 Log("Excel instant quantity status: " + message);
-                if (grid == null || grid.IsDisposed)
+                Control owner = grid != null && !grid.IsDisposed && grid.Visible ? (Control)grid : (Control)mainForm;
+                if (owner == null || owner.IsDisposed)
                 {
                     return;
                 }
 
                 try
                 {
-                    statusTip.Show(message, grid, 12, 12, 2500);
+                    statusTip.Show(message, owner, 12, 12, 2200);
                 }
                 catch
                 {
