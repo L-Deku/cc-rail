@@ -1057,10 +1057,10 @@ namespace RecoNet
 
             private static string FormatDecimal(decimal value)
             {
-                decimal rounded = Decimal.Round(value, 2, MidpointRounding.AwayFromZero);
+                decimal rounded = Decimal.Round(value, 3, MidpointRounding.AwayFromZero);
                 return value == Decimal.Truncate(value)
                     ? rounded.ToString("0", CultureInfo.InvariantCulture)
-                    : rounded.ToString("0.00", CultureInfo.InvariantCulture);
+                    : rounded.ToString("0.###", CultureInfo.InvariantCulture);
             }
 
             private static string CleanDisplayUnit(string text)
