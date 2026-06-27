@@ -222,5 +222,36 @@ namespace RecoNet
             }
             catch { return ""; }
         }
+
+        // 模式二：固定绑定列。直接读模板记录的原单元格（用户已把目标单元数量粘进该列）。
+        private static List<FillPreviewItem> BuildPreview_FixedColumn(FillTemplate template)
+        {
+            List<FillPreviewItem> items = new List<FillPreviewItem>();
+            foreach (FillTemplateRow row in template.Rows)
+            {
+                FillPreviewItem item = new FillPreviewItem
+                {
+                    ItemNo = row.ItemNo, QuotaCode = row.QuotaCode, Adjust = row.Adjust,
+                    SourceName = row.SourceName, OrderInItem = row.OrderInItem
+                };
+
+                if (String.IsNullOrWhiteSpace(row.SourceExpr))
+                {
+                    item.Status = "模板未记录取数位置"; item.Selected = false; items.Add(item); continue;
+                }
+
+                string display; decimal qty; string err;
+                if (!TryEvaluateWorkbookExpression(template.WorkbookPath, row.SourceSheet, row.SourceExpr, out display, out qty, out err))
+                {
+                    item.Status = "取数失败：" + err; item.Selected = false; items.Add(item); continue;
+                }
+
+                item.QuantityText = display;
+                item.TargetName = ReadRowNameAt(template.WorkbookPath, row.SourceSheet, row.SourceExpr);
+                if (qty == 0m) { item.Status = "数量为0"; }
+                items.Add(item);
+            }
+            return items;
+        }
     }
 }
