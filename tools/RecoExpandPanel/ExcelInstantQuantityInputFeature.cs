@@ -1004,6 +1004,9 @@ namespace RecoNet
             {
                 string unit = (text ?? "").Trim().ToLowerInvariant();
                 unit = unit.Replace(" ", "").Replace("\u3000", "");
+                unit = unit.Replace("\uff08", "(").Replace("\uff09", ")");
+                unit = unit.Replace("\uff0e", ".").Replace("\u00b7", ".").Replace("\ufe52", ".");
+                unit = unit.Replace("\uff4d", "m").Replace("\uff2d", "m");
                 unit = unit.Replace("\uff10", "0").Replace("\uff11", "1").Replace("\uff12", "2")
                     .Replace("\uff13", "3").Replace("\uff14", "4").Replace("\uff15", "5")
                     .Replace("\uff16", "6").Replace("\uff17", "7").Replace("\uff18", "8")
@@ -1017,6 +1020,7 @@ namespace RecoNet
                 unit = unit.Replace("\u5343\u514b", "kg").Replace("\u516c\u65a4", "kg");
                 unit = unit.Replace("\u5428", "t");
                 unit = unit.Replace("\u7acb\u65b9\u7c73", "m3");
+                unit = unit.Replace("\u5e73\u7c73", "m2");
                 unit = unit.Replace("\u5e73\u65b9\u7c73", "m2");
                 unit = unit.Replace("\u7c73", "m");
                 return unit;
@@ -1046,7 +1050,7 @@ namespace RecoNet
                     return unit;
                 }
 
-                return "";
+                return unit;
             }
 
             private static bool LooksLikeInstantUnit(string text)
