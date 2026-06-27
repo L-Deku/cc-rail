@@ -148,5 +148,79 @@ namespace RecoNet
 
             return template;
         }
+
+        // 把表达式里每个单元格的列字母替换为 targetColumn（行号不变）。
+        // 例 "E5" + targetCol "F" -> "F5"；"E4+E5" -> "F4+F5"。
+        private static string RetargetExprColumn(string expr, string targetColumn)
+        {
+            if (String.IsNullOrWhiteSpace(expr)) return expr;
+            List<string> cells = ExtractCellAddressesFromExpression(expr);
+            string result = expr.ToUpperInvariant();
+            foreach (string cell in cells.OrderByDescending(c => c.Length))
+            {
+                CellRef cr;
+                if (!TryParseCellAddress(cell, out cr)) continue;
+                string replaced = targetColumn.ToUpperInvariant() + (cr.Row).ToString(CultureInfo.InvariantCulture);
+                result = result.Replace(cell, replaced);
+            }
+            return result;
+        }
+
+        // 模式一：按目标 sheet+列，对每条模板行求工程量。
+        private static List<FillPreviewItem> BuildPreview_ColumnAnchor(
+            FillTemplate template, string targetSheet, string targetColumn)
+        {
+            List<FillPreviewItem> items = new List<FillPreviewItem>();
+            foreach (FillTemplateRow row in template.Rows)
+            {
+                FillPreviewItem item = new FillPreviewItem
+                {
+                    ItemNo = row.ItemNo, QuotaCode = row.QuotaCode, Adjust = row.Adjust,
+                    SourceName = row.SourceName, OrderInItem = row.OrderInItem
+                };
+
+                if (String.IsNullOrWhiteSpace(row.SourceExpr))
+                {
+                    item.Status = "模板未记录取数位置"; item.Selected = false; items.Add(item); continue;
+                }
+
+                string expr = RetargetExprColumn(row.SourceExpr, targetColumn);
+                string display; decimal qty; string err;
+                if (!TryEvaluateWorkbookExpression(template.WorkbookPath, targetSheet, expr, out display, out qty, out err))
+                {
+                    item.Status = "取数失败：" + err; item.Selected = false; items.Add(item); continue;
+                }
+
+                item.QuantityText = display;
+                item.TargetName = ReadRowNameAt(template.WorkbookPath, targetSheet, expr);
+                if (qty == 0m) { item.Status = "数量为0"; }
+                items.Add(item);
+            }
+            return items;
+        }
+
+        // 读某表达式首个单元格所在行的名称（A 到该格列前的非数字文本拼接），仅供人工核对。
+        private static string ReadRowNameAt(string workbook, string sheet, string expr)
+        {
+            try
+            {
+                string first = ExtractFirstCellAddress(expr);
+                CellRef cr;
+                if (String.IsNullOrEmpty(first) || !TryParseCellAddress(first, out cr)) return "";
+                List<string> parts = new List<string>();
+                for (int col = 1; col < cr.Column; col++)
+                {
+                    string addr = ColumnNumberToName(col) + cr.Row.ToString(CultureInfo.InvariantCulture);
+                    string val; string e;
+                    if (TryReadXlsxCellValue(workbook, sheet, addr, out val, out e) && !String.IsNullOrWhiteSpace(val))
+                    {
+                        decimal d; string pe;
+                        if (!TryEvaluateDecimal(val, out d, out pe)) parts.Add(val.Trim());
+                    }
+                }
+                return String.Join(" ", parts.Take(6).ToArray()).Trim();
+            }
+            catch { return ""; }
+        }
     }
 }
