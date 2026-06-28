@@ -15,8 +15,9 @@ namespace RecoNet
             private List<FillPreviewItem> preview = new List<FillPreviewItem>();
 
             private readonly ComboBox cmbTemplate = new ComboBox();
+            private readonly Button btnDeleteTemplate = new Button();
             private readonly TextBox txtUnit = new TextBox();
-            private readonly TextBox txtSourceSheet = new TextBox();
+            private readonly ComboBox cmbSourceSheet = new ComboBox();
             private readonly TextBox txtName = new TextBox();
             private readonly Button btnBuild = new Button();
             private readonly ComboBox cmbMode = new ComboBox();
@@ -35,25 +36,31 @@ namespace RecoNet
                 ClientSize = new Size(900, 580);
                 BuildLayout();
                 ReloadTemplateList();
+                ReloadSourceSheets();
+                string cur = GetCurrentUnitNo(mainForm);
+                if (!String.IsNullOrEmpty(cur)) txtUnit.Text = cur;
             }
 
             private void BuildLayout()
             {
                 // —— 生成模板 ——
-                AddLabel("源单元号", 12, 15, 60);
-                txtUnit.SetBounds(80, 12, 90, 23); txtUnit.Text = "_ZGS_01";
-                AddLabel("源sheet", 180, 15, 80);
-                txtSourceSheet.SetBounds(265, 12, 70, 23); txtSourceSheet.Text = "方案一";
-                AddLabel("模板名", 345, 15, 50);
-                txtName.SetBounds(400, 12, 130, 23); txtName.Text = "轨道-模板";
-                btnBuild.SetBounds(540, 11, 130, 25); btnBuild.Text = "从该单元生成模板";
+                AddLabel("源单元号", 12, 15, 56);
+                txtUnit.SetBounds(72, 12, 90, 23); txtUnit.Text = "_ZGS_01";
+                AddLabel("源sheet", 175, 15, 48);
+                cmbSourceSheet.SetBounds(225, 12, 150, 23);
+                cmbSourceSheet.DropDownStyle = ComboBoxStyle.DropDown; // 可选可填
+                AddLabel("模板名", 388, 15, 48);
+                txtName.SetBounds(438, 12, 120, 23); txtName.Text = "轨道-模板";
+                btnBuild.SetBounds(568, 11, 130, 25); btnBuild.Text = "从该单元生成模板";
                 btnBuild.Click += delegate { OnBuild(); };
 
                 // —— 套用配置 ——
-                AddLabel("模板", 12, 50, 40);
-                cmbTemplate.SetBounds(55, 47, 200, 23); cmbTemplate.DropDownStyle = ComboBoxStyle.DropDownList;
-                AddLabel("取数模式", 270, 50, 60);
-                cmbMode.SetBounds(335, 47, 150, 23); cmbMode.DropDownStyle = ComboBoxStyle.DropDownList;
+                AddLabel("模板", 12, 50, 36);
+                cmbTemplate.SetBounds(50, 47, 185, 23); cmbTemplate.DropDownStyle = ComboBoxStyle.DropDownList;
+                btnDeleteTemplate.SetBounds(240, 46, 70, 25); btnDeleteTemplate.Text = "删除模板";
+                btnDeleteTemplate.Click += delegate { OnDeleteTemplate(); };
+                AddLabel("取数模式", 320, 50, 60);
+                cmbMode.SetBounds(385, 47, 150, 23); cmbMode.DropDownStyle = ComboBoxStyle.DropDownList;
                 cmbMode.Items.AddRange(new object[] { "一·列锚点", "二·固定绑定列" });
                 cmbMode.SelectedIndex = 0;
                 AddLabel("目标sheet", 12, 82, 60);
@@ -88,8 +95,8 @@ namespace RecoNet
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "数量", Name = "qty", ReadOnly = true, FillWeight = 10 });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "状态", Name = "st", ReadOnly = true, FillWeight = 14 });
 
-                Controls.Add(txtUnit); Controls.Add(txtSourceSheet); Controls.Add(txtName); Controls.Add(btnBuild);
-                Controls.Add(cmbTemplate); Controls.Add(cmbMode); Controls.Add(txtSheet); Controls.Add(txtColumn);
+                Controls.Add(txtUnit); Controls.Add(cmbSourceSheet); Controls.Add(txtName); Controls.Add(btnBuild);
+                Controls.Add(cmbTemplate); Controls.Add(btnDeleteTemplate); Controls.Add(cmbMode); Controls.Add(txtSheet); Controls.Add(txtColumn);
                 Controls.Add(txtTargetUnit);
                 Controls.Add(btnPreview); Controls.Add(btnApply); Controls.Add(reminder); Controls.Add(grid);
             }
@@ -107,6 +114,37 @@ namespace RecoNet
                 if (cmbTemplate.Items.Count > 0) cmbTemplate.SelectedIndex = 0;
             }
 
+            // 源sheet 下拉：列出绑定库里记录过的 Excel 工作表名。
+            private void ReloadSourceSheets()
+            {
+                try
+                {
+                    string keep = cmbSourceSheet.Text;
+                    cmbSourceSheet.Items.Clear();
+                    using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
+                    {
+                        foreach (string s in ListBoundSheetNames(conn)) cmbSourceSheet.Items.Add(s);
+                    }
+                    if (!String.IsNullOrEmpty(keep)) cmbSourceSheet.Text = keep;
+                    else if (cmbSourceSheet.Items.Count > 0) cmbSourceSheet.SelectedIndex = 0;
+                }
+                catch { /* 取不到绑定时留空，用户可手填 */ }
+            }
+
+            private void OnDeleteTemplate()
+            {
+                try
+                {
+                    if (cmbTemplate.SelectedItem == null) { MessageBox.Show(this, "请先选择要删除的模板。", "模板铺量"); return; }
+                    string name = Convert.ToString(cmbTemplate.SelectedItem);
+                    if (MessageBox.Show(this, "确认删除模板「" + name + "」？此操作不可撤销。",
+                        "模板铺量", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+                    DeleteFillTemplate(name);
+                    ReloadTemplateList();
+                }
+                catch (Exception ex) { MessageBox.Show(this, "删除失败：" + ex.Message, "模板铺量"); }
+            }
+
             private void OnBuild()
             {
                 try
@@ -117,14 +155,14 @@ namespace RecoNet
                     using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
                     {
                         FillTemplate t = BuildFillTemplateFromBindings(mainForm, conn, txtName.Text.Trim(),
-                            txtUnit.Text.Trim(), txtSourceSheet.Text.Trim());
+                            txtUnit.Text.Trim(), cmbSourceSheet.Text.Trim());
                         count = t.Rows.Count;
                         SaveFillTemplate(t);
                     }
                     ReloadTemplateList();
                     MessageBox.Show(this, count > 0
                         ? ("模板已生成并保存：" + count + " 条定额。")
-                        : ("模板已生成，但收到 0 条定额。\n请确认该单元的定额已用“绑定Excel工程量”绑到 sheet「" + txtSourceSheet.Text.Trim() + "」。"),
+                        : ("模板已生成，但收到 0 条定额。\n请确认该单元的定额已用“绑定Excel工程量”绑到 sheet「" + cmbSourceSheet.Text.Trim() + "」。"),
                         "模板铺量");
                 }
                 catch (Exception ex) { MessageBox.Show(this, "生成失败：" + ex.Message, "模板铺量"); }

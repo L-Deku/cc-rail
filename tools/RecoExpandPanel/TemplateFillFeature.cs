@@ -87,6 +87,42 @@ namespace RecoNet
             return serializer.Deserialize<FillTemplate>(File.ReadAllText(path, Encoding.UTF8));
         }
 
+        private static void DeleteFillTemplate(string name)
+        {
+            if (String.IsNullOrWhiteSpace(name)) return;
+            string path = Path.Combine(TemplateFillDir(), name + ".json");
+            if (File.Exists(path)) File.Delete(path);
+        }
+
+        // 绑定库里出现过的 Excel 工作表名（去重），供"源sheet"下拉。
+        private static List<string> ListBoundSheetNames(SqlConnection conn)
+        {
+            ExcelLinkStore store = LoadStore(conn);
+            return store.Links
+                .Where(l => l != null && !String.IsNullOrWhiteSpace(l.WorksheetName))
+                .Select(l => l.WorksheetName.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        // 从章节树顶层节点文字解析当前单元号（如 "总概算---[_ZGS_02(南通西)]" -> "_ZGS_02"）。
+        private static string GetCurrentUnitNo(Form mainForm)
+        {
+            try
+            {
+                TreeView tree = GetField<TreeView>(mainForm, "Tv_tree");
+                if (tree == null || tree.Nodes.Count == 0) return "";
+                string text = tree.Nodes[0].Text ?? "";
+                int i = text.IndexOf("_ZGS_", StringComparison.OrdinalIgnoreCase);
+                if (i < 0) return "";
+                int j = i + 5;
+                while (j < text.Length && (Char.IsLetterOrDigit(text[j]) || text[j] == '_')) j++;
+                return text.Substring(i, j - i);
+            }
+            catch { return ""; }
+        }
+
         // 生成模板（跟着绑定走）：收集【源单元 unitNo】里、绑定到【源 sheet sourceSheet】的定额，
         // 自动跨各条目。按 sheet 过滤可排除绑定库里其它专业(其它 sheet，如站场)的历史绑定。
         private static FillTemplate BuildFillTemplateFromBindings(
