@@ -146,8 +146,19 @@ namespace RecoNet
                     openPanel.Enabled = true;
                     openPanel.Click += delegate { ShowExcelLinkPanel(mainForm); };
                     menu.Items.Insert(Math.Min(baseIndex, menu.Items.Count), openPanel);
+                    baseIndex++;
                 }
                 ApplyMenuIcon(openPanel, "excel_panel.png");
+                ToolStripMenuItem openTemplateFill = FindMenuItem(menu, "打开模板铺量面板");
+                if (openTemplateFill == null)
+                {
+                    openTemplateFill = new ToolStripMenuItem("打开模板铺量面板");
+                    openTemplateFill.Visible = true;
+                    openTemplateFill.Available = true;
+                    openTemplateFill.Enabled = true;
+                    openTemplateFill.Click += delegate { ShowTemplateFillPanel(mainForm); };
+                    menu.Items.Insert(Math.Min(baseIndex, menu.Items.Count), openTemplateFill);
+                }
         }
 
         private static void RemoveMenuItem(ToolStrip menu, string text)
