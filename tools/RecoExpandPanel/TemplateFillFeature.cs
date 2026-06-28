@@ -92,12 +92,14 @@ namespace RecoNet
         {
             FillTemplate template = new FillTemplate { Name = templateName, SourceUnitNo = unitNo };
 
-            // 1) 选出本专业的绑定：同单元 + 同 sheet。
+            // 1) 选出本专业的绑定：只按【源 sheet】过滤（按专业隔离）。
+            //    注意：绑定库里的 TotalNo 存的是 总概算序号(数字)，与用户输入的 _ZGS_编号 不一致，
+            //    所以这里不能按单元过滤。单元范围由下面 (总概算编号=@unit) 的定额查询 + byId 自动收口：
+            //    只有本单元的定额会进 byId，别的单元绑定到的定额序号查不到、被跳过。
             ExcelLinkStore store = LoadStore(conn);
             string sheet = (sourceSheet ?? "").Trim();
             List<ExcelQuotaLink> picked = store.Links
                 .Where(l => l != null
-                    && (String.IsNullOrEmpty(unitNo) || String.Equals((l.TotalNo ?? "").Trim(), unitNo.Trim(), StringComparison.OrdinalIgnoreCase))
                     && String.Equals((l.WorksheetName ?? "").Trim(), sheet, StringComparison.OrdinalIgnoreCase))
                 .ToList();
             if (picked.Count == 0) return template;

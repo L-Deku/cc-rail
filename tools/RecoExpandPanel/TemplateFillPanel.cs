@@ -107,14 +107,19 @@ namespace RecoNet
                 {
                     // 用克隆的独立连接（与 ApplyFill/智能助手一致），不要直接用主程序共享连接，
                     // 否则可能拿到未初始化连接串、或被 using 误释放主程序连接。
+                    int count;
                     using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
                     {
                         FillTemplate t = BuildFillTemplateFromBindings(mainForm, conn, txtName.Text.Trim(),
                             txtUnit.Text.Trim(), txtSourceSheet.Text.Trim());
+                        count = t.Rows.Count;
                         SaveFillTemplate(t);
                     }
                     ReloadTemplateList();
-                    MessageBox.Show(this, "模板已生成并保存。", "模板铺量");
+                    MessageBox.Show(this, count > 0
+                        ? ("模板已生成并保存：" + count + " 条定额。")
+                        : ("模板已生成，但收到 0 条定额。\n请确认该单元的定额已用“绑定Excel工程量”绑到 sheet「" + txtSourceSheet.Text.Trim() + "」。"),
+                        "模板铺量");
                 }
                 catch (Exception ex) { MessageBox.Show(this, "生成失败：" + ex.Message, "模板铺量"); }
             }
@@ -130,6 +135,8 @@ namespace RecoNet
                         ? BuildPreview_ColumnAnchor(t, txtSheet.Text.Trim(), txtColumn.Text.Trim())
                         : BuildPreview_FixedColumn(t);
                     FillGrid();
+                    if (preview.Count == 0)
+                        MessageBox.Show(this, "预览为空：该模板里没有定额。请回到上一步重新“从该单元生成模板”，并确认收到的定额条数大于 0。", "模板铺量");
                 }
                 catch (Exception ex) { MessageBox.Show(this, "预览失败：" + ex.Message, "模板铺量"); }
             }
