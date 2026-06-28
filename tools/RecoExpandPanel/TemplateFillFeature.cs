@@ -253,5 +253,107 @@ namespace RecoNet
             }
             return items;
         }
+
+        // 套用：把选中的预览项按条目分组，追加到【软件当前单元】，并套定额调整，登记撤销。
+        // 目标单元 = 软件当前单元（用户须先在软件里切到目标单元）。
+        private static string ApplyFill(Form mainForm, List<FillPreviewItem> items)
+        {
+            List<FillPreviewItem> selected = items
+                .Where(i => i.Selected && String.IsNullOrEmpty(i.Status))
+                .OrderBy(i => i.ItemNo, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(i => i.OrderInItem)
+                .ToList();
+            if (selected.Count == 0) return "没有可写入的行。";
+
+            using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
+            {
+                AgentUndoRecord undo = new AgentUndoRecord { Summary = "模板铺量（当前单元）", Time = DateTime.Now };
+                StringBuilder msg = new StringBuilder();
+                int totalInserted = 0, totalAdjusted = 0;
+
+                foreach (IGrouping<string, FillPreviewItem> g in selected.GroupBy(i => i.ItemNo))
+                {
+                    if (!ItemNoExists(conn, g.Key))
+                    {
+                        if (msg.Length > 0) msg.AppendLine();
+                        msg.Append("条目 ").Append(g.Key).Append("：项目章节表中不存在该条目编号，已跳过。");
+                        continue;
+                    }
+
+                    List<FillPreviewItem> rows = g.OrderBy(i => i.OrderInItem).ToList();
+                    AgentInsertGroup group = new AgentInsertGroup { ItemNo = g.Key };
+                    foreach (FillPreviewItem r in rows)
+                    {
+                        group.Quotas.Add(new AgentQuotaInput { Code = r.QuotaCode, Quantity = r.QuantityText });
+                    }
+
+                    HashSet<long> before = LoadAgentItemQuotaIds(conn, g.Key);
+                    ExecuteAgentInsertGroup(mainForm, conn, group, undo);
+                    HashSet<long> after = LoadAgentItemQuotaIds(conn, g.Key);
+                    List<long> added = after.Where(id => !before.Contains(id)).OrderBy(id => id).ToList();
+                    totalInserted += added.Count;
+
+                    // 阶段2：套定额调整（按追加顺序与 rows 配对；定额序号自增，故 id 升序≈插入先后）
+                    int n = Math.Min(added.Count, rows.Count);
+                    for (int k = 0; k < n; k++)
+                    {
+                        string adj = rows[k].Adjust;
+                        if (String.IsNullOrWhiteSpace(adj)) continue;
+                        ApplyAdjustToQuota(conn, added[k], adj, undo);
+                        totalAdjusted++;
+                    }
+                }
+
+                if (undo.Rows.Count > 0)
+                {
+                    GetAgentUndoStack(mainForm).Add(undo);
+                    GetAgentRedoStack(mainForm).Clear();
+                }
+                RefreshCurrentQuotaGrid(mainForm);
+
+                msg.Insert(0, "已向当前单元追加定额 " + totalInserted + " 条，套用调整 " + totalAdjusted + " 条。"
+                    + (msg.Length > 0 ? Environment.NewLine : ""));
+                return msg.ToString();
+            }
+        }
+
+        // 条目编号是否存在于项目全局章节表。
+        private static bool ItemNoExists(SqlConnection conn, string itemNo)
+        {
+            using (SqlCommand cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "select count(*) from 章节表 where 条目编号=@bh";
+                cmd.Parameters.AddWithValue("@bh", itemNo);
+                return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) > 0;
+            }
+        }
+
+        // 把定额调整整串写入某定额，并登记到撤销记录（F 类，可撤销恢复原值）。
+        private static void ApplyAdjustToQuota(SqlConnection conn, long quotaSeq, string adjust, AgentUndoRecord undo)
+        {
+            string oldAdj;
+            using (SqlCommand cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "select cast(定额调整 as nvarchar(max)) from 定额输入 where 定额序号=@id";
+                cmd.Parameters.AddWithValue("@id", quotaSeq);
+                object o = cmd.ExecuteScalar();
+                oldAdj = (o == null || o == DBNull.Value) ? "" : Convert.ToString(o);
+            }
+            using (SqlCommand cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "update 定额输入 set 定额调整=@adj where 定额序号=@id";
+                cmd.Parameters.AddWithValue("@adj", (object)adjust ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@id", quotaSeq);
+                cmd.ExecuteNonQuery();
+            }
+            undo.Rows.Add(new AgentUndoRow
+            {
+                Kind = "F", QuotaSequence = quotaSeq, Table = "定额输入",
+                KeyClause = "定额序号=@k0",
+                KeyValues = new Dictionary<string, object> { { "@k0", quotaSeq } },
+                OldValues = new Dictionary<string, object> { { "定额调整", (object)oldAdj } },
+                NewValues = new Dictionary<string, object> { { "定额调整", (object)adjust } }
+            });
+        }
     }
 }
