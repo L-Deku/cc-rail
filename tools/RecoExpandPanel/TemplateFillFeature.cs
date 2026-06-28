@@ -327,10 +327,16 @@ namespace RecoNet
                     }
 
                     HashSet<long> before = LoadAgentItemQuotaIds(conn, g.Key);
-                    ExecuteAgentInsertGroup(mainForm, conn, group, undo);
+                    string grpMsg = ExecuteAgentInsertGroup(mainForm, conn, group, undo);
                     HashSet<long> after = LoadAgentItemQuotaIds(conn, g.Key);
                     List<long> added = after.Where(id => !before.Contains(id)).OrderBy(id => id).ToList();
                     totalInserted += added.Count;
+                    // 透出底层插入结果（定位失败/未检测到新行等原因），便于排查。
+                    if (added.Count == 0 && !String.IsNullOrEmpty(grpMsg))
+                    {
+                        if (msg.Length > 0) msg.AppendLine();
+                        msg.Append(grpMsg);
+                    }
 
                     // 阶段2：套定额调整（按追加顺序与 rows 配对；定额序号自增，故 id 升序≈插入先后）
                     int n = Math.Min(added.Count, rows.Count);

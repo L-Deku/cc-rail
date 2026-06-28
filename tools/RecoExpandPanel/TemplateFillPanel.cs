@@ -70,8 +70,10 @@ namespace RecoNet
                     ForeColor = Color.Firebrick, AutoSize = false
                 };
                 reminder.SetBounds(12, 108, 876, 18);
+                reminder.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
                 grid.SetBounds(12, 132, 876, 436);
+                grid.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
                 grid.ReadOnly = false; grid.AllowUserToAddRows = false;
                 grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
                 grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "选", Name = "sel", FillWeight = 6 });
