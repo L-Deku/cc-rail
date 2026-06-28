@@ -93,8 +93,7 @@ namespace RecoNet
             FillTemplate template = new FillTemplate { Name = templateName, SourceUnitNo = unitNo };
 
             // 1) 选出本专业的绑定：只按【源 sheet】过滤（按专业隔离）。
-            //    注意：绑定库里的 TotalNo 存的是 总概算序号(数字)，与用户输入的 _ZGS_编号 不一致，
-            //    所以这里不能按单元过滤。单元范围由下面 (总概算编号=@unit) 的定额查询 + byId 自动收口：
+            //    单元范围由下面 (总概算序号=@zgs) 的定额查询 + byId 自动收口：
             //    只有本单元的定额会进 byId，别的单元绑定到的定额序号查不到、被跳过。
             ExcelLinkStore store = LoadStore(conn);
             string sheet = (sourceSheet ?? "").Trim();
@@ -105,32 +104,37 @@ namespace RecoNet
             if (picked.Count == 0) return template;
             template.WorkbookPath = picked[0].ExcelPath;
 
-            // 2) 一次查出本单元全部定额的 条目/编号/调整/项目名/顺号，按 定额序号 建索引。
+            // 2) 解析 源单元 -> 总概算序号(数字)。定额输入表用 总概算序号 关联单元，不是 _ZGS_编号。
+            long zgsSeq = ResolveUnitSeq(conn, unitNo);
+            if (zgsSeq <= 0) return template; // 找不到该单元
+
+            // 一次查出本单元全部定额的 条目/编号/调整/项目名/顺号，按 定额序号 建索引。
             Dictionary<long, FillTemplateRow> byId = new Dictionary<long, FillTemplateRow>();
             Dictionary<long, int> shunById = new Dictionary<long, int>();
             using (SqlCommand cmd = conn.CreateCommand())
             {
                 cmd.CommandText =
-                    "select DE.定额序号, ZJ.条目编号, ZJ.条目名称, DE.定额编号, " +
+                    "select DE.定额序号, ZJ.条目编号, DE.定额编号, " +
                     "cast(DE.定额调整 as nvarchar(max)), DE.顺号, DE.工程或费用项目名称 " +
                     "from 定额输入 DE inner join 章节表 ZJ on DE.条目序号=ZJ.条目序号 " +
-                    "where DE.总概算编号=@unit";
-                cmd.Parameters.AddWithValue("@unit", (object)(unitNo ?? "") );
+                    "where DE.总概算序号=@zgs";
+                cmd.Parameters.AddWithValue("@zgs", zgsSeq);
                 using (SqlDataReader r = cmd.ExecuteReader())
                 {
                     while (r.Read())
                     {
                         long id = Convert.ToInt64(r.GetValue(0), CultureInfo.InvariantCulture);
+                        string itemNo = Convert.ToString(r.GetValue(1)).Trim();
                         byId[id] = new FillTemplateRow
                         {
-                            ItemNo = Convert.ToString(r.GetValue(1)).Trim(),
-                            ItemName = Convert.ToString(r.GetValue(2)).Trim(),
-                            QuotaCode = Convert.ToString(r.GetValue(3)).Trim(),
-                            Adjust = r.IsDBNull(4) ? "" : Convert.ToString(r.GetValue(4)).Trim(),
-                            SourceName = r.IsDBNull(6) ? "" : Convert.ToString(r.GetValue(6)).Trim()
+                            ItemNo = itemNo,
+                            ItemName = itemNo,
+                            QuotaCode = Convert.ToString(r.GetValue(2)).Trim(),
+                            Adjust = r.IsDBNull(3) ? "" : Convert.ToString(r.GetValue(3)).Trim(),
+                            SourceName = r.IsDBNull(5) ? "" : Convert.ToString(r.GetValue(5)).Trim()
                         };
                         int shun;
-                        shunById[id] = Int32.TryParse(Convert.ToString(r.GetValue(5)), NumberStyles.Integer, CultureInfo.InvariantCulture, out shun) ? shun : 0;
+                        shunById[id] = Int32.TryParse(Convert.ToString(r.GetValue(4)), NumberStyles.Integer, CultureInfo.InvariantCulture, out shun) ? shun : 0;
                     }
                 }
             }
@@ -159,6 +163,29 @@ namespace RecoNet
                 }
             }
             return template;
+        }
+
+        // 解析 源单元 输入 -> 总概算序号(数字)。支持：直接数字 / _ZGS_编号(总概算编号) / 编制范围名称。
+        private static long ResolveUnitSeq(SqlConnection conn, string input)
+        {
+            string v = (input ?? "").Trim();
+            if (v.Length == 0) return 0;
+            using (SqlCommand cmd = conn.CreateCommand())
+            {
+                long n;
+                if (Int64.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out n))
+                {
+                    cmd.CommandText = "select top 1 总概算序号 from 总概算信息 where 总概算序号=@v";
+                    cmd.Parameters.AddWithValue("@v", n);
+                }
+                else
+                {
+                    cmd.CommandText = "select top 1 总概算序号 from 总概算信息 where 总概算编号=@v or 编制范围=@v";
+                    cmd.Parameters.AddWithValue("@v", v);
+                }
+                object o = cmd.ExecuteScalar();
+                return (o == null || o == DBNull.Value) ? 0 : Convert.ToInt64(o, CultureInfo.InvariantCulture);
+            }
         }
 
         // 把表达式里每个单元格的列字母替换为 targetColumn（行号不变）。
