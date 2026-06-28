@@ -310,6 +310,8 @@ namespace RecoNet
 
             using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
             {
+                // 临时诊断：dump 章节树节点结构 + 首个条目解析到的 条目序号，写入 RecoExpandPanel.log。
+                DumpAgentTreeDiagnostics(mainForm, conn, selected[0].ItemNo);
                 AgentUndoRecord undo = new AgentUndoRecord { Summary = "模板铺量（当前单元）", Time = DateTime.Now };
                 StringBuilder msg = new StringBuilder();
                 int totalInserted = 0, totalAdjusted = 0;
@@ -363,6 +365,54 @@ namespace RecoNet
                 msg.Insert(0, "已向当前单元追加定额 " + totalInserted + " 条，套用调整 " + totalAdjusted + " 条。"
                     + (msg.Length > 0 ? Environment.NewLine : ""));
                 return msg.ToString();
+            }
+        }
+
+        // 临时诊断：把章节树节点的 Text/Name/Tag 结构与首个条目解析到的 条目序号写入日志，用于定位"找不到条目"。
+        private static void DumpAgentTreeDiagnostics(Form mainForm, SqlConnection conn, string itemNo)
+        {
+            try
+            {
+                string seq = "<null>";
+                using (SqlCommand cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "select top 1 条目序号 from 章节表 where 条目编号=@bh";
+                    cmd.Parameters.AddWithValue("@bh", itemNo);
+                    object o = cmd.ExecuteScalar();
+                    seq = (o == null || o == DBNull.Value) ? "<null>" : Convert.ToString(o);
+                }
+                Log("[铺量诊断] 目标条目编号=" + itemNo + "  -> 章节表解析条目序号=" + seq);
+                TreeView tree = GetField<TreeView>(mainForm, "Tv_tree");
+                Log("[铺量诊断] Tv_tree=" + (tree == null ? "NULL（字段名可能不对）" : ("OK, 顶层节点数=" + tree.Nodes.Count)));
+                if (tree != null)
+                {
+                    int[] n = { 0 };
+                    DumpAgentNodesToLog(tree.Nodes, 0, n, itemNo);
+                    Log("[铺量诊断] 共遍历节点 " + n[0] + " 个。");
+                }
+            }
+            catch (Exception ex) { Log("[铺量诊断] 失败：" + ex.Message); }
+        }
+
+        private static void DumpAgentNodesToLog(TreeNodeCollection nodes, int depth, int[] counter, string itemNo)
+        {
+            foreach (TreeNode node in nodes)
+            {
+                counter[0]++;
+                string tagInfo;
+                if (node.Tag == null) tagInfo = "Tag=null";
+                else tagInfo = "Tag类型=" + node.Tag.GetType().Name
+                    + " 条目编号=[" + TryGetValue(node.Tag, "条目编号") + "]"
+                    + " 条目序号=[" + TryGetValue(node.Tag, "条目序号") + "]";
+                // 只记录与目标条目相关或前两层，避免日志过大。
+                bool relevant = depth <= 1
+                    || (node.Text != null && node.Text.IndexOf("轨", StringComparison.Ordinal) >= 0)
+                    || (TryGetValue(node.Tag, "条目编号") == itemNo);
+                if (relevant)
+                {
+                    Log(new string(' ', depth * 2) + "节点 Text='" + node.Text + "' Name='" + node.Name + "' " + tagInfo);
+                }
+                DumpAgentNodesToLog(node.Nodes, depth + 1, counter, itemNo);
             }
         }
 
