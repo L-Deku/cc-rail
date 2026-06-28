@@ -304,6 +304,10 @@ namespace RecoNet
                 .ToList();
             if (selected.Count == 0) return "没有可写入的行。";
 
+            // 主程序的章节树是懒加载：没展开的条目其 TreeNode 还未生成，底层按条目定位会失败。
+            // 写入前先整体展开，强制所有条目节点生成，确保 ExecuteAgentInsertGroup 能定位到目标条目。
+            ExpandAgentChapterTree(mainForm);
+
             using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
             {
                 AgentUndoRecord undo = new AgentUndoRecord { Summary = "模板铺量（当前单元）", Time = DateTime.Now };
@@ -360,6 +364,21 @@ namespace RecoNet
                     + (msg.Length > 0 ? Environment.NewLine : ""));
                 return msg.ToString();
             }
+        }
+
+        // 展开主程序章节树，触发懒加载，让所有条目节点生成（供底层按条目定位）。
+        private static void ExpandAgentChapterTree(Form mainForm)
+        {
+            try
+            {
+                TreeView tree = GetField<TreeView>(mainForm, "Tv_tree");
+                if (tree == null) return;
+                tree.BeginUpdate();
+                try { tree.ExpandAll(); }
+                finally { tree.EndUpdate(); }
+                Application.DoEvents();
+            }
+            catch { }
         }
 
         // 条目编号是否存在于项目全局章节表。
