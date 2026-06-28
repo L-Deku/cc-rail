@@ -105,7 +105,9 @@ namespace RecoNet
             {
                 try
                 {
-                    using (SqlConnection conn = GetProjectConnection(mainForm))
+                    // 用克隆的独立连接（与 ApplyFill/智能助手一致），不要直接用主程序共享连接，
+                    // 否则可能拿到未初始化连接串、或被 using 误释放主程序连接。
+                    using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
                     {
                         FillTemplate t = BuildFillTemplateFromBindings(mainForm, conn, txtName.Text.Trim(),
                             txtUnit.Text.Trim(), txtSourceSheet.Text.Trim());
