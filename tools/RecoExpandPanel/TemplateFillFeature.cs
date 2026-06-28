@@ -26,6 +26,7 @@ namespace RecoNet
             public string SourceSheet;   // 绑定时所在 sheet
             public string SourceExpr;    // 绑定表达式，如 "E5" 或 "E4+E5"
             public string SourceName;    // 源行项目名（供预览核对）
+            public long SourceQuotaSeq;  // 源定额序号（写入时直接复制该行）
         }
 
         // 一份模板
@@ -50,6 +51,7 @@ namespace RecoNet
             public string QuantityText;
             public string Status;
             public int OrderInItem;
+            public long SourceQuotaSeq;  // 源定额序号（写入时直接复制该行）
         }
 
         private static string TemplateFillDir()
@@ -131,7 +133,8 @@ namespace RecoNet
                             ItemName = itemNo,
                             QuotaCode = Convert.ToString(r.GetValue(2)).Trim(),
                             Adjust = r.IsDBNull(3) ? "" : Convert.ToString(r.GetValue(3)).Trim(),
-                            SourceName = r.IsDBNull(5) ? "" : Convert.ToString(r.GetValue(5)).Trim()
+                            SourceName = r.IsDBNull(5) ? "" : Convert.ToString(r.GetValue(5)).Trim(),
+                            SourceQuotaSeq = id
                         };
                         int shun;
                         shunById[id] = Int32.TryParse(Convert.ToString(r.GetValue(4)), NumberStyles.Integer, CultureInfo.InvariantCulture, out shun) ? shun : 0;
@@ -215,7 +218,8 @@ namespace RecoNet
                 FillPreviewItem item = new FillPreviewItem
                 {
                     ItemNo = row.ItemNo, QuotaCode = row.QuotaCode, Adjust = row.Adjust,
-                    SourceName = row.SourceName, OrderInItem = row.OrderInItem
+                    SourceName = row.SourceName, OrderInItem = row.OrderInItem,
+                    SourceQuotaSeq = row.SourceQuotaSeq
                 };
 
                 if (String.IsNullOrWhiteSpace(row.SourceExpr))
@@ -271,7 +275,8 @@ namespace RecoNet
                 FillPreviewItem item = new FillPreviewItem
                 {
                     ItemNo = row.ItemNo, QuotaCode = row.QuotaCode, Adjust = row.Adjust,
-                    SourceName = row.SourceName, OrderInItem = row.OrderInItem
+                    SourceName = row.SourceName, OrderInItem = row.OrderInItem,
+                    SourceQuotaSeq = row.SourceQuotaSeq
                 };
 
                 if (String.IsNullOrWhiteSpace(row.SourceExpr))
@@ -293,66 +298,60 @@ namespace RecoNet
             return items;
         }
 
-        // 套用：把选中的预览项按条目分组，追加到【软件当前单元】，并套定额调整，登记撤销。
-        // 目标单元 = 软件当前单元（用户须先在软件里切到目标单元）。
-        private static string ApplyFill(Form mainForm, List<FillPreviewItem> items)
+        // 写入：把选中预览项对应的源定额行，直接复制到【目标单元】的对应条目（条目序号全局共享，原样保留），
+        // 改 总概算序号/顺号/工程数量、丢弃旧 定额序号(新建标识)。不走界面树。
+        private static string ApplyFill(Form mainForm, string targetUnitNo, List<FillPreviewItem> items)
         {
             List<FillPreviewItem> selected = items
-                .Where(i => i.Selected && String.IsNullOrEmpty(i.Status))
+                .Where(i => i.Selected && String.IsNullOrEmpty(i.Status) && i.SourceQuotaSeq > 0)
                 .OrderBy(i => i.ItemNo, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(i => i.OrderInItem)
                 .ToList();
             if (selected.Count == 0) return "没有可写入的行。";
 
-            // 主程序的章节树是懒加载：没展开的条目其 TreeNode 还未生成，底层按条目定位会失败。
-            // 写入前先整体展开，强制所有条目节点生成，确保 ExecuteAgentInsertGroup 能定位到目标条目。
-            ExpandAgentChapterTree(mainForm);
-
             using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
             {
-                // 临时诊断：dump 章节树节点结构 + 首个条目解析到的 条目序号，写入 RecoExpandPanel.log。
-                DumpAgentTreeDiagnostics(mainForm, conn, selected[0].ItemNo);
-                AgentUndoRecord undo = new AgentUndoRecord { Summary = "模板铺量（当前单元）", Time = DateTime.Now };
+                long targetSeq = ResolveUnitSeq(conn, targetUnitNo);
+                if (targetSeq <= 0) return "找不到目标单元：" + targetUnitNo + "（请填 _ZGS_编号 或单元名称）。";
+
+                AgentUndoRecord undo = new AgentUndoRecord { Summary = "模板铺量 -> 单元 " + targetUnitNo, Time = DateTime.Now };
                 StringBuilder msg = new StringBuilder();
-                int totalInserted = 0, totalAdjusted = 0;
+                int inserted = 0, skipped = 0;
+                // 每个 (条目序号) 的下一个顺号，写入时递增。
+                Dictionary<long, int> nextShun = new Dictionary<long, int>();
 
-                foreach (IGrouping<string, FillPreviewItem> g in selected.GroupBy(i => i.ItemNo))
+                foreach (FillPreviewItem item in selected)
                 {
-                    if (!ItemNoExists(conn, g.Key))
+                    Dictionary<string, object> row = LoadAgentFullRow(conn, item.SourceQuotaSeq);
+                    if (row == null) { skipped++; continue; }
+
+                    // 条目序号(全局)保持不变 -> 落到目标单元的同一条目。
+                    long itemSeq = Convert.ToInt64(row["条目序号"], CultureInfo.InvariantCulture);
+
+                    int shun;
+                    if (!nextShun.TryGetValue(itemSeq, out shun))
                     {
-                        if (msg.Length > 0) msg.AppendLine();
-                        msg.Append("条目 ").Append(g.Key).Append("：项目章节表中不存在该条目编号，已跳过。");
-                        continue;
+                        shun = GetMaxShun(conn, targetSeq, itemSeq) + 1;
                     }
 
-                    List<FillPreviewItem> rows = g.OrderBy(i => i.OrderInItem).ToList();
-                    AgentInsertGroup group = new AgentInsertGroup { ItemNo = g.Key };
-                    foreach (FillPreviewItem r in rows)
-                    {
-                        group.Quotas.Add(new AgentQuotaInput { Code = r.QuotaCode, Quantity = r.QuantityText });
-                    }
+                    // 数量：用预览取到的目标工程量。
+                    decimal qty; string qErr;
+                    bool okQty = TryEvaluateDecimal(item.QuantityText, out qty, out qErr);
 
-                    HashSet<long> before = LoadAgentItemQuotaIds(conn, g.Key);
-                    string grpMsg = ExecuteAgentInsertGroup(mainForm, conn, group, undo);
-                    HashSet<long> after = LoadAgentItemQuotaIds(conn, g.Key);
-                    List<long> added = after.Where(id => !before.Contains(id)).OrderBy(id => id).ToList();
-                    totalInserted += added.Count;
-                    // 透出底层插入结果（定位失败/未检测到新行等原因），便于排查。
-                    if (added.Count == 0 && !String.IsNullOrEmpty(grpMsg))
-                    {
-                        if (msg.Length > 0) msg.AppendLine();
-                        msg.Append(grpMsg);
-                    }
+                    row["总概算序号"] = targetSeq;
+                    row["顺号"] = shun;
+                    row["工程数量输入"] = (object)(item.QuantityText ?? "") ;
+                    row["工程数量"] = okQty ? (object)qty : DBNull.Value;
+                    row.Remove("定额序号"); // 让数据库分配新标识
 
-                    // 阶段2：套定额调整（按追加顺序与 rows 配对；定额序号自增，故 id 升序≈插入先后）
-                    int n = Math.Min(added.Count, rows.Count);
-                    for (int k = 0; k < n; k++)
+                    long newId = InsertQuotaRowReturnId(conn, row);
+                    if (newId > 0)
                     {
-                        string adj = rows[k].Adjust;
-                        if (String.IsNullOrWhiteSpace(adj)) continue;
-                        ApplyAdjustToQuota(conn, added[k], adj, undo);
-                        totalAdjusted++;
+                        undo.Rows.Add(new AgentUndoRow { Kind = "I", QuotaSequence = newId });
+                        inserted++;
+                        nextShun[itemSeq] = shun + 1;
                     }
+                    else { skipped++; }
                 }
 
                 if (undo.Rows.Count > 0)
@@ -362,112 +361,45 @@ namespace RecoNet
                 }
                 RefreshCurrentQuotaGrid(mainForm);
 
-                msg.Insert(0, "已向当前单元追加定额 " + totalInserted + " 条，套用调整 " + totalAdjusted + " 条。"
-                    + (msg.Length > 0 ? Environment.NewLine : ""));
+                msg.Append("已向单元 ").Append(targetUnitNo).Append(" 追加定额 ")
+                   .Append(inserted.ToString(CultureInfo.InvariantCulture)).Append(" 条");
+                if (skipped > 0) msg.Append("，跳过 ").Append(skipped.ToString(CultureInfo.InvariantCulture)).Append(" 条");
+                msg.Append("。请在软件点一次“计算”刷新单价/合价与汇总。");
                 return msg.ToString();
             }
         }
 
-        // 临时诊断：把章节树节点的 Text/Name/Tag 结构与首个条目解析到的 条目序号写入日志，用于定位"找不到条目"。
-        private static void DumpAgentTreeDiagnostics(Form mainForm, SqlConnection conn, string itemNo)
-        {
-            try
-            {
-                string seq = "<null>";
-                using (SqlCommand cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = "select top 1 条目序号 from 章节表 where 条目编号=@bh";
-                    cmd.Parameters.AddWithValue("@bh", itemNo);
-                    object o = cmd.ExecuteScalar();
-                    seq = (o == null || o == DBNull.Value) ? "<null>" : Convert.ToString(o);
-                }
-                Log("[铺量诊断] 目标条目编号=" + itemNo + "  -> 章节表解析条目序号=" + seq);
-                TreeView tree = GetField<TreeView>(mainForm, "Tv_tree");
-                Log("[铺量诊断] Tv_tree=" + (tree == null ? "NULL（字段名可能不对）" : ("OK, 顶层节点数=" + tree.Nodes.Count)));
-                if (tree != null)
-                {
-                    int[] n = { 0 };
-                    DumpAgentNodesToLog(tree.Nodes, 0, n, itemNo);
-                    Log("[铺量诊断] 共遍历节点 " + n[0] + " 个。");
-                }
-            }
-            catch (Exception ex) { Log("[铺量诊断] 失败：" + ex.Message); }
-        }
-
-        private static void DumpAgentNodesToLog(TreeNodeCollection nodes, int depth, int[] counter, string itemNo)
-        {
-            foreach (TreeNode node in nodes)
-            {
-                counter[0]++;
-                string tagInfo;
-                if (node.Tag == null) tagInfo = "Tag=null";
-                else tagInfo = "Tag类型=" + node.Tag.GetType().Name
-                    + " 条目编号=[" + TryGetValue(node.Tag, "条目编号") + "]"
-                    + " 条目序号=[" + TryGetValue(node.Tag, "条目序号") + "]";
-                // 只记录与目标条目相关或前两层，避免日志过大。
-                bool relevant = depth <= 1
-                    || (node.Text != null && node.Text.IndexOf("轨", StringComparison.Ordinal) >= 0)
-                    || (TryGetValue(node.Tag, "条目编号") == itemNo);
-                if (relevant)
-                {
-                    Log(new string(' ', depth * 2) + "节点 Text='" + node.Text + "' Name='" + node.Name + "' " + tagInfo);
-                }
-                DumpAgentNodesToLog(node.Nodes, depth + 1, counter, itemNo);
-            }
-        }
-
-        // 展开主程序章节树，触发懒加载，让所有条目节点生成（供底层按条目定位）。
-        private static void ExpandAgentChapterTree(Form mainForm)
-        {
-            try
-            {
-                TreeView tree = GetField<TreeView>(mainForm, "Tv_tree");
-                if (tree == null) return;
-                tree.BeginUpdate();
-                try { tree.ExpandAll(); }
-                finally { tree.EndUpdate(); }
-                Application.DoEvents();
-            }
-            catch { }
-        }
-
-        // 条目编号是否存在于项目全局章节表。
-        private static bool ItemNoExists(SqlConnection conn, string itemNo)
+        // 目标单元某条目下当前最大顺号(无则0)。
+        private static int GetMaxShun(SqlConnection conn, long zgsSeq, long itemSeq)
         {
             using (SqlCommand cmd = conn.CreateCommand())
             {
-                cmd.CommandText = "select count(*) from 章节表 where 条目编号=@bh";
-                cmd.Parameters.AddWithValue("@bh", itemNo);
-                return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) > 0;
-            }
-        }
-
-        // 把定额调整整串写入某定额，并登记到撤销记录（F 类，可撤销恢复原值）。
-        private static void ApplyAdjustToQuota(SqlConnection conn, long quotaSeq, string adjust, AgentUndoRecord undo)
-        {
-            string oldAdj;
-            using (SqlCommand cmd = conn.CreateCommand())
-            {
-                cmd.CommandText = "select cast(定额调整 as nvarchar(max)) from 定额输入 where 定额序号=@id";
-                cmd.Parameters.AddWithValue("@id", quotaSeq);
+                cmd.CommandText = "select isnull(max(顺号),0) from 定额输入 where 总概算序号=@z and 条目序号=@t";
+                cmd.Parameters.AddWithValue("@z", zgsSeq);
+                cmd.Parameters.AddWithValue("@t", itemSeq);
                 object o = cmd.ExecuteScalar();
-                oldAdj = (o == null || o == DBNull.Value) ? "" : Convert.ToString(o);
+                return (o == null || o == DBNull.Value) ? 0 : Convert.ToInt32(o, CultureInfo.InvariantCulture);
             }
+        }
+
+        // 插入一行 定额输入(不含 定额序号)，返回新分配的 定额序号。
+        private static long InsertQuotaRowReturnId(SqlConnection conn, Dictionary<string, object> values)
+        {
+            List<string> cols = values.Keys.ToList();
+            StringBuilder sql = new StringBuilder();
+            sql.Append("insert into 定额输入 (")
+               .Append(String.Join(", ", cols.Select(c => "[" + c + "]").ToArray()))
+               .Append(") values (")
+               .Append(String.Join(", ", cols.Select((c, i) => "@p" + i.ToString(CultureInfo.InvariantCulture)).ToArray()))
+               .Append("); select cast(scope_identity() as bigint);");
             using (SqlCommand cmd = conn.CreateCommand())
             {
-                cmd.CommandText = "update 定额输入 set 定额调整=@adj where 定额序号=@id";
-                cmd.Parameters.AddWithValue("@adj", (object)adjust ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("@id", quotaSeq);
-                cmd.ExecuteNonQuery();
+                cmd.CommandText = sql.ToString();
+                for (int i = 0; i < cols.Count; i++)
+                    cmd.Parameters.AddWithValue("@p" + i.ToString(CultureInfo.InvariantCulture), values[cols[i]] ?? DBNull.Value);
+                object o = cmd.ExecuteScalar();
+                return (o == null || o == DBNull.Value) ? 0 : Convert.ToInt64(o, CultureInfo.InvariantCulture);
             }
-            undo.Rows.Add(new AgentUndoRow
-            {
-                Kind = "F", QuotaSequence = quotaSeq, Table = "定额输入",
-                KeyClause = "定额序号=@k0",
-                KeyValues = new Dictionary<string, object> { { "@k0", quotaSeq } },
-                OldValues = new Dictionary<string, object> { { "定额调整", (object)oldAdj } },
-                NewValues = new Dictionary<string, object> { { "定额调整", (object)adjust } }
-            });
         }
     }
 }

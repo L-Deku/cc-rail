@@ -22,6 +22,7 @@ namespace RecoNet
             private readonly ComboBox cmbMode = new ComboBox();
             private readonly TextBox txtSheet = new TextBox();
             private readonly TextBox txtColumn = new TextBox();
+            private readonly TextBox txtTargetUnit = new TextBox();
             private readonly Button btnPreview = new Button();
             private readonly Button btnApply = new Button();
             private readonly DataGridView grid = new DataGridView();
@@ -59,14 +60,16 @@ namespace RecoNet
                 txtSheet.SetBounds(75, 79, 120, 23); txtSheet.Text = "方案二";
                 AddLabel("目标列", 205, 82, 50);
                 txtColumn.SetBounds(255, 79, 50, 23); txtColumn.Text = "E";
-                btnPreview.SetBounds(320, 78, 80, 25); btnPreview.Text = "预览";
+                AddLabel("目标单元", 315, 82, 60);
+                txtTargetUnit.SetBounds(380, 79, 90, 23); txtTargetUnit.Text = "_ZGS_02";
+                btnPreview.SetBounds(480, 78, 70, 25); btnPreview.Text = "预览";
                 btnPreview.Click += delegate { OnPreview(); };
-                btnApply.SetBounds(410, 78, 150, 25); btnApply.Text = "写入当前单元";
+                btnApply.SetBounds(560, 78, 150, 25); btnApply.Text = "写入目标单元";
                 btnApply.Click += delegate { OnApply(); };
 
                 Label reminder = new Label
                 {
-                    Text = "注意：写入的是软件【当前单元】。请先在软件顶部总概算下拉切到目标单元，再点“写入当前单元”。",
+                    Text = "写入＝复制定额到“目标单元”的对应条目（条目序号全局共享）。写入后请在软件点一次“计算”刷新单价与汇总。",
                     ForeColor = Color.Firebrick, AutoSize = false
                 };
                 reminder.SetBounds(12, 108, 876, 18);
@@ -87,6 +90,7 @@ namespace RecoNet
 
                 Controls.Add(txtUnit); Controls.Add(txtSourceSheet); Controls.Add(txtName); Controls.Add(btnBuild);
                 Controls.Add(cmbTemplate); Controls.Add(cmbMode); Controls.Add(txtSheet); Controls.Add(txtColumn);
+                Controls.Add(txtTargetUnit);
                 Controls.Add(btnPreview); Controls.Add(btnApply); Controls.Add(reminder); Controls.Add(grid);
             }
 
@@ -162,10 +166,11 @@ namespace RecoNet
                     for (int i = 0; i < preview.Count && i < grid.Rows.Count; i++)
                         preview[i].Selected = Convert.ToBoolean(grid.Rows[i].Cells["sel"].Value ?? false);
 
-                    if (MessageBox.Show(this, "确认把勾选定额追加到软件【当前单元】？\n请确认软件已切到目标单元。",
+                    string targetUnit = txtTargetUnit.Text.Trim();
+                    if (MessageBox.Show(this, "确认把勾选定额复制到目标单元【" + targetUnit + "】的对应条目？",
                         "模板铺量", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
 
-                    string result = ApplyFill(mainForm, preview);
+                    string result = ApplyFill(mainForm, targetUnit, preview);
                     MessageBox.Show(this, result, "模板铺量");
                 }
                 catch (Exception ex) { MessageBox.Show(this, "写入失败：" + ex.Message, "模板铺量"); }
