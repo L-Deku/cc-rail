@@ -16,7 +16,7 @@ namespace RecoNet
 
             private readonly ComboBox cmbTemplate = new ComboBox();
             private readonly TextBox txtUnit = new TextBox();
-            private readonly TextBox txtItemPrefix = new TextBox();
+            private readonly TextBox txtSourceSheet = new TextBox();
             private readonly TextBox txtName = new TextBox();
             private readonly Button btnBuild = new Button();
             private readonly ComboBox cmbMode = new ComboBox();
@@ -41,8 +41,8 @@ namespace RecoNet
                 // —— 生成模板 ——
                 AddLabel("源单元号", 12, 15, 60);
                 txtUnit.SetBounds(80, 12, 90, 23); txtUnit.Text = "_ZGS_01";
-                AddLabel("专业条目前缀", 180, 15, 80);
-                txtItemPrefix.SetBounds(265, 12, 70, 23); txtItemPrefix.Text = "04";
+                AddLabel("源sheet", 180, 15, 80);
+                txtSourceSheet.SetBounds(265, 12, 70, 23); txtSourceSheet.Text = "方案一";
                 AddLabel("模板名", 345, 15, 50);
                 txtName.SetBounds(400, 12, 130, 23); txtName.Text = "轨道-模板";
                 btnBuild.SetBounds(540, 11, 130, 25); btnBuild.Text = "从该单元生成模板";
@@ -83,7 +83,7 @@ namespace RecoNet
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "数量", Name = "qty", ReadOnly = true, FillWeight = 10 });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "状态", Name = "st", ReadOnly = true, FillWeight = 14 });
 
-                Controls.Add(txtUnit); Controls.Add(txtItemPrefix); Controls.Add(txtName); Controls.Add(btnBuild);
+                Controls.Add(txtUnit); Controls.Add(txtSourceSheet); Controls.Add(txtName); Controls.Add(btnBuild);
                 Controls.Add(cmbTemplate); Controls.Add(cmbMode); Controls.Add(txtSheet); Controls.Add(txtColumn);
                 Controls.Add(btnPreview); Controls.Add(btnApply); Controls.Add(reminder); Controls.Add(grid);
             }
@@ -107,8 +107,8 @@ namespace RecoNet
                 {
                     using (SqlConnection conn = GetProjectConnection(mainForm))
                     {
-                        FillTemplate t = BuildFillTemplateFromUnit(mainForm, conn, txtName.Text.Trim(),
-                            txtItemPrefix.Text.Trim(), txtUnit.Text.Trim(), txtItemPrefix.Text.Trim());
+                        FillTemplate t = BuildFillTemplateFromBindings(mainForm, conn, txtName.Text.Trim(),
+                            txtUnit.Text.Trim(), txtSourceSheet.Text.Trim());
                         SaveFillTemplate(t);
                     }
                     ReloadTemplateList();
