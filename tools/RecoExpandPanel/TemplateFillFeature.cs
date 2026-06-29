@@ -143,7 +143,8 @@ namespace RecoNet
             template.WorkbookPath = picked[0].ExcelPath;
 
             // 2) 解析 源单元 -> 总概算序号(数字)。定额输入表用 总概算序号 关联单元，不是 _ZGS_编号。
-            long zgsSeq = ResolveUnitSeq(conn, unitNo);
+            string srcLabel;
+            long zgsSeq = ResolveAgentUnitIdSimple(conn, unitNo, out srcLabel);
             if (zgsSeq <= 0) return template; // 找不到该单元
 
             // 一次查出本单元全部定额的 条目/编号/调整/项目名/顺号，按 定额序号 建索引。
@@ -204,29 +205,6 @@ namespace RecoNet
             return template;
         }
 
-        // 解析 源单元 输入 -> 总概算序号(数字)。支持：直接数字 / _ZGS_编号(总概算编号) / 编制范围名称。
-        private static long ResolveUnitSeq(SqlConnection conn, string input)
-        {
-            string v = (input ?? "").Trim();
-            if (v.Length == 0) return 0;
-            using (SqlCommand cmd = conn.CreateCommand())
-            {
-                long n;
-                if (Int64.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out n))
-                {
-                    cmd.CommandText = "select top 1 总概算序号 from 总概算信息 where 总概算序号=@v";
-                    cmd.Parameters.AddWithValue("@v", n);
-                }
-                else
-                {
-                    cmd.CommandText = "select top 1 总概算序号 from 总概算信息 where 总概算编号=@v or 编制范围=@v";
-                    cmd.Parameters.AddWithValue("@v", v);
-                }
-                object o = cmd.ExecuteScalar();
-                return (o == null || o == DBNull.Value) ? 0 : Convert.ToInt64(o, CultureInfo.InvariantCulture);
-            }
-        }
-
         // 把表达式里每个单元格的列字母替换为 targetColumn（行号不变）。
         // 例 "E5" + targetCol "F" -> "F5"；"E4+E5" -> "F4+F5"。
         private static string RetargetExprColumn(string expr, string targetColumn)
@@ -244,9 +222,24 @@ namespace RecoNet
             return result;
         }
 
-        // 模式一：按目标 sheet+列，对每条模板行求工程量。
+        // 模式一：列锚点。行号不变、列换成目标列，从目标 sheet 取数。
         private static List<FillPreviewItem> BuildPreview_ColumnAnchor(
             FillTemplate template, string targetSheet, string targetColumn)
+        {
+            return BuildPreview(template, row =>
+                new KeyValuePair<string, string>(targetSheet, RetargetExprColumn(row.SourceExpr, targetColumn)));
+        }
+
+        // 模式二：固定绑定列。直接读模板记录的原 sheet/单元格（用户已把目标单元数量粘进该列）。
+        private static List<FillPreviewItem> BuildPreview_FixedColumn(FillTemplate template)
+        {
+            return BuildPreview(template, row =>
+                new KeyValuePair<string, string>(row.SourceSheet, row.SourceExpr));
+        }
+
+        // 两种取数模式共用：resolver 给出每行的 (目标sheet, 取数表达式)，其余流程一致。
+        private static List<FillPreviewItem> BuildPreview(
+            FillTemplate template, Func<FillTemplateRow, KeyValuePair<string, string>> resolver)
         {
             List<FillPreviewItem> items = new List<FillPreviewItem>();
             foreach (FillTemplateRow row in template.Rows)
@@ -263,15 +256,16 @@ namespace RecoNet
                     item.Status = "模板未记录取数位置"; item.Selected = false; items.Add(item); continue;
                 }
 
-                string expr = RetargetExprColumn(row.SourceExpr, targetColumn);
+                KeyValuePair<string, string> tgt = resolver(row);
+                string sheet = tgt.Key, expr = tgt.Value;
                 string display; decimal qty; string err;
-                if (!TryEvaluateWorkbookExpression(template.WorkbookPath, targetSheet, expr, out display, out qty, out err))
+                if (!TryEvaluateWorkbookExpression(template.WorkbookPath, sheet, expr, out display, out qty, out err))
                 {
                     item.Status = "取数失败：" + err; item.Selected = false; items.Add(item); continue;
                 }
 
                 item.QuantityText = display;
-                item.TargetName = ReadRowNameAt(template.WorkbookPath, targetSheet, expr);
+                item.TargetName = ReadRowNameAt(template.WorkbookPath, sheet, expr);
                 if (qty == 0m) { item.Status = "数量为0"; }
                 items.Add(item);
             }
@@ -302,38 +296,6 @@ namespace RecoNet
             catch { return ""; }
         }
 
-        // 模式二：固定绑定列。直接读模板记录的原单元格（用户已把目标单元数量粘进该列）。
-        private static List<FillPreviewItem> BuildPreview_FixedColumn(FillTemplate template)
-        {
-            List<FillPreviewItem> items = new List<FillPreviewItem>();
-            foreach (FillTemplateRow row in template.Rows)
-            {
-                FillPreviewItem item = new FillPreviewItem
-                {
-                    ItemNo = row.ItemNo, QuotaCode = row.QuotaCode, Adjust = row.Adjust,
-                    SourceName = row.SourceName, OrderInItem = row.OrderInItem,
-                    SourceQuotaSeq = row.SourceQuotaSeq
-                };
-
-                if (String.IsNullOrWhiteSpace(row.SourceExpr))
-                {
-                    item.Status = "模板未记录取数位置"; item.Selected = false; items.Add(item); continue;
-                }
-
-                string display; decimal qty; string err;
-                if (!TryEvaluateWorkbookExpression(template.WorkbookPath, row.SourceSheet, row.SourceExpr, out display, out qty, out err))
-                {
-                    item.Status = "取数失败：" + err; item.Selected = false; items.Add(item); continue;
-                }
-
-                item.QuantityText = display;
-                item.TargetName = ReadRowNameAt(template.WorkbookPath, row.SourceSheet, row.SourceExpr);
-                if (qty == 0m) { item.Status = "数量为0"; }
-                items.Add(item);
-            }
-            return items;
-        }
-
         // 写入：把选中预览项对应的源定额行，直接复制到【目标单元】的对应条目（条目序号全局共享，原样保留），
         // 改 总概算序号/顺号/工程数量、丢弃旧 定额序号(新建标识)。不走界面树。
         private static string ApplyFill(Form mainForm, string targetUnitNo, List<FillPreviewItem> items)
@@ -347,7 +309,8 @@ namespace RecoNet
 
             using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
             {
-                long targetSeq = ResolveUnitSeq(conn, targetUnitNo);
+                string targetLabel;
+                long targetSeq = ResolveAgentUnitIdSimple(conn, targetUnitNo, out targetLabel);
                 if (targetSeq <= 0) return "找不到目标单元：" + targetUnitNo + "（请填 _ZGS_编号 或单元名称）。";
 
                 AgentUndoRecord undo = new AgentUndoRecord { Summary = "模板铺量 -> 单元 " + targetUnitNo, Time = DateTime.Now };

@@ -5148,9 +5148,15 @@ namespace RecoNet
 
                 ExcelLinkStore store = LoadStore(conn);
 
+                // 每条绑定的数量表名只算一次。
+                List<KeyValuePair<ExcelQuotaLink, string>> rows = store.Links
+                    .OrderBy(l => l.QuotaSequence)
+                    .Select(l => new KeyValuePair<ExcelQuotaLink, string>(l, GetLinkTableName(l)))
+                    .ToList();
+
                 // 填充"数量表"下拉（保留当前选择）。
                 string keep = cmbTable.SelectedItem == null ? AllTablesOption : Convert.ToString(cmbTable.SelectedItem);
-                List<string> names = store.Links.Select(GetLinkTableName)
+                List<string> names = rows.Select(r => r.Value)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
                     .ToList();
@@ -5166,16 +5172,17 @@ namespace RecoNet
                 bool all = String.IsNullOrEmpty(selected) || selected == AllTablesOption;
 
                 int shown = 0;
-                foreach (ExcelQuotaLink link in store.Links.OrderBy(l => l.QuotaSequence))
+                foreach (KeyValuePair<ExcelQuotaLink, string> r in rows)
                 {
-                    if (!all && !String.Equals(GetLinkTableName(link), selected, StringComparison.OrdinalIgnoreCase))
+                    if (!all && !String.Equals(r.Value, selected, StringComparison.OrdinalIgnoreCase))
                     {
                         continue;
                     }
 
+                    ExcelQuotaLink link = r.Key;
                     string excel = Path.GetFileName(link.ExcelPath) + "!" + link.WorksheetName + "!" + link.CellAddress;
                     grid.Rows.Add(
-                        GetLinkTableName(link),
+                        r.Value,
                         link.QuotaSequence.ToString(CultureInfo.InvariantCulture),
                         link.QuotaCode,
                         link.QuotaName,
@@ -5220,9 +5227,11 @@ namespace RecoNet
                 }
                 SaveStore(conn, store);
                 if (ExcelLinkRuntimes.ContainsKey(mainForm)) ExcelLinkRuntimes[mainForm].Reload();
-                loading = true; cmbTable.SelectedItem = null; loading = false; // 让 Reload 选回新名字
-                cmbTable.Items.Add(input);
+                // 让 Reload 选回新名字：把下拉当前项设为新名（Reload 以它作为 keep）。
+                loading = true;
+                if (!cmbTable.Items.Contains(input)) cmbTable.Items.Add(input);
                 cmbTable.SelectedItem = input;
+                loading = false;
                 Reload();
                 status.Text = "已把 " + n.ToString(CultureInfo.InvariantCulture) + " 条绑定改到数量表「" + input + "」。";
             }
