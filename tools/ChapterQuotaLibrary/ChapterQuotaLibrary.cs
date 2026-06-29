@@ -75,6 +75,15 @@ namespace ChapterQuotaLibrary
             SheetName = "TB 10801—2024"
         };
 
+        private static readonly MethodSpec Spec101Estimate = new MethodSpec
+        {
+            Key = "101-estimate",
+            LibraryDb = "RecoData2020",
+            MethodNo = "101号文估算",
+            SeedDb = "",
+            SheetName = "101号文估算"
+        };
+
         private static string toolDir;
         private static string reportDir;
         private static string dataDir;
@@ -167,7 +176,7 @@ namespace ChapterQuotaLibrary
         private static void Usage()
         {
             Console.WriteLine("Usage:");
-            Console.WriteLine("  ChapterQuotaLibrary.exe BuildLibrary [--method 2020|2024|all] [--max-pool 50] [--stale-stop 30] [--limit N]");
+            Console.WriteLine("  ChapterQuotaLibrary.exe BuildLibrary [--method 2020|2024|101-estimate|all] [--max-pool 50] [--stale-stop 30] [--limit N]");
             Console.WriteLine("  ChapterQuotaLibrary.exe ExportTemplate [--out <xlsx>]");
             Console.WriteLine("  ChapterQuotaLibrary.exe ImportTrimmed --in <xlsx>");
             Console.WriteLine("  ChapterQuotaLibrary.exe TagMappingBoxes [--file <mapping-boxes.jsonl>]");
@@ -183,6 +192,11 @@ namespace ChapterQuotaLibrary
             if (String.Equals(method, "2024", StringComparison.OrdinalIgnoreCase))
             {
                 return new List<MethodSpec> { Spec2024 };
+            }
+            if (String.Equals(method, "101-estimate", StringComparison.OrdinalIgnoreCase) ||
+                String.Equals(method, "101", StringComparison.OrdinalIgnoreCase))
+            {
+                return new List<MethodSpec> { Spec101Estimate };
             }
             return new List<MethodSpec> { Spec2020, Spec2024 };
         }
@@ -493,7 +507,7 @@ namespace ChapterQuotaLibrary
                 }
             }
 
-            if (!projects.Any(p => p.IsSeed))
+            if (!String.IsNullOrWhiteSpace(spec.SeedDb) && !projects.Any(p => p.IsSeed))
             {
                 Console.WriteLine("[" + spec.Key + "] WARN: seed project " + spec.SeedDb + " not found in registry; scanning it anyway.");
                 ProjectInfo seed = new ProjectInfo();
@@ -835,6 +849,7 @@ namespace ChapterQuotaLibrary
         {
             string libraryPath = Path.Combine(dataDir, "chapter-quota-library.jsonl");
             List<string> kept = new List<string>();
+            List<string> currentUserRows = new List<string>();
             if (File.Exists(libraryPath))
             {
                 foreach (string line in File.ReadAllLines(libraryPath, Encoding.UTF8))
@@ -845,12 +860,19 @@ namespace ChapterQuotaLibrary
                     }
                     Dictionary<string, string> values = FlatJson.Parse(line);
                     string method = FlatJson.Get(values, "method");
+                    string methodNo = FlatJson.Get(values, "method_no");
                     string source = FlatJson.Get(values, "source");
-                    // 重建当前 method 的 seed/scan 行；其他 method 的行与所有 user 行保留
-                    if (!String.Equals(method, spec.Key, StringComparison.OrdinalIgnoreCase)
-                        || String.Equals(source, "user", StringComparison.OrdinalIgnoreCase))
+                    bool currentScope = String.Equals(method, spec.Key, StringComparison.OrdinalIgnoreCase)
+                        || String.Equals(methodNo, spec.MethodNo, StringComparison.OrdinalIgnoreCase);
+                    // 重建当前编制办法的 seed/scan 行；用户手工行延后写入，确保能覆盖扫描结果。
+                    if (!currentScope)
                     {
                         kept.Add(line);
+                        continue;
+                    }
+                    if (String.Equals(source, "user", StringComparison.OrdinalIgnoreCase))
+                    {
+                        currentUserRows.Add(line);
                     }
                 }
             }
@@ -867,6 +889,7 @@ namespace ChapterQuotaLibrary
 
                 List<PoolCode> codes = pair.Value.Values
                     .OrderByDescending(c => c.Seed)
+                    .ThenBy(c => c.Kind == "material" ? 1 : 0)
                     .ThenByDescending(c => c.Projects.Count)
                     .ThenByDescending(c => c.LastSeen ?? "", StringComparer.Ordinal)
                     .ThenBy(c => c.AddOrder)
@@ -917,6 +940,7 @@ namespace ChapterQuotaLibrary
                 }
             }
 
+            kept.AddRange(currentUserRows);
             WriteAllLinesAtomic(libraryPath, kept);
             File.WriteAllLines(Path.Combine(reportDir, "unresolved-codes-" + spec.Key + ".csv"),
                 new[] { "kind,code,observed_name,entry_code" }.Concat(unresolved.Distinct()).ToArray(), Encoding.UTF8);

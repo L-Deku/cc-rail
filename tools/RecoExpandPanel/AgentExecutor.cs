@@ -49,6 +49,8 @@ namespace RecoNet
             public List<QuotaKey> QuotaKeys = new List<QuotaKey>();
             public List<string> QuotaCodes = new List<string>();
             public long CurrentUnitId;   // 0 = 未识别
+            public string CurrentUnitCode = "";   // 当前单元总概算编号（如 ZGS_05）
+            public Dictionary<long, string> UnitCodeMap = new Dictionary<long, string>();   // 全部单元 总概算序号->总概算编号
         }
 
         // 解析出的一条目标定额行（定额输入表），带 multiply/set 需要的原始字段。
@@ -124,6 +126,7 @@ namespace RecoNet
             public List<AgentInsertGroup> Inserts = new List<AgentInsertGroup>();
             public List<AgentUnitCopySpec> UnitCopies = new List<AgentUnitCopySpec>();
             public List<AgentPlanRow> PreviewRows = new List<AgentPlanRow>();
+            public Dictionary<long, string> UnitCodes = new Dictionary<long, string>();   // 总概算序号 -> 总概算编号
             public List<string> Warnings = new List<string>();
             public bool NeedsRecalc;
             public string Summary = "";
@@ -313,7 +316,167 @@ namespace RecoNet
                 snapshot.QuotaCodes = new List<string>();
             }
 
+            snapshot.UnitCodeMap = ReadAgentUnitCodeMap(mainForm);
+            string curCode;
+            if (snapshot.CurrentUnitId > 0 && snapshot.UnitCodeMap.TryGetValue(snapshot.CurrentUnitId, out curCode))
+            {
+                snapshot.CurrentUnitCode = curCode;
+            }
+            else
+            {
+                snapshot.CurrentUnitCode = ReadAgentCurrentUnitText(mainForm);   // 兜底：直接读当前下拉框文本
+            }
+
             return snapshot;
+        }
+
+        // 从"总概算"下拉框的绑定数据里读全部单元 总概算序号->总概算编号 映射（与界面同源，最可靠）。
+        // 找不到时把各下拉框的列名写进日志，便于定位。
+        private static Dictionary<long, string> ReadAgentUnitCodeMap(Form mainForm)
+        {
+            Dictionary<long, string> map = new Dictionary<long, string>();
+            try
+            {
+                List<string> diag = new List<string>();
+                foreach (ComboBox cb in EnumerateAgentControls<ComboBox>(mainForm))
+                {
+                    DataTable table = GetAgentComboTable(cb);
+                    if (table == null)
+                    {
+                        continue;
+                    }
+
+                    if (!table.Columns.Contains("总概算序号") || !table.Columns.Contains("总概算编号"))
+                    {
+                        diag.Add("[" + String.Join(",", table.Columns.Cast<DataColumn>().Select(c => c.ColumnName).ToArray()) + "]");
+                        continue;
+                    }
+
+                    foreach (DataRow row in table.Rows)
+                    {
+                        long sn;
+                        if (!Int64.TryParse(Convert.ToString(row["总概算序号"]), NumberStyles.Integer, CultureInfo.InvariantCulture, out sn) || sn <= 0)
+                        {
+                            continue;
+                        }
+
+                        string code = Convert.ToString(row["总概算编号"]).Trim();
+                        int p = code.IndexOfAny(new char[] { '(', '（' });
+                        if (p > 0)
+                        {
+                            code = code.Substring(0, p).Trim();
+                        }
+
+                        if (code.Length > 0)
+                        {
+                            map[sn] = code;
+                        }
+                    }
+
+                    if (map.Count > 0)
+                    {
+                        return map;
+                    }
+                }
+
+                Log("Agent unit map: no combo bound to 总概算序号+总概算编号. Combo tables: " + String.Join(" ", diag.ToArray()));
+            }
+            catch (Exception ex)
+            {
+                Log("ReadAgentUnitCodeMap failed: " + ex.Message);
+            }
+
+            return map;
+        }
+
+        private static DataTable GetAgentComboTable(ComboBox cb)
+        {
+            object ds = cb.DataSource;
+            DataView dv = ds as DataView;
+            if (dv != null) { return dv.Table; }
+            DataTable dt = ds as DataTable;
+            if (dt != null) { return dt; }
+            BindingSource bs = ds as BindingSource;
+            if (bs != null)
+            {
+                DataView dv2 = bs.List as DataView;
+                if (dv2 != null) { return dv2.Table; }
+                DataTable dt2 = bs.DataSource as DataTable;
+                if (dt2 != null) { return dt2; }
+                DataView dv3 = bs.DataSource as DataView;
+                if (dv3 != null) { return dv3.Table; }
+            }
+            return null;
+        }
+
+        // 兜底：直接读含 ZGS 的下拉框当前文本，取 "(" 前的编号（仅当前单元，可能不精确）。
+        private static string ReadAgentCurrentUnitText(Form mainForm)
+        {
+            try
+            {
+                foreach (ComboBox cb in EnumerateAgentControls<ComboBox>(mainForm))
+                {
+                    string code = ExtractAgentUnitCode(cb.Text);
+                    if (code.Length > 0) { return code; }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("ReadAgentCurrentUnitText failed: " + ex.Message);
+            }
+            return "";
+        }
+
+        // 从下拉文本里抽总概算编号：必须含 "ZGS"（单元编号特征），取 "(" 前部分，如 "ZGS_03(沪昆…)" -> "ZGS_03"。
+        private static string ExtractAgentUnitCode(string text)
+        {
+            if (String.IsNullOrEmpty(text))
+            {
+                return "";
+            }
+
+            string t = text.Trim();
+            if (t.IndexOf("ZGS", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                return "";
+            }
+
+            int paren = t.IndexOfAny(new char[] { '(', '（' });
+            return (paren > 0 ? t.Substring(0, paren) : t).Trim();
+        }
+
+        private static IEnumerable<T> EnumerateAgentControls<T>(Control root) where T : Control
+        {
+            foreach (Control c in root.Controls)
+            {
+                T match = c as T;
+                if (match != null)
+                {
+                    yield return match;
+                }
+
+                foreach (T sub in EnumerateAgentControls<T>(c))
+                {
+                    yield return sub;
+                }
+            }
+        }
+
+        // 单元显示：优先总概算编号，没有就回退到序号。unitId<=0 返回空串。
+        private static string AgentUnitDisplay(Dictionary<long, string> codes, long unitId)
+        {
+            if (unitId <= 0)
+            {
+                return "";
+            }
+
+            string code;
+            if (codes != null && codes.TryGetValue(unitId, out code) && !String.IsNullOrEmpty(code))
+            {
+                return code;
+            }
+
+            return unitId.ToString(CultureInfo.InvariantCulture);
         }
 
         // ===== 条目/单元解析 =====
@@ -345,8 +508,10 @@ namespace RecoNet
             {
                 if (selection.CurrentUnitId > 0)
                 {
-                    warnings.Add("默认只作用于当前单元（总概算序号 " + selection.CurrentUnitId.ToString(CultureInfo.InvariantCulture) +
-                        "）。要跨单元请在指令里写明单元，或写\"所有单元\"。");
+                    string curDisplay = String.IsNullOrEmpty(selection.CurrentUnitCode)
+                        ? "总概算序号 " + selection.CurrentUnitId.ToString(CultureInfo.InvariantCulture)
+                        : selection.CurrentUnitCode;
+                    warnings.Add("默认只作用于当前单元（" + curDisplay + "）。要跨单元请在指令里写明单元，或写\"所有单元\"。");
                     return new List<long> { selection.CurrentUnitId };
                 }
 
@@ -720,6 +885,16 @@ namespace RecoNet
                     default:
                         throw new AgentPlanException("不支持的命令类型：" + command.Type);
                 }
+            }
+
+            // 全部单元 序号->编号，预览/汇总按编号显示（覆盖跨单元、未识别当前单元等情况）。
+            if (selection.UnitCodeMap != null && selection.UnitCodeMap.Count > 0)
+            {
+                plan.UnitCodes = selection.UnitCodeMap;
+            }
+            if (selection.CurrentUnitId > 0 && !String.IsNullOrEmpty(selection.CurrentUnitCode) && !plan.UnitCodes.ContainsKey(selection.CurrentUnitId))
+            {
+                plan.UnitCodes[selection.CurrentUnitId] = selection.CurrentUnitCode;
             }
 
             FinalizeAgentPlan(plan);
@@ -1286,7 +1461,7 @@ namespace RecoNet
             }
 
             List<long> unitList = plan.PreviewRows.Where(r => r.UnitId > 0).Select(r => r.UnitId).Distinct().ToList();
-            string unitSummary = unitList.Count == 0 ? "" : "；涉及单元 " + String.Join(",", unitList.Select(u => u.ToString(CultureInfo.InvariantCulture)).ToArray());
+            string unitSummary = unitList.Count == 0 ? "" : "；涉及单元 " + String.Join(",", unitList.Select(u => AgentUnitDisplay(plan.UnitCodes, u)).ToArray());
             plan.Summary = (parts.Count == 0 ? "无可执行项" : String.Join("，", parts.ToArray())) + unitSummary;
         }
 

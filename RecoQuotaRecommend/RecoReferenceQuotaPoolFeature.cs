@@ -65,7 +65,7 @@ namespace RecoQuotaRecommend
             private readonly ChapterLibraryStore chapterLibrary;
             private readonly Dictionary<string, List<PoolItem>> poolByEntry; // matchedEntryCode -> 富字段定额池
             private readonly Dictionary<string, QuotaInfo> quotaIndex; // 定额编号(大写) -> 名称/单位/基价/工作内容（取自 quota-index.jsonl）
-            private readonly Dictionary<string, bool> methodCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            private readonly Dictionary<string, string> methodNoCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             private DataGridView refGrid; // 我们自管的只读表格，叠放进"参考定额"框
             private Panel hostPanel;      // 容纳工具条 + refGrid，整体叠放进"参考定额"框
             private DataGridView nativeGrid; // tabPageCommon 里宿主原生 dg_Common，隐藏它以免盖住我们的表
@@ -309,27 +309,27 @@ namespace RecoQuotaRecommend
             private void Refresh()
             {
                 KeepOnTop();
-                EntryScope scope = ResolveCurrentScope();
-                UpdateEntryLabel(scope);
-                if (scope == null || String.IsNullOrEmpty(scope.MatchedEntryCode))
+                ResolvedEntry re = ResolveCurrentEntry();
+                UpdateEntryLabel(re);
+                if (re == null || String.IsNullOrEmpty(re.EntryCode))
                 {
                     SetKey("\0none");
                     return;
                 }
 
                 List<PoolItem> items;
-                poolByEntry.TryGetValue(scope.MatchedEntryCode, out items);
+                poolByEntry.TryGetValue(re.PoolKey, out items);
                 // 参考框只显示定额，过滤掉材料（全数字代号等）
                 List<PoolItem> quotas = items == null
                     ? null
                     : items.Where(x => !String.Equals(x.Kind, "material", StringComparison.OrdinalIgnoreCase)).ToList();
                 if (quotas == null || quotas.Count == 0)
                 {
-                    SetKey("\0empty:" + scope.Method + ":" + scope.MatchedEntryCode);
+                    SetKey("\0empty:" + re.PoolKey);
                     return;
                 }
 
-                string key = "pool:" + scope.Method + ":" + scope.MatchedEntryCode;
+                string key = "pool:" + re.PoolKey;
                 if (key == currentKey)
                 {
                     return;
@@ -338,37 +338,67 @@ namespace RecoQuotaRecommend
                 BindItems(quotas);
             }
 
-            // 解析当前定额输入行/属性/树节点所属的章节条目，并映射到库内条目（含编制办法匹配校验）
-            private EntryScope ResolveCurrentScope()
+
+            private sealed class ResolvedEntry
             {
-                if (chapterLibrary == null || chapterLibrary.IsEmpty)
-                {
-                    return null;
-                }
-                SqlConnection conn = GetField<SqlConnection>(mainForm, "m_ProjectConn");
-                if (conn != null && !ProjectUsesLibraryMethod(conn))
-                {
-                    return null;
-                }
-                string entryName;
-                string entryCode = ResolveCurrentChapterNo(conn, out entryName);
-                if (String.IsNullOrWhiteSpace(entryCode))
-                {
-                    return null;
-                }
-                return chapterLibrary.ResolveScope(entryCode, entryName);
+                public string MethodNo = "";
+                public string EntryCode = "";
+                public string EntryName = "";
+                public string PoolKey = "";
             }
 
-            private void UpdateEntryLabel(EntryScope scope)
+            // 解析当前条目，并按"编制办法文号"决定池键：
+            // 项目编制办法与库一致(如30号文)→走库的模糊匹配；新编制办法(如101号文估算)→用项目原始条目编号从零积累。
+            private ResolvedEntry ResolveCurrentEntry()
+            {
+                SqlConnection conn = GetField<SqlConnection>(mainForm, "m_ProjectConn");
+                string methodNo = ProjectMethodNo(conn);
+                if (String.IsNullOrEmpty(methodNo) && chapterLibrary != null)
+                {
+                    methodNo = chapterLibrary.MethodNo ?? ""; // 空文号当作库的编制办法，保持原行为
+                }
+                string rawName;
+                string rawCode = ResolveCurrentChapterNo(conn, out rawName);
+                if (String.IsNullOrWhiteSpace(rawCode))
+                {
+                    return null;
+                }
+                ResolvedEntry re = new ResolvedEntry();
+                re.MethodNo = methodNo;
+                bool libCoversMethod = chapterLibrary != null && !chapterLibrary.IsEmpty
+                    && !String.IsNullOrEmpty(chapterLibrary.MethodNo)
+                    && String.Equals(NormalizeMethodNo(methodNo), NormalizeMethodNo(chapterLibrary.MethodNo), StringComparison.OrdinalIgnoreCase);
+                if (libCoversMethod)
+                {
+                    EntryScope scope = chapterLibrary.ResolveScope(rawCode, rawName);
+                    if (scope == null || String.IsNullOrEmpty(scope.MatchedEntryCode))
+                    {
+                        return null; // 同编制办法但条目映射不到库（与原行为一致）
+                    }
+                    re.EntryCode = scope.MatchedEntryCode;
+                    re.EntryName = String.IsNullOrEmpty(scope.EntryName) ? rawName : scope.EntryName;
+                }
+                else
+                {
+                    re.EntryCode = rawCode; // 新编制办法：用项目原始条目编号
+                    re.EntryName = rawName;
+                }
+                re.PoolKey = (re.MethodNo ?? "") + "|" + re.EntryCode;
+                return re;
+            }
+
+
+            private void UpdateEntryLabel(ResolvedEntry re)
             {
                 if (entryLabel == null)
                 {
                     return;
                 }
-                entryLabel.Text = scope == null || String.IsNullOrEmpty(scope.MatchedEntryCode)
+                entryLabel.Text = re == null || String.IsNullOrEmpty(re.EntryCode)
                     ? ""
-                    : ("\u5f53\u524d\u6761\u76ee: " + scope.MatchedEntryCode);
+                    : ("\u5f53\u524d\u6761\u76ee: " + re.EntryCode);
             }
+
 
             // 空态：保留五列表头、清空数据；用 currentKey 去抖避免同条目反复重建
             private void SetKey(string key)
@@ -558,15 +588,14 @@ namespace RecoQuotaRecommend
 
             // ===== 增加 / 删除 参考定额池定额 =====
 
-            // 增加：把一条定额加入当前条目的参考池（默认取定额输入表当前行的定额编号，弹框可改），追加 source=user 行
             private void AddButtonClick(object sender, EventArgs e)
             {
                 try
                 {
-                    EntryScope scope = ResolveCurrentScope();
-                    if (scope == null || !scope.Strict)
+                    ResolvedEntry re = ResolveCurrentEntry();
+                    if (re == null || String.IsNullOrEmpty(re.EntryCode))
                     {
-                        MessageBox.Show(mainForm, "\u8bf7\u5148\u5728\u5b9a\u989d\u8f93\u5165\u8868\u5b9a\u4f4d\u5230\u4e00\u4e2a\u6709\u53c2\u8003\u6c60\u7684\u7ae0\u8282\u6761\u76ee\u3002", "\u589e\u52a0\u53c2\u8003\u5b9a\u989d", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        MessageBox.Show(mainForm, "\u8bf7\u5148\u5728\u5b9a\u989d\u8f93\u5165\u8868\u5b9a\u4f4d\u5230\u4e00\u4e2a\u7ae0\u8282\u6761\u76ee\u3002", "\u589e\u52a0\u53c2\u8003\u5b9a\u989d", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         return;
                     }
                     string initial = grid.CurrentRow != null && !grid.CurrentRow.IsNewRow ? GetRowValue(grid.CurrentRow, QuotaCodeColumns()) : "";
@@ -578,11 +607,11 @@ namespace RecoQuotaRecommend
                     code = code.Trim();
                     string name, unit;
                     FindQuotaDisplay(code, out name, out unit);
-                    chapterLibrary.AddUserQuota(scope, "", code, name, unit);
+                    AppendQuotaRow(re, code, name, unit, "", false);
                     ReloadPool();
                     currentKey = null;
                     RefreshSafe();
-                    QuotaRecommendPanel.Log("Reference quota pool user add: entry=" + scope.MatchedEntryCode + " code=" + code);
+                    QuotaRecommendPanel.Log("Reference quota pool user add: poolKey=" + re.PoolKey + " code=" + code);
                 }
                 catch (Exception ex)
                 {
@@ -590,7 +619,7 @@ namespace RecoQuotaRecommend
                 }
             }
 
-            // 删除：把参考框选中的定额从当前条目参考池移除（追加 deleted=1 墓碑行，软删除可恢复）
+
             private void DeleteButtonClick(object sender, EventArgs e)
             {
                 try
@@ -605,8 +634,8 @@ namespace RecoQuotaRecommend
                         return;
                     }
                     PoolItem item = displayedItems[idx];
-                    EntryScope scope = ResolveCurrentScope();
-                    if (scope == null || String.IsNullOrEmpty(scope.MatchedEntryCode))
+                    ResolvedEntry re = ResolveCurrentEntry();
+                    if (re == null || String.IsNullOrEmpty(re.EntryCode))
                     {
                         return;
                     }
@@ -614,17 +643,54 @@ namespace RecoQuotaRecommend
                     {
                         return;
                     }
-                    chapterLibrary.RemoveUserQuota(scope, item.Kind, item.Code);
+                    AppendQuotaRow(re, item.Code, "", "", item.Kind, true);
                     ReloadPool();
                     currentKey = null;
                     RefreshSafe();
-                    QuotaRecommendPanel.Log("Reference quota pool user delete: entry=" + scope.MatchedEntryCode + " code=" + item.Code);
+                    QuotaRecommendPanel.Log("Reference quota pool user delete: poolKey=" + re.PoolKey + " code=" + item.Code);
                 }
                 catch (Exception ex)
                 {
                     QuotaRecommendPanel.Log("Reference quota pool delete failed: " + ex.Message);
                 }
             }
+
+            // 追加一行到 chapter-quota-library.jsonl（增/删），用当前项目的编制办法文号分池
+            private void AppendQuotaRow(ResolvedEntry re, string code, string name, string unit, string kind, bool deleted)
+            {
+                if (re == null || String.IsNullOrWhiteSpace(code))
+                {
+                    return;
+                }
+                try
+                {
+                    string k = String.IsNullOrWhiteSpace(kind) ? QuotaEntry.GuessKind(code.Trim()) : kind.Trim().ToLowerInvariant();
+                    Dictionary<string, string> record = new Dictionary<string, string>();
+                    record["record_type"] = "entry_quota";
+                    record["method"] = chapterLibrary == null ? "" : chapterLibrary.MethodKey;
+                    record["method_no"] = re.MethodNo ?? "";
+                    record["entry_code"] = re.EntryCode ?? "";
+                    record["entry_name"] = re.EntryName ?? "";
+                    record["target_kind"] = k;
+                    record["quota_code"] = code.Trim();
+                    record["quota_name"] = name ?? "";
+                    record["quota_unit"] = unit ?? "";
+                    record["project_count"] = "0";
+                    record["source"] = "user";
+                    if (deleted)
+                    {
+                        record["deleted"] = "1";
+                    }
+                    record["last_seen"] = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                    string path = Path.Combine(LearningStore.FindDataDir(), "chapter-quota-library.jsonl");
+                    File.AppendAllText(path, LearningStore.ToJson(record) + Environment.NewLine, Encoding.UTF8);
+                }
+                catch (Exception ex)
+                {
+                    QuotaRecommendPanel.Log("Reference quota append row failed: " + ex.Message);
+                }
+            }
+
 
             // 重新从 chapter-quota-library.jsonl 装载富字段池（增删后保持显示与文件一致）
             private void ReloadPool()
@@ -701,43 +767,41 @@ namespace RecoQuotaRecommend
 
             // ===== 当前章节条目解析（精简复制自 QuotaInlineSearchFeature，保持本文件独立）=====
 
-            private bool ProjectUsesLibraryMethod(SqlConnection conn)
+            // 取当前项目的"编制办法文号"（按库名缓存）；用它给参考池分编制办法，而不是拦截显示
+            private string ProjectMethodNo(SqlConnection conn)
             {
-                if (conn == null || String.IsNullOrWhiteSpace(chapterLibrary.MethodNo))
+                if (conn == null)
                 {
-                    return true;
+                    return "";
                 }
                 string dbName;
                 try { dbName = conn.Database ?? ""; }
-                catch { return true; }
-                bool cached;
-                if (methodCache.TryGetValue(dbName, out cached))
+                catch { return ""; }
+                string cached;
+                if (methodNoCache.TryGetValue(dbName, out cached))
                 {
                     return cached;
                 }
-                bool matches = true;
+                string methodNo = "";
                 try
                 {
                     EnsureConnectionOpen(conn);
                     using (SqlCommand cmd = conn.CreateCommand())
                     {
-                        // select 编制办法文号 from 项目信息
                         cmd.CommandText = "select \u7f16\u5236\u529e\u6cd5\u6587\u53f7 from \u9879\u76ee\u4fe1\u606f";
                         object result = cmd.ExecuteScalar();
-                        string methodNo = result == null || result == DBNull.Value ? "" : Convert.ToString(result, CultureInfo.InvariantCulture).Trim();
-                        if (!String.IsNullOrEmpty(methodNo))
-                        {
-                            matches = String.Equals(NormalizeMethodNo(methodNo), NormalizeMethodNo(chapterLibrary.MethodNo), StringComparison.OrdinalIgnoreCase);
-                        }
+                        methodNo = result == null || result == DBNull.Value ? "" : Convert.ToString(result, CultureInfo.InvariantCulture).Trim();
                     }
                 }
                 catch (Exception ex)
                 {
-                    QuotaRecommendPanel.Log("Reference quota project method check failed (treat as match): " + ex.Message);
+                    QuotaRecommendPanel.Log("Reference quota project methodNo query failed: " + ex.Message);
                 }
-                methodCache[dbName] = matches;
-                return matches;
+                methodNoCache[dbName] = methodNo;
+                QuotaRecommendPanel.Log("Reference project methodNo: db=" + dbName + " methodNo=[" + methodNo + "] libMethodNo=[" + (chapterLibrary == null ? "" : chapterLibrary.MethodNo) + "]");
+                return methodNo;
             }
+
 
             private string ResolveCurrentChapterNo(SqlConnection conn, out string entryName)
             {
@@ -923,16 +987,14 @@ namespace RecoQuotaRecommend
                         continue;
                     }
                     Dictionary<string, string> values = LearningStore.ParseFlatJson(line);
-                    if (!String.Equals(LearningStore.Get(values, "method"), methodKey, StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
                     string entry = LearningStore.Get(values, "entry_code").Trim();
                     string code = LearningStore.Get(values, "quota_code").Trim();
                     if (entry.Length == 0 || code.Length == 0)
                     {
                         continue;
                     }
+                    // 池按 "编制办法文号|条目编号" 分键，避免预算/估算等不同编制办法串库
+                    entry = LearningStore.Get(values, "method_no").Trim() + "|" + entry;
                     string kind = LearningStore.Get(values, "target_kind").Trim().ToLowerInvariant();
                     if (kind.Length == 0)
                     {
