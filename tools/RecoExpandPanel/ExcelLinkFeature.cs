@@ -3506,6 +3506,16 @@ namespace RecoNet
             return summary;
         }
 
+        // 绑定的"数量表名"：优先用户设的 TableName，否则用 Excel 文件名（去扩展名）兜底。
+        private static string GetLinkTableName(ExcelQuotaLink link)
+        {
+            if (link == null) return "";
+            if (!String.IsNullOrWhiteSpace(link.TableName)) return link.TableName.Trim();
+            string file = link.ExcelPath ?? "";
+            try { file = Path.GetFileNameWithoutExtension(file); } catch { }
+            return String.IsNullOrWhiteSpace(file) ? "(未命名)" : file;
+        }
+
         private static ExcelLinkStore LoadStore(SqlConnection conn)
         {
             string path = GetStorePath(conn);
@@ -3630,6 +3640,7 @@ namespace RecoNet
             public string LastSyncValue { get; set; }
             public string LastStatus { get; set; }
             public string UpdatedAt { get; set; }
+            public string TableName { get; set; }   // 数量表名（分类，可编辑；空则按Excel文件名兜底）
         }
 
         public sealed class ExcelLinkStore
@@ -4998,6 +5009,8 @@ namespace RecoNet
             private readonly Form mainForm;
             private readonly DataGridView grid;
             private readonly Label status;
+            private readonly ComboBox cmbTable;
+            private bool loading;
 
             public ExcelLinkPanel(Form mainForm)
             {
@@ -5015,6 +5028,7 @@ namespace RecoNet
                 grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
                 grid.MultiSelect = true;
                 grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+                grid.Columns.Add("TableName", "数量表名");
                 grid.Columns.Add("QuotaSequence", "定额序号");
                 grid.Columns.Add("QuotaCode", "定额编号");
                 grid.Columns.Add("QuotaName", "名称");
@@ -5022,13 +5036,14 @@ namespace RecoNet
                 grid.Columns.Add("LastValue", "最近值");
                 grid.Columns.Add("Status", "状态");
                 grid.Columns.Add("UpdatedAt", "更新时间");
-                grid.Columns["QuotaSequence"].FillWeight = 70;
-                grid.Columns["QuotaCode"].FillWeight = 90;
-                grid.Columns["QuotaName"].FillWeight = 180;
-                grid.Columns["Excel"].FillWeight = 220;
-                grid.Columns["LastValue"].FillWeight = 80;
-                grid.Columns["Status"].FillWeight = 100;
-                grid.Columns["UpdatedAt"].FillWeight = 110;
+                grid.Columns["TableName"].FillWeight = 110;
+                grid.Columns["QuotaSequence"].FillWeight = 60;
+                grid.Columns["QuotaCode"].FillWeight = 80;
+                grid.Columns["QuotaName"].FillWeight = 160;
+                grid.Columns["Excel"].FillWeight = 200;
+                grid.Columns["LastValue"].FillWeight = 70;
+                grid.Columns["Status"].FillWeight = 90;
+                grid.Columns["UpdatedAt"].FillWeight = 100;
 
                 Button sync = new Button();
                 sync.Text = "同步一次";
@@ -5068,10 +5083,29 @@ namespace RecoNet
                 status.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
                 status.Dock = DockStyle.Fill;
 
+                Label tableLabel = new Label();
+                tableLabel.Text = "数量表";
+                tableLabel.AutoSize = false;
+                tableLabel.Width = 44;
+                tableLabel.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
+
+                cmbTable = new ComboBox();
+                cmbTable.Width = 170;
+                cmbTable.DropDownStyle = ComboBoxStyle.DropDownList;
+                cmbTable.SelectedIndexChanged += delegate { if (!loading) Reload(); };
+
+                Button rename = new Button();
+                rename.Text = "重命名分类";
+                rename.Width = 90;
+                rename.Click += delegate { RenameCurrentTable(); };
+
                 FlowLayoutPanel buttons = new FlowLayoutPanel();
                 buttons.Dock = DockStyle.Top;
                 buttons.Height = 42;
                 buttons.Padding = new Padding(8);
+                buttons.Controls.Add(tableLabel);
+                buttons.Controls.Add(cmbTable);
+                buttons.Controls.Add(rename);
                 buttons.Controls.Add(sync);
                 buttons.Controls.Add(refresh);
                 buttons.Controls.Add(delete);
@@ -5100,6 +5134,8 @@ namespace RecoNet
                 base.OnFormClosing(e);
             }
 
+            private const string AllTablesOption = "全部";
+
             public void Reload()
             {
                 grid.Rows.Clear();
@@ -5111,10 +5147,35 @@ namespace RecoNet
                 }
 
                 ExcelLinkStore store = LoadStore(conn);
+
+                // 填充"数量表"下拉（保留当前选择）。
+                string keep = cmbTable.SelectedItem == null ? AllTablesOption : Convert.ToString(cmbTable.SelectedItem);
+                List<string> names = store.Links.Select(GetLinkTableName)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                loading = true;
+                cmbTable.Items.Clear();
+                cmbTable.Items.Add(AllTablesOption);
+                foreach (string n in names) cmbTable.Items.Add(n);
+                int idx = cmbTable.Items.IndexOf(keep);
+                cmbTable.SelectedIndex = idx >= 0 ? idx : 0;
+                loading = false;
+
+                string selected = Convert.ToString(cmbTable.SelectedItem);
+                bool all = String.IsNullOrEmpty(selected) || selected == AllTablesOption;
+
+                int shown = 0;
                 foreach (ExcelQuotaLink link in store.Links.OrderBy(l => l.QuotaSequence))
                 {
+                    if (!all && !String.Equals(GetLinkTableName(link), selected, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
                     string excel = Path.GetFileName(link.ExcelPath) + "!" + link.WorksheetName + "!" + link.CellAddress;
                     grid.Rows.Add(
+                        GetLinkTableName(link),
                         link.QuotaSequence.ToString(CultureInfo.InvariantCulture),
                         link.QuotaCode,
                         link.QuotaName,
@@ -5122,9 +5183,73 @@ namespace RecoNet
                         link.LastSyncValue,
                         link.LastStatus,
                         link.UpdatedAt);
+                    shown++;
                 }
 
-                status.Text = "绑定数量：" + store.Links.Count.ToString(CultureInfo.InvariantCulture);
+                status.Text = "数量表：" + (names.Count).ToString(CultureInfo.InvariantCulture) + " 个；本组绑定：" + shown.ToString(CultureInfo.InvariantCulture) + " / 共 " + store.Links.Count.ToString(CultureInfo.InvariantCulture) + " 条。";
+            }
+
+            // 把当前所选分类下的全部绑定改名为新名字。
+            private void RenameCurrentTable()
+            {
+                if (cmbTable.SelectedItem == null || Convert.ToString(cmbTable.SelectedItem) == AllTablesOption)
+                {
+                    status.Text = "请先在下拉里选中一个具体的数量表，再重命名。";
+                    return;
+                }
+                string oldName = Convert.ToString(cmbTable.SelectedItem);
+
+                string input = oldName;
+                if (!PromptText("重命名数量表", "把分类「" + oldName + "」改名为：", ref input) || String.IsNullOrWhiteSpace(input))
+                {
+                    return;
+                }
+                input = input.Trim();
+
+                SqlConnection conn = GetProjectConnection(mainForm);
+                if (conn == null) { status.Text = "没有找到当前项目数据库连接。"; return; }
+                ExcelLinkStore store = LoadStore(conn);
+                int n = 0;
+                foreach (ExcelQuotaLink link in store.Links)
+                {
+                    if (String.Equals(GetLinkTableName(link), oldName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        link.TableName = input;
+                        n++;
+                    }
+                }
+                SaveStore(conn, store);
+                if (ExcelLinkRuntimes.ContainsKey(mainForm)) ExcelLinkRuntimes[mainForm].Reload();
+                loading = true; cmbTable.SelectedItem = null; loading = false; // 让 Reload 选回新名字
+                cmbTable.Items.Add(input);
+                cmbTable.SelectedItem = input;
+                Reload();
+                status.Text = "已把 " + n.ToString(CultureInfo.InvariantCulture) + " 条绑定改到数量表「" + input + "」。";
+            }
+
+            // 简单文本输入框。
+            private static bool PromptText(string title, string prompt, ref string value)
+            {
+                using (Form dlg = new Form())
+                using (Label lbl = new Label())
+                using (TextBox box = new TextBox())
+                using (Button ok = new Button())
+                using (Button cancel = new Button())
+                {
+                    dlg.Text = title;
+                    dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+                    dlg.StartPosition = FormStartPosition.CenterParent;
+                    dlg.MinimizeBox = false; dlg.MaximizeBox = false;
+                    dlg.ClientSize = new System.Drawing.Size(360, 110);
+                    lbl.SetBounds(12, 12, 336, 20); lbl.Text = prompt;
+                    box.SetBounds(12, 38, 336, 23); box.Text = value ?? "";
+                    ok.Text = "确定"; ok.DialogResult = DialogResult.OK; ok.SetBounds(180, 72, 75, 26);
+                    cancel.Text = "取消"; cancel.DialogResult = DialogResult.Cancel; cancel.SetBounds(265, 72, 75, 26);
+                    dlg.Controls.Add(lbl); dlg.Controls.Add(box); dlg.Controls.Add(ok); dlg.Controls.Add(cancel);
+                    dlg.AcceptButton = ok; dlg.CancelButton = cancel;
+                    if (dlg.ShowDialog() == DialogResult.OK) { value = box.Text; return true; }
+                    return false;
+                }
             }
 
             private void DeleteSelectedLinks()

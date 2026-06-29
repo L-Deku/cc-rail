@@ -90,8 +90,8 @@ namespace RecoNet
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "条目", Name = "item", ReadOnly = true, FillWeight = 14 });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "定额编号", Name = "code", ReadOnly = true, FillWeight = 16 });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "调整", Name = "adj", ReadOnly = true, FillWeight = 14 });
-                grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "源行项目名", Name = "sname", ReadOnly = true, FillWeight = 18 });
-                grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "目标行项目名", Name = "tname", ReadOnly = true, FillWeight = 18 });
+                grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "源行定额", Name = "sname", ReadOnly = true, FillWeight = 18 });
+                grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "目标行工程量名", Name = "tname", ReadOnly = true, FillWeight = 18 });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "数量", Name = "qty", ReadOnly = true, FillWeight = 10 });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "状态", Name = "st", ReadOnly = true, FillWeight = 14 });
 
