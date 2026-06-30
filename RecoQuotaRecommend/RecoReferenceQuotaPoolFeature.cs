@@ -407,7 +407,16 @@ namespace RecoQuotaRecommend
                 }
                 entryLabel.Text = scope == null || String.IsNullOrEmpty(scope.MatchedEntryCode)
                     ? ""
-                    : ("\u5f53\u524d\u6761\u76ee: " + scope.MatchedEntryCode);
+                    : ("\u5f53\u524d\u6761\u76ee: " + UserEntryCode(scope));
+            }
+
+            private static string UserEntryCode(EntryScope scope)
+            {
+                if (scope == null)
+                {
+                    return "";
+                }
+                return !String.IsNullOrWhiteSpace(scope.ProjectEntryCode) ? scope.ProjectEntryCode : scope.MatchedEntryCode;
             }
 
             // 空态：保留五列表头、清空数据；用 currentKey 去抖避免同条目反复重建
@@ -679,7 +688,7 @@ namespace RecoQuotaRecommend
                     }
                     string name, unit, price;
                     FindQuotaDisplay(code, out name, out unit, out price);
-                    chapterLibrary.AddUserQuota(scope.MethodNo, scope.MatchedEntryCode, effectiveEntryName, "", code, name, unit, price);
+                    chapterLibrary.AddUserQuota(scope.MethodNo, UserEntryCode(scope), effectiveEntryName, "", code, name, unit, price);
                     ReloadPool();
                     currentKey = null;
                     RefreshSafe();
@@ -716,7 +725,7 @@ namespace RecoQuotaRecommend
                     {
                         return;
                     }
-                    chapterLibrary.RemoveUserQuota(scope.MethodNo, scope.MatchedEntryCode, effectiveEntryName, item.Kind, item.Code);
+                    chapterLibrary.RemoveUserQuota(scope.MethodNo, scope.MatchedEntryCode, effectiveEntryName, item.Kind, item.Code, item.Name, item.Unit, item.Price);
                     ReloadPool();
                     currentKey = null;
                     RefreshSafe();
@@ -945,6 +954,15 @@ namespace RecoQuotaRecommend
                     {
                         return GetRowValue(row, new[] { "\u6570\u636e" });
                     }
+                    if (row.Cells.Count >= 2)
+                    {
+                        object nameValue = row.Cells[0].Value;
+                        if (nameValue != null && String.Equals(Convert.ToString(nameValue).Trim(), propertyName, StringComparison.Ordinal))
+                        {
+                            object dataValue = row.Cells[1].Value;
+                            return dataValue == null ? null : Convert.ToString(dataValue).Trim();
+                        }
+                    }
                 }
                 return null;
             }
@@ -1017,6 +1035,25 @@ namespace RecoQuotaRecommend
         private static string ReferencePoolKind(string entryName, string kind, string code)
         {
             return "quota";
+        }
+
+        private static string ReferencePoolItemKey(string kind, string code, string name, string unit, string price)
+        {
+            string normalizedKind = String.IsNullOrWhiteSpace(kind) ? QuotaEntry.GuessKind(code) : kind.Trim().ToLowerInvariant();
+            string normalizedCode = QuotaEntry.NormalizeCode(code).ToUpperInvariant();
+            string key = normalizedKind + ":" + normalizedCode;
+            if (IsSfCode(normalizedCode))
+            {
+                key += "|" + NormalizeReferencePoolIdentity(name)
+                    + "|" + NormalizeReferencePoolIdentity(unit)
+                    + "|" + NormalizeReferencePoolIdentity(price);
+            }
+            return key;
+        }
+
+        private static string NormalizeReferencePoolIdentity(string value)
+        {
+            return (value ?? "").Trim().ToUpperInvariant();
         }
 
         // 定额编号 -> 名称/单位/基期价格(基价)/内容(工作内容)，取自 quota-index.jsonl
@@ -1107,7 +1144,10 @@ namespace RecoQuotaRecommend
                         continue;
                     }
                     kind = ReferencePoolKind(entryName, kind, code);
-                    string itemKey = kind + ":" + code.ToUpperInvariant();
+                    string quotaName = LearningStore.Get(values, "quota_name").Trim();
+                    string quotaUnit = LearningStore.Get(values, "quota_unit").Trim();
+                    string quotaPrice = FirstNonEmpty(values, "base_price", "price", "unit_price", "quota_price", "current_price");
+                    string itemKey = ReferencePoolItemKey(kind, code, quotaName, quotaUnit, quotaPrice);
 
                     Dictionary<string, PoolItem> inner;
                     if (!tmp.TryGetValue(entry, out inner))
@@ -1119,14 +1159,22 @@ namespace RecoQuotaRecommend
                     if (LearningStore.Get(values, "deleted").Trim() == "1")
                     {
                         inner.Remove(itemKey);
+                        if (IsSfCode(code) && String.IsNullOrWhiteSpace(quotaName) && String.IsNullOrWhiteSpace(quotaUnit) && String.IsNullOrWhiteSpace(quotaPrice))
+                        {
+                            string prefix = kind + ":" + code.ToUpperInvariant() + "|";
+                            foreach (string existing in inner.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+                            {
+                                inner.Remove(existing);
+                            }
+                        }
                         continue;
                     }
 
                     PoolItem item = new PoolItem();
                     item.Code = code;
-                    item.Name = LearningStore.Get(values, "quota_name").Trim();
-                    item.Unit = LearningStore.Get(values, "quota_unit").Trim();
-                    item.Price = FirstNonEmpty(values, "base_price", "price", "unit_price", "quota_price", "current_price");
+                    item.Name = quotaName;
+                    item.Unit = quotaUnit;
+                    item.Price = quotaPrice;
                     item.Kind = kind;
                     item.Source = LearningStore.Get(values, "source").Trim();
                     int projectCount;

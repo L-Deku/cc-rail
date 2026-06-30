@@ -3692,6 +3692,15 @@ namespace RecoQuotaRecommend
                 {
                     return GetRowValue(row, "数据");
                 }
+                if (row.Cells.Count >= 2)
+                {
+                    object nameValue = row.Cells[0].Value;
+                    if (nameValue != null && String.Equals(Convert.ToString(nameValue).Trim(), propertyName, StringComparison.Ordinal))
+                    {
+                        object dataValue = row.Cells[1].Value;
+                        return dataValue == null ? null : Convert.ToString(dataValue).Trim();
+                    }
+                }
             }
 
             return null;
@@ -9197,7 +9206,12 @@ namespace RecoQuotaRecommend
             }
 
             string kind = String.IsNullOrWhiteSpace(targetKind) ? QuotaEntry.GuessKind(code) : targetKind;
-            return PoolKeys.Contains(kind.ToLowerInvariant() + ":" + QuotaEntry.NormalizeCode(code).ToUpperInvariant());
+            string key = kind.ToLowerInvariant() + ":" + QuotaEntry.NormalizeCode(code).ToUpperInvariant();
+            if (PoolKeys.Contains(key))
+            {
+                return true;
+            }
+            return PoolKeys.Any(k => k.StartsWith(key + "|", StringComparison.Ordinal));
         }
 
         // 条目定额池里所有 quota 类定额编号（去掉 "quota:" 前缀），用于把整池作为候选喂给本地匹配/AI
@@ -9214,7 +9228,9 @@ namespace RecoQuotaRecommend
                 {
                     if (key.StartsWith("quota:", StringComparison.OrdinalIgnoreCase))
                     {
-                        yield return key.Substring("quota:".Length);
+                        string code = key.Substring("quota:".Length);
+                        int detailSep = code.IndexOf('|');
+                        yield return detailSep >= 0 ? code.Substring(0, detailSep) : code;
                     }
                 }
             }
@@ -9313,6 +9329,9 @@ namespace RecoQuotaRecommend
                     {
                         entryName = knownEntryName;
                     }
+                    string quotaName = LearningStore.Get(values, "quota_name").Trim();
+                    string quotaUnit = LearningStore.Get(values, "quota_unit").Trim();
+                    string quotaPrice = FirstNonEmpty(values, "base_price", "quota_price", "price");
                     if (!IsAllowedReferencePoolCode(entryName, targetKind, code, validQuotaCodes))
                     {
                         continue;
@@ -9320,11 +9339,11 @@ namespace RecoQuotaRecommend
 
                     if (LearningStore.Get(values, "deleted").Trim() == "1")
                     {
-                        store.RemovePoolKey(methodNo, entryCode, ReferencePoolKind(entryName, targetKind, code), code);
+                        store.RemovePoolKey(methodNo, entryCode, ReferencePoolKind(entryName, targetKind, code), code, quotaName, quotaUnit, quotaPrice);
                     }
                     else
                     {
-                        store.AddPoolKey(methodNo, entryCode, ReferencePoolKind(entryName, targetKind, code), code);
+                        store.AddPoolKey(methodNo, entryCode, ReferencePoolKind(entryName, targetKind, code), code, quotaName, quotaUnit, quotaPrice);
                     }
                 }
 
@@ -9455,6 +9474,38 @@ namespace RecoQuotaRecommend
             return "quota";
         }
 
+        private static string FirstNonEmpty(Dictionary<string, string> values, params string[] keys)
+        {
+            foreach (string key in keys)
+            {
+                string value = LearningStore.Get(values, key).Trim();
+                if (!String.IsNullOrWhiteSpace(value))
+                {
+                    return value;
+                }
+            }
+            return "";
+        }
+
+        private static string ReferencePoolItemKey(string targetKind, string code, string name, string unit, string price)
+        {
+            string kind = String.IsNullOrWhiteSpace(targetKind) ? QuotaEntry.GuessKind(code) : targetKind.Trim().ToLowerInvariant();
+            string normalizedCode = QuotaEntry.NormalizeCode(code).ToUpperInvariant();
+            string key = kind + ":" + normalizedCode;
+            if (IsSfCode(normalizedCode))
+            {
+                key += "|" + NormalizeReferencePoolIdentity(name)
+                    + "|" + NormalizeReferencePoolIdentity(unit)
+                    + "|" + NormalizeReferencePoolIdentity(price);
+            }
+            return key;
+        }
+
+        private static string NormalizeReferencePoolIdentity(string value)
+        {
+            return (value ?? "").Trim().ToUpperInvariant();
+        }
+
         private static bool TrySplitPoolKey(string poolKey, out string methodNo, out string entryCode)
         {
             methodNo = "";
@@ -9489,7 +9540,7 @@ namespace RecoQuotaRecommend
             }
         }
 
-        private static void ApplyPoolMutationToActiveStores(string methodKey, string methodNo, string entryCode, string kind, string code, bool add)
+        private static void ApplyPoolMutationToActiveStores(string methodKey, string methodNo, string entryCode, string kind, string code, string name, string unit, string price, bool add)
         {
             List<ChapterLibraryStore> stores;
             lock (ActiveStoresLock)
@@ -9504,17 +9555,22 @@ namespace RecoQuotaRecommend
                 }
                 if (add)
                 {
-                    store.AddPoolKey(methodNo, entryCode, kind, code);
+                    store.AddPoolKey(methodNo, entryCode, kind, code, name, unit, price);
                 }
                 else
                 {
-                    store.RemovePoolKey(methodNo, entryCode, kind, code);
+                    store.RemovePoolKey(methodNo, entryCode, kind, code, name, unit, price);
                 }
                 store.BuildNameIndex();
             }
         }
 
         private void AddPoolKey(string methodNo, string entryCode, string kind, string code)
+        {
+            AddPoolKey(methodNo, entryCode, kind, code, "", "", "");
+        }
+
+        private void AddPoolKey(string methodNo, string entryCode, string kind, string code, string name, string unit, string price)
         {
             HashSet<string> pool;
             string poolKey = PoolKey(methodNo, entryCode);
@@ -9525,10 +9581,15 @@ namespace RecoQuotaRecommend
             }
 
             string normalizedKind = String.IsNullOrWhiteSpace(kind) ? QuotaEntry.GuessKind(code) : kind.Trim().ToLowerInvariant();
-            pool.Add(normalizedKind + ":" + code.ToUpperInvariant());
+            pool.Add(ReferencePoolItemKey(normalizedKind, code, name, unit, price));
         }
 
         private void RemovePoolKey(string methodNo, string entryCode, string kind, string code)
+        {
+            RemovePoolKey(methodNo, entryCode, kind, code, "", "", "");
+        }
+
+        private void RemovePoolKey(string methodNo, string entryCode, string kind, string code, string name, string unit, string price)
         {
             HashSet<string> pool;
             string poolKey = PoolKey(methodNo, entryCode);
@@ -9538,7 +9599,16 @@ namespace RecoQuotaRecommend
             }
 
             string normalizedKind = String.IsNullOrWhiteSpace(kind) ? QuotaEntry.GuessKind(code) : kind.Trim().ToLowerInvariant();
-            pool.Remove(normalizedKind + ":" + code.ToUpperInvariant());
+            string key = ReferencePoolItemKey(normalizedKind, code, name, unit, price);
+            pool.Remove(key);
+            if (IsSfCode(code) && String.IsNullOrWhiteSpace(name) && String.IsNullOrWhiteSpace(unit) && String.IsNullOrWhiteSpace(price))
+            {
+                string prefix = normalizedKind + ":" + QuotaEntry.NormalizeCode(code).ToUpperInvariant() + "|";
+                foreach (string existing in pool.Where(x => x.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+                {
+                    pool.Remove(existing);
+                }
+            }
             if (pool.Count == 0)
             {
                 pools.Remove(poolKey);
@@ -9798,7 +9868,7 @@ namespace RecoQuotaRecommend
                 return;
             }
             kind = ReferencePoolKind(entryName, kind, code);
-            string key = kind + ":" + code.Trim().ToUpperInvariant();
+            string key = ReferencePoolItemKey(kind, code, name, unit, price);
             HashSet<string> pool;
             if (pools.TryGetValue(PoolKey(methodNo, entryCode), out pool) && pool.Contains(key))
             {
@@ -9826,7 +9896,7 @@ namespace RecoQuotaRecommend
                 record["last_seen"] = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
                 string path = Path.Combine(LearningStore.FindDataDir(), "chapter-quota-library.jsonl");
                 File.AppendAllText(path, LearningStore.ToJson(record) + Environment.NewLine, Encoding.UTF8);
-                ApplyPoolMutationToActiveStores(MethodKey, methodNo, entryCode, kind, code.Trim(), true);
+                ApplyPoolMutationToActiveStores(MethodKey, methodNo, entryCode, kind, code.Trim(), name, unit, price, true);
                 QuotaRecommendPanel.Log("ChapterLibrary user quota added. methodNo=" + methodNo + " entry=" + entryCode + " code=" + code);
             }
             catch (Exception ex)
@@ -9848,6 +9918,11 @@ namespace RecoQuotaRecommend
 
         public void RemoveUserQuota(string methodNo, string entryCode, string entryName, string targetKind, string code)
         {
+            RemoveUserQuota(methodNo, entryCode, entryName, targetKind, code, "", "", "");
+        }
+
+        public void RemoveUserQuota(string methodNo, string entryCode, string entryName, string targetKind, string code, string name, string unit, string price)
+        {
             code = QuotaEntry.NormalizeCode(code);
             if (String.IsNullOrEmpty(entryCode) || String.IsNullOrWhiteSpace(code))
             {
@@ -9867,15 +9942,19 @@ namespace RecoQuotaRecommend
                 record["entry_name"] = entryName ?? "";
                 record["target_kind"] = kind;
                 record["quota_code"] = code.Trim();
-                record["quota_name"] = "";
-                record["quota_unit"] = "";
+                record["quota_name"] = name ?? "";
+                record["quota_unit"] = unit ?? "";
+                if (!String.IsNullOrWhiteSpace(price))
+                {
+                    record["base_price"] = price.Trim();
+                }
                 record["project_count"] = "0";
                 record["source"] = "user";
                 record["deleted"] = "1";
                 record["last_seen"] = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
                 string path = Path.Combine(LearningStore.FindDataDir(), "chapter-quota-library.jsonl");
                 File.AppendAllText(path, LearningStore.ToJson(record) + Environment.NewLine, Encoding.UTF8);
-                ApplyPoolMutationToActiveStores(MethodKey, methodNo, entryCode, kind, code.Trim(), false);
+                ApplyPoolMutationToActiveStores(MethodKey, methodNo, entryCode, kind, code.Trim(), name, unit, price, false);
                 QuotaRecommendPanel.Log("ChapterLibrary user quota removed. methodNo=" + methodNo + " entry=" + entryCode + " code=" + code);
             }
             catch (Exception ex)
