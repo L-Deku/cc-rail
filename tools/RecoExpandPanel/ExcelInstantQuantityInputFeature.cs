@@ -40,7 +40,7 @@ namespace RecoNet
         {
             private const int PollIntervalMs = 100;
             private const int ReconnectDelayMs = 2000;
-            private const int SpreadsheetReadThrottleMs = 160;
+            private const int SpreadsheetReadThrottleMs = 350;
             private readonly Form mainForm;
             private readonly Timer pollTimer;
             private readonly ToolTip statusTip;
@@ -62,6 +62,7 @@ namespace RecoNet
             private DateTime nextConnectionAttemptUtc = DateTime.MinValue;
             private DateTime nextSpreadsheetReadUtc = DateTime.MinValue;
             private DateTime lastForegroundSkipLogUtc = DateTime.MinValue;
+            private DateTime lastSpreadsheetReadFailureLogUtc = DateTime.MinValue;
             private InstantStatusPopup enabledPopup;
 
             public ExcelInstantQuantityInputRuntime(Form mainForm)
@@ -443,8 +444,6 @@ namespace RecoNet
                     if (!IsSpreadsheetForegroundCandidate())
                     {
                         LogForegroundSkip();
-                        wasSpreadsheetForeground = false;
-                        return;
                     }
 
                     DateTime now = DateTime.UtcNow;
@@ -458,6 +457,7 @@ namespace RecoNet
                     string error;
                     if (!TryReadActiveSpreadsheetCell(out cell, out error))
                     {
+                        LogSpreadsheetReadFailure(error);
                         wasSpreadsheetForeground = false;
                         return;
                     }
@@ -963,6 +963,18 @@ namespace RecoNet
                 catch
                 {
                 }
+            }
+
+            private void LogSpreadsheetReadFailure(string error)
+            {
+                DateTime now = DateTime.UtcNow;
+                if ((now - lastSpreadsheetReadFailureLogUtc).TotalMilliseconds < 2000)
+                {
+                    return;
+                }
+
+                lastSpreadsheetReadFailureLogUtc = now;
+                Log("Excel instant quantity read active cell failed: " + (error ?? ""));
             }
 
             private bool IsMainFormForeground()
