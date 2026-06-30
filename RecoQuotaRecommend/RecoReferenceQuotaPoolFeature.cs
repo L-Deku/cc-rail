@@ -74,6 +74,7 @@ namespace RecoQuotaRecommend
             private List<PoolItem> displayedItems = new List<PoolItem>(); // 与 refGrid 行一一对应，供删除取 code/kind
             private TreeView tree;
             private string currentKey;
+            private string lastScopeDiag; // 诊断：仅在条目解析结果变化时记录，定位某些项目不显示定额
             private bool disposed;
 
             public Runtime(Form mainForm, DataGridView grid)
@@ -352,11 +353,16 @@ namespace RecoQuotaRecommend
                 }
                 string entryName;
                 string entryCode = ResolveCurrentChapterNo(conn, out entryName);
-                if (String.IsNullOrWhiteSpace(entryCode))
+                EntryScope scope = String.IsNullOrWhiteSpace(entryCode) ? null : chapterLibrary.ResolveScope(entryCode, entryName);
+                string diag = "entryCode=" + (entryCode ?? "<null>") + " entryName=" + (entryName ?? "")
+                    + " scope=" + (scope == null ? "<null>" : scope.MatchedEntryCode)
+                    + " pool=" + (scope != null && poolByEntry.ContainsKey(scope.MatchedEntryCode) ? poolByEntry[scope.MatchedEntryCode].Count : 0).ToString(CultureInfo.InvariantCulture);
+                if (diag != lastScopeDiag)
                 {
-                    return null;
+                    lastScopeDiag = diag;
+                    QuotaRecommendPanel.Log("Reference scope diag: " + diag);
                 }
-                return chapterLibrary.ResolveScope(entryCode, entryName);
+                return scope;
             }
 
             private void UpdateEntryLabel(EntryScope scope)
@@ -716,6 +722,7 @@ namespace RecoQuotaRecommend
                     return cached;
                 }
                 bool matches = true;
+                string projectMethodNo = "";
                 try
                 {
                     EnsureConnectionOpen(conn);
@@ -724,10 +731,10 @@ namespace RecoQuotaRecommend
                         // select 编制办法文号 from 项目信息
                         cmd.CommandText = "select \u7f16\u5236\u529e\u6cd5\u6587\u53f7 from \u9879\u76ee\u4fe1\u606f";
                         object result = cmd.ExecuteScalar();
-                        string methodNo = result == null || result == DBNull.Value ? "" : Convert.ToString(result, CultureInfo.InvariantCulture).Trim();
-                        if (!String.IsNullOrEmpty(methodNo))
+                        projectMethodNo = result == null || result == DBNull.Value ? "" : Convert.ToString(result, CultureInfo.InvariantCulture).Trim();
+                        if (!String.IsNullOrEmpty(projectMethodNo))
                         {
-                            matches = String.Equals(NormalizeMethodNo(methodNo), NormalizeMethodNo(chapterLibrary.MethodNo), StringComparison.OrdinalIgnoreCase);
+                            matches = String.Equals(NormalizeMethodNo(projectMethodNo), NormalizeMethodNo(chapterLibrary.MethodNo), StringComparison.OrdinalIgnoreCase);
                         }
                     }
                 }
@@ -735,6 +742,7 @@ namespace RecoQuotaRecommend
                 {
                     QuotaRecommendPanel.Log("Reference quota project method check failed (treat as match): " + ex.Message);
                 }
+                QuotaRecommendPanel.Log("Reference method check: db=" + dbName + " projectMethodNo=[" + projectMethodNo + "] libMethodNo=[" + chapterLibrary.MethodNo + "] matches=" + matches.ToString());
                 methodCache[dbName] = matches;
                 return matches;
             }
