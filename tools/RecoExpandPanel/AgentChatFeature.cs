@@ -599,7 +599,7 @@ namespace RecoNet
                 {
                     previewGrid.Rows.Add(
                         row.Action,
-                        row.UnitId > 0 ? row.UnitId.ToString(CultureInfo.InvariantCulture) : "",
+                        AgentUnitDisplay(plan.UnitCodes, row.UnitId),
                         row.ItemNo ?? "",
                         row.QuotaCode ?? "",
                         row.OldValue ?? "",
