@@ -346,9 +346,10 @@ namespace RecoNet
                         continue;
                     }
 
+                    diag.Add("[" + String.Join(",", table.Columns.Cast<DataColumn>().Select(c => c.ColumnName).ToArray()) + "]");
+
                     if (!table.Columns.Contains("总概算序号") || !table.Columns.Contains("总概算编号"))
                     {
-                        diag.Add("[" + String.Join(",", table.Columns.Cast<DataColumn>().Select(c => c.ColumnName).ToArray()) + "]");
                         continue;
                     }
 
@@ -372,14 +373,12 @@ namespace RecoNet
                             map[sn] = code;
                         }
                     }
-
-                    if (map.Count > 0)
-                    {
-                        return map;
-                    }
                 }
 
-                Log("Agent unit map: no combo bound to 总概算序号+总概算编号. Combo tables: " + String.Join(" ", diag.ToArray()));
+                if (map.Count == 0)
+                {
+                    Log("Agent unit map: no usable 总概算 combo. comboTables=" + String.Join(" ", diag.ToArray()));
+                }
             }
             catch (Exception ex)
             {
