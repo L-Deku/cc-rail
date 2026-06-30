@@ -41,6 +41,9 @@ namespace RecoNet
             private const int PollIntervalMs = 100;
             private const int ReconnectDelayMs = 2000;
             private const int SpreadsheetReadThrottleMs = 350;
+            private const int StatusRepeatThrottleMs = 1500;
+            private static readonly bool ExcelInstantDebugLogEnabled =
+                String.Equals(Environment.GetEnvironmentVariable("RECO_EXCEL_INSTANT_DEBUG"), "1", StringComparison.OrdinalIgnoreCase);
             private readonly Form mainForm;
             private readonly Timer pollTimer;
             private readonly ToolTip statusTip;
@@ -229,11 +232,12 @@ namespace RecoNet
                 bool changed = !SameTargets(quantityTargets, selectedTargets);
                 quantityTargets.Clear();
                 quantityTargets.AddRange(selectedTargets);
+                bool appliedReusable = false;
                 if (changed)
                 {
                     if (enabled)
                     {
-                        ArmSpreadsheetSelectionForCurrentTarget();
+                        appliedReusable = ArmSpreadsheetSelectionForCurrentTarget();
                     }
                     else
                     {
@@ -243,7 +247,7 @@ namespace RecoNet
                         waitingForSoftwareBlur = false;
                     }
 
-                    if (notify)
+                    if (notify && !appliedReusable)
                     {
                         ShowStatus(BuildTargetStatusMessage());
                     }
@@ -254,14 +258,14 @@ namespace RecoNet
                 }
             }
 
-            private void ArmSpreadsheetSelectionForCurrentTarget()
+            private bool ArmSpreadsheetSelectionForCurrentTarget()
             {
                 wasSpreadsheetForeground = false;
                 suppressSpreadsheetPollingUntilSoftwareFocus = false;
                 nextSpreadsheetReadUtc = DateTime.MinValue;
                 if (TryApplyReusableSpreadsheetCellToCurrentTarget())
                 {
-                    return;
+                    return true;
                 }
 
                 if (!hasReusableSpreadsheetSelection)
@@ -272,6 +276,7 @@ namespace RecoNet
                 waitingForSpreadsheetClick = true;
                 awaitingSpreadsheetActivation = true;
                 waitingForSoftwareBlur = !hasReusableSpreadsheetSelection;
+                return false;
             }
 
             private void ClearQuantityTargets()
@@ -550,7 +555,7 @@ namespace RecoNet
                 if (!TryEvaluateQuantity(excelCell.ValueText, out quantity))
                 {
                     ShowStatus("\u5df2\u8df3\u8fc7\uff1aExcel\u5f53\u524d\u5355\u5143\u683c\u4e0d\u662f\u6709\u6548\u6570\u503c\u3002");
-                    Log("Excel instant quantity skipped nonnumeric: " + excelCell.Key + " value=" + excelCell.ValueText);
+                    DebugLog("Excel instant quantity skipped nonnumeric: " + excelCell.Key + " value=" + excelCell.ValueText);
                     return false;
                 }
 
@@ -580,7 +585,7 @@ namespace RecoNet
                     if (!blankQuotaWithoutUnit && !TryConvertQuantity(quantity, excelCell.UnitText, quotaUnit, out converted))
                     {
                         skipped++;
-                        Log("Excel instant quantity blocked unit mismatch: row=" + target.RowIndex.ToString(CultureInfo.InvariantCulture)
+                        DebugLog("Excel instant quantity blocked unit mismatch: row=" + target.RowIndex.ToString(CultureInfo.InvariantCulture)
                             + " col=" + target.ColumnIndex.ToString(CultureInfo.InvariantCulture)
                             + " excel=" + excelCell.Key
                             + " value=" + excelCell.ValueText
@@ -598,7 +603,7 @@ namespace RecoNet
 
                     WriteQuantity(row, target.ColumnIndex, valueText, writeValue);
                     applied++;
-                    Log("Excel instant quantity applied: row=" + target.RowIndex.ToString(CultureInfo.InvariantCulture)
+                    DebugLog("Excel instant quantity applied: row=" + target.RowIndex.ToString(CultureInfo.InvariantCulture)
                         + " col=" + target.ColumnIndex.ToString(CultureInfo.InvariantCulture)
                         + " excel=" + excelCell.Key
                         + " value=" + excelCell.ValueText
@@ -668,108 +673,83 @@ namespace RecoNet
                 DataRowView rowView = row.DataBoundItem as DataRowView;
                 DataRow dataRow = rowView == null ? null : rowView.Row;
                 bool wroteInput = false;
-                DataGridViewCell previousCell = grid.CurrentCell;
-                int firstDisplayedRowIndex = -1;
-                int horizontalOffset = 0;
-                try
-                {
-                    firstDisplayedRowIndex = grid.FirstDisplayedScrollingRowIndex;
-                    horizontalOffset = grid.HorizontalScrollingOffset;
-                }
-                catch
-                {
-                }
-
-                if (dataRow != null && dataRow.Table != null)
-                {
-                    wroteInput = TrySetDataRowValue(dataRow, "\u5de5\u7a0b\u6570\u91cf\u8f93\u5165", valueText);
-                    if (!wroteInput)
-                    {
-                        DataGridViewColumn visibleColumn = grid.Columns[visibleColumnIndex];
-                        string boundName = String.IsNullOrEmpty(visibleColumn.DataPropertyName)
-                            ? visibleColumn.Name
-                            : visibleColumn.DataPropertyName;
-                        wroteInput = TrySetDataRowValue(dataRow, boundName, valueText);
-                    }
-
-                    TrySetDataRowValue(dataRow, "\u5de5\u7a0b\u6570\u91cf", numericValue);
-                }
-
-                if (!wroteInput)
-                {
-                    row.Cells[visibleColumnIndex].Value = valueText;
-                }
+                Stopwatch stopwatch = ExcelInstantDebugLogEnabled ? Stopwatch.StartNew() : null;
 
                 try
                 {
                     applyingQuantity = true;
-                    grid.CurrentCell = row.Cells[visibleColumnIndex];
-                    if (grid.IsCurrentCellDirty)
+
+                    try
                     {
-                        grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+                        if (grid.IsCurrentCellInEditMode)
+                        {
+                            grid.EndEdit();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log("Excel instant quantity end edit before write failed: " + ex.Message);
                     }
 
-                    grid.EndEdit();
-                    BindingSource bindingSource = grid.DataSource as BindingSource;
-                    if (bindingSource != null)
+                    if (dataRow != null && dataRow.Table != null)
                     {
-                        bindingSource.EndEdit();
+                        bool editing = false;
+                        try
+                        {
+                            dataRow.BeginEdit();
+                            editing = true;
+                            wroteInput = TrySetDataRowValue(dataRow, "\u5de5\u7a0b\u6570\u91cf\u8f93\u5165", valueText);
+                            if (!wroteInput)
+                            {
+                                DataGridViewColumn visibleColumn = grid.Columns[visibleColumnIndex];
+                                string boundName = String.IsNullOrEmpty(visibleColumn.DataPropertyName)
+                                    ? visibleColumn.Name
+                                    : visibleColumn.DataPropertyName;
+                                wroteInput = TrySetDataRowValue(dataRow, boundName, valueText);
+                            }
+
+                            TrySetDataRowValue(dataRow, "\u5de5\u7a0b\u6570\u91cf", numericValue);
+                        }
+                        finally
+                        {
+                            if (editing)
+                            {
+                                try
+                                {
+                                    dataRow.EndEdit();
+                                }
+                                catch (Exception ex)
+                                {
+                                    Log("Excel instant quantity data row end edit failed: " + ex.Message);
+                                }
+                            }
+                        }
                     }
 
-                    CurrencyManager manager = grid.BindingContext == null
-                        ? null
-                        : grid.BindingContext[grid.DataSource] as CurrencyManager;
-                    if (manager != null)
+                    if (!wroteInput)
                     {
-                        manager.EndCurrentEdit();
+                        row.Cells[visibleColumnIndex].Value = valueText;
                     }
 
-                    grid.InvalidateCell(visibleColumnIndex, row.Index);
-                    RestoreGridViewPosition(previousCell, firstDisplayedRowIndex, horizontalOffset);
-                }
-                catch (Exception ex)
-                {
-                    Log("Excel instant quantity commit failed: " + ex.Message);
+                    try
+                    {
+                        grid.InvalidateCell(visibleColumnIndex, row.Index);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log("Excel instant quantity refresh cell failed: " + ex.Message);
+                    }
                 }
                 finally
                 {
                     applyingQuantity = false;
-                }
-            }
-
-            private void RestoreGridViewPosition(DataGridViewCell previousCell, int firstDisplayedRowIndex, int horizontalOffset)
-            {
-                if (grid == null || grid.IsDisposed)
-                {
-                    return;
-                }
-
-                try
-                {
-                    if (previousCell != null &&
-                        previousCell.RowIndex >= 0 &&
-                        previousCell.RowIndex < grid.Rows.Count &&
-                        previousCell.ColumnIndex >= 0 &&
-                        previousCell.ColumnIndex < grid.Columns.Count)
+                    if (stopwatch != null)
                     {
-                        grid.CurrentCell = grid.Rows[previousCell.RowIndex].Cells[previousCell.ColumnIndex];
+                        stopwatch.Stop();
+                        DebugLog("Excel instant quantity write elapsed: row=" + row.Index.ToString(CultureInfo.InvariantCulture) +
+                            " col=" + visibleColumnIndex.ToString(CultureInfo.InvariantCulture) +
+                            " ms=" + stopwatch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture));
                     }
-
-                    if (firstDisplayedRowIndex >= 0 &&
-                        firstDisplayedRowIndex < grid.Rows.Count &&
-                        !grid.Rows[firstDisplayedRowIndex].IsNewRow)
-                    {
-                        grid.FirstDisplayedScrollingRowIndex = firstDisplayedRowIndex;
-                    }
-
-                    if (horizontalOffset >= 0)
-                    {
-                        grid.HorizontalScrollingOffset = horizontalOffset;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log("Excel instant quantity restore view failed: " + ex.Message);
                 }
             }
 
@@ -977,7 +957,7 @@ namespace RecoNet
                         }
                     }
 
-                    Log("Excel instant quantity waiting skipped foreground: pid=" +
+                    DebugLog("Excel instant quantity waiting skipped foreground: pid=" +
                         foregroundPid.ToString(CultureInfo.InvariantCulture) +
                         " process=" + processName +
                         " class=" + GetWindowClassName(foreground));
@@ -996,7 +976,7 @@ namespace RecoNet
                 }
 
                 lastSpreadsheetReadFailureLogUtc = now;
-                Log("Excel instant quantity read active cell failed: " + (error ?? ""));
+                DebugLog("Excel instant quantity read active cell failed: " + (error ?? ""));
             }
 
             private bool IsMainFormForeground()
@@ -1226,14 +1206,14 @@ namespace RecoNet
             {
                 DateTime now = DateTime.UtcNow;
                 if (String.Equals(lastStatusMessage, message, StringComparison.Ordinal) &&
-                    (now - lastStatusUtc).TotalMilliseconds < 600)
+                    (now - lastStatusUtc).TotalMilliseconds < StatusRepeatThrottleMs)
                 {
                     return;
                 }
 
                 lastStatusMessage = message;
                 lastStatusUtc = now;
-                Log("Excel instant quantity status: " + message);
+                DebugLog("Excel instant quantity status: " + message);
                 Control owner = grid != null && !grid.IsDisposed && grid.Visible ? (Control)grid : (Control)mainForm;
                 if (owner == null || owner.IsDisposed)
                 {
@@ -1246,6 +1226,14 @@ namespace RecoNet
                 }
                 catch
                 {
+                }
+            }
+
+            private static void DebugLog(string message)
+            {
+                if (ExcelInstantDebugLogEnabled)
+                {
+                    Log(message);
                 }
             }
 
