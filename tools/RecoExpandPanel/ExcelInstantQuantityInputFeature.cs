@@ -55,6 +55,7 @@ namespace RecoNet
             private bool waitingForSoftwareBlur;
             private bool hasReusableSpreadsheetSelection;
             private bool applyingQuantity;
+            private bool suppressSpreadsheetPollingUntilSoftwareFocus;
             private InstantExcelCell reusableSpreadsheetCell;
             private string lastStatusMessage = "";
             private DateTime lastStatusUtc = DateTime.MinValue;
@@ -256,6 +257,7 @@ namespace RecoNet
             private void ArmSpreadsheetSelectionForCurrentTarget()
             {
                 wasSpreadsheetForeground = false;
+                suppressSpreadsheetPollingUntilSoftwareFocus = false;
                 nextSpreadsheetReadUtc = DateTime.MinValue;
                 if (TryApplyReusableSpreadsheetCellToCurrentTarget())
                 {
@@ -280,6 +282,7 @@ namespace RecoNet
                 waitingForSoftwareBlur = false;
                 wasSpreadsheetForeground = false;
                 lastExcelKey = "";
+                suppressSpreadsheetPollingUntilSoftwareFocus = false;
             }
 
             private void ClearSpreadsheetSelectionCache()
@@ -288,6 +291,7 @@ namespace RecoNet
                 hasReusableSpreadsheetSelection = false;
                 reusableSpreadsheetCell = null;
                 nextSpreadsheetReadUtc = DateTime.MinValue;
+                suppressSpreadsheetPollingUntilSoftwareFocus = false;
             }
 
             private bool TryApplyReusableSpreadsheetCellToCurrentTarget()
@@ -300,6 +304,7 @@ namespace RecoNet
                 waitingForSpreadsheetClick = true;
                 awaitingSpreadsheetActivation = false;
                 waitingForSoftwareBlur = false;
+                suppressSpreadsheetPollingUntilSoftwareFocus = false;
                 lastExcelKey = reusableSpreadsheetCell.Key;
                 ApplySpreadsheetCell(reusableSpreadsheetCell);
                 return true;
@@ -423,6 +428,17 @@ namespace RecoNet
                         return;
                     }
 
+                    if (suppressSpreadsheetPollingUntilSoftwareFocus)
+                    {
+                        if (IsMainFormForeground())
+                        {
+                            suppressSpreadsheetPollingUntilSoftwareFocus = false;
+                            wasSpreadsheetForeground = false;
+                        }
+
+                        return;
+                    }
+
                     if (hasReusableSpreadsheetSelection &&
                         !awaitingSpreadsheetActivation &&
                         IsMainFormForeground())
@@ -481,10 +497,9 @@ namespace RecoNet
 
                     lastExcelKey = cell.Key;
                     awaitingSpreadsheetActivation = false;
-                    if (ApplySpreadsheetCell(cell))
-                    {
-                        MarkSpreadsheetCellApplied(cell);
-                    }
+                    bool reusableCell = IsReusableSpreadsheetCell(cell);
+                    ApplySpreadsheetCell(cell);
+                    MarkSpreadsheetCellRead(cell, reusableCell);
                 }
                 catch (Exception ex)
                 {
@@ -492,12 +507,19 @@ namespace RecoNet
                 }
             }
 
-            private void MarkSpreadsheetCellApplied(InstantExcelCell cell)
+            private void MarkSpreadsheetCellRead(InstantExcelCell cell, bool reusableCell)
             {
-                hasReusableSpreadsheetSelection = true;
-                reusableSpreadsheetCell = cell == null ? null : cell.Clone();
+                hasReusableSpreadsheetSelection = reusableCell;
+                reusableSpreadsheetCell = reusableCell && cell != null ? cell.Clone() : null;
                 waitingForSpreadsheetClick = true;
+                suppressSpreadsheetPollingUntilSoftwareFocus = true;
                 nextSpreadsheetReadUtc = DateTime.MinValue;
+            }
+
+            private static bool IsReusableSpreadsheetCell(InstantExcelCell cell)
+            {
+                decimal quantity;
+                return cell != null && TryEvaluateQuantity(cell.ValueText, out quantity);
             }
 
             private bool HasValidTarget()
