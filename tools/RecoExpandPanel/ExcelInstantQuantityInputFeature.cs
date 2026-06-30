@@ -61,6 +61,7 @@ namespace RecoNet
             private DateTime lastToggleShortcutUtc = DateTime.MinValue;
             private DateTime nextConnectionAttemptUtc = DateTime.MinValue;
             private DateTime nextSpreadsheetReadUtc = DateTime.MinValue;
+            private DateTime lastForegroundSkipLogUtc = DateTime.MinValue;
             private InstantStatusPopup enabledPopup;
 
             public ExcelInstantQuantityInputRuntime(Form mainForm)
@@ -441,6 +442,7 @@ namespace RecoNet
 
                     if (!IsSpreadsheetForegroundCandidate())
                     {
+                        LogForegroundSkip();
                         wasSpreadsheetForeground = false;
                         return;
                     }
@@ -920,12 +922,46 @@ namespace RecoNet
                     {
                         string processName = process.ProcessName;
                         return String.Equals(processName, "EXCEL", StringComparison.OrdinalIgnoreCase) ||
-                            String.Equals(processName, "et", StringComparison.OrdinalIgnoreCase);
+                            String.Equals(processName, "et", StringComparison.OrdinalIgnoreCase) ||
+                            String.Equals(processName, "wps", StringComparison.OrdinalIgnoreCase);
                     }
                 }
                 catch
                 {
                     return false;
+                }
+            }
+
+            private void LogForegroundSkip()
+            {
+                DateTime now = DateTime.UtcNow;
+                if ((now - lastForegroundSkipLogUtc).TotalMilliseconds < 2000)
+                {
+                    return;
+                }
+
+                lastForegroundSkipLogUtc = now;
+                try
+                {
+                    IntPtr foreground = InstantGetForegroundWindow();
+                    uint foregroundPid;
+                    InstantGetWindowThreadProcessId(foreground, out foregroundPid);
+                    string processName = "";
+                    if (foregroundPid != 0)
+                    {
+                        using (Process process = Process.GetProcessById((int)foregroundPid))
+                        {
+                            processName = process.ProcessName;
+                        }
+                    }
+
+                    Log("Excel instant quantity waiting skipped foreground: pid=" +
+                        foregroundPid.ToString(CultureInfo.InvariantCulture) +
+                        " process=" + processName +
+                        " class=" + GetWindowClassName(foreground));
+                }
+                catch
+                {
                 }
             }
 
