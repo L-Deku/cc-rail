@@ -107,7 +107,7 @@ namespace RecoQuotaRecommend
             private readonly CandidatePopupForm popup;
             private readonly SearchIndexStore searchIndex;
             private readonly ChapterLibraryStore chapterLibrary;
-            private readonly Dictionary<string, bool> methodCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            private readonly Dictionary<string, string> methodNoCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             private Size rememberedPopupSize = Size.Empty;
             private bool settingPopupSize;
             private TextBox editor;
@@ -806,10 +806,10 @@ namespace RecoQuotaRecommend
                 try
                 {
                     System.Data.SqlClient.SqlConnection conn = GetField<System.Data.SqlClient.SqlConnection>(mainForm, "m_ProjectConn");
-                    if (conn != null && !ProjectUsesLibraryMethod(conn)) return null;
+                    string methodNo = ProjectMethodNo(conn);
                     string entryName;
                     string entryCode = ResolveCurrentChapterNo(conn, out entryName);
-                    return String.IsNullOrWhiteSpace(entryCode) ? null : chapterLibrary.ResolveScope(entryCode, entryName);
+                    return String.IsNullOrWhiteSpace(entryCode) ? null : chapterLibrary.ResolveScope(methodNo, entryCode, entryName);
                 }
                 catch (Exception ex)
                 {
@@ -818,15 +818,15 @@ namespace RecoQuotaRecommend
                 }
             }
 
-            private bool ProjectUsesLibraryMethod(System.Data.SqlClient.SqlConnection conn)
+            private string ProjectMethodNo(System.Data.SqlClient.SqlConnection conn)
             {
-                if (conn == null || String.IsNullOrWhiteSpace(chapterLibrary.MethodNo)) return true;
+                if (conn == null) return "";
                 string dbName;
                 try { dbName = conn.Database ?? ""; }
-                catch { return true; }
-                bool cached;
-                if (methodCache.TryGetValue(dbName, out cached)) return cached;
-                bool matches = true;
+                catch { return ""; }
+                string cached;
+                if (methodNoCache.TryGetValue(dbName, out cached)) return cached;
+                string methodNo = "";
                 try
                 {
                     EnsureConnectionOpen(conn);
@@ -834,16 +834,15 @@ namespace RecoQuotaRecommend
                     {
                         cmd.CommandText = "select \u7f16\u5236\u529e\u6cd5\u6587\u53f7 from \u9879\u76ee\u4fe1\u606f";
                         object result = cmd.ExecuteScalar();
-                        string methodNo = result == null || result == DBNull.Value ? "" : Convert.ToString(result, CultureInfo.InvariantCulture).Trim();
-                        if (!String.IsNullOrEmpty(methodNo)) matches = String.Equals(NormalizeMethodNo(methodNo), NormalizeMethodNo(chapterLibrary.MethodNo), StringComparison.OrdinalIgnoreCase);
+                        methodNo = result == null || result == DBNull.Value ? "" : Convert.ToString(result, CultureInfo.InvariantCulture).Trim();
                     }
                 }
                 catch (Exception ex)
                 {
-                    QuotaRecommendPanel.Log("Inline quota project method check failed (treat as match): " + ex.Message);
+                    QuotaRecommendPanel.Log("Inline quota project methodNo query failed: " + ex.Message);
                 }
-                methodCache[dbName] = matches;
-                return matches;
+                methodNoCache[dbName] = methodNo;
+                return methodNo;
             }
 
             private string ResolveCurrentChapterNo(System.Data.SqlClient.SqlConnection conn, out string entryName)

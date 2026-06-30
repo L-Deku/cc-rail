@@ -105,6 +105,28 @@ function Assert-NativeSuccess {
   }
 }
 
+function Assert-DllContainsText {
+  param(
+    [string]$Path,
+    [string]$FeatureName,
+    [string[]]$Markers
+  )
+
+  if (-not (Test-Path -LiteralPath $Path)) {
+    throw "Missing DLL for feature check: $Path"
+  }
+
+  $bytes = [System.IO.File]::ReadAllBytes($Path)
+  $text = [System.Text.Encoding]::Unicode.GetString($bytes) + "`n" + [System.Text.Encoding]::UTF8.GetString($bytes)
+  foreach ($marker in $Markers) {
+    if ($text.Contains($marker)) {
+      return
+    }
+  }
+
+  throw "Build output $Path does not contain required feature '$FeatureName'. Check tools\RecoExpandPanel source files before deploying."
+}
+
 $targets = New-Object System.Collections.ArrayList
 Get-ChildItem -LiteralPath $root -Directory -Recurse |
   Where-Object {
@@ -195,6 +217,9 @@ Assert-NativeSuccess "Build RecoPluginLoader"
   /reference:$sharpZipLib `
   $expandSources
 Assert-NativeSuccess "Build RecoExpandPanel"
+Assert-DllContainsText -Path $expandOut -FeatureName "Excel quantity instant input" -Markers @("ExcelInstantQuantityInputRuntime")
+Assert-DllContainsText -Path $expandOut -FeatureName "Template fill" -Markers @("TemplateFillPanel", "模板铺量")
+Assert-DllContainsText -Path $expandOut -FeatureName "Agent chat" -Markers @("AgentChat")
 
 Copy-Item -LiteralPath $npoi -Destination $outDir -Force
 Copy-Item -LiteralPath $npoiOoxml -Destination $outDir -Force

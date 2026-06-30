@@ -270,6 +270,11 @@ namespace ChapterQuotaLibrary
             {
                 code = code.Substring(0, times);
             }
+            int slash = code.LastIndexOf('/');
+            if (slash > 0 && slash < code.Length - 1 && code.Substring(slash + 1).All(Char.IsDigit))
+            {
+                code = code.Substring(0, slash);
+            }
 
             return code.Trim();
         }
@@ -872,7 +877,10 @@ namespace ChapterQuotaLibrary
                     }
                     if (String.Equals(source, "user", StringComparison.OrdinalIgnoreCase))
                     {
-                        currentUserRows.Add(line);
+                        if (ShouldKeepLibraryRecord(values, template, resolveDict))
+                        {
+                            currentUserRows.Add(line);
+                        }
                     }
                 }
             }
@@ -898,6 +906,10 @@ namespace ChapterQuotaLibrary
                 int nonSeedBudget = Math.Max(0, maxPool - codes.Count(c => c.Seed));
                 foreach (PoolCode code in codes)
                 {
+                    if (!ShouldKeepPoolCodeForEntry(entry.Name, code, resolveDict))
+                    {
+                        continue;
+                    }
                     if (!code.Seed)
                     {
                         if (nonSeedBudget <= 0)
@@ -945,6 +957,64 @@ namespace ChapterQuotaLibrary
             File.WriteAllLines(Path.Combine(reportDir, "unresolved-codes-" + spec.Key + ".csv"),
                 new[] { "kind,code,observed_name,entry_code" }.Concat(unresolved.Distinct()).ToArray(), Encoding.UTF8);
             Console.WriteLine("[" + spec.Key + "] library lines written: " + written + " -> " + libraryPath);
+        }
+
+        private static bool ShouldKeepPoolCodeForEntry(string entryName, PoolCode code, Dictionary<string, ResolvedNameUnit> resolveDict)
+        {
+            if (code == null)
+            {
+                return false;
+            }
+            if (IsEquipmentPurchaseEntry(entryName))
+            {
+                return String.Equals(code.Code ?? "", "SF", StringComparison.OrdinalIgnoreCase);
+            }
+            return IsRealQuotaCode(code.Kind, code.Code, resolveDict);
+        }
+
+        private static bool ShouldKeepLibraryRecord(Dictionary<string, string> values, Dictionary<string, TemplateEntry> template, Dictionary<string, ResolvedNameUnit> resolveDict)
+        {
+            if (FlatJson.Get(values, "deleted").Trim() == "1")
+            {
+                return true;
+            }
+
+            string entryName = FlatJson.Get(values, "entry_name").Trim();
+            TemplateEntry entry;
+            if (String.IsNullOrEmpty(entryName) &&
+                template.TryGetValue(FlatJson.Get(values, "entry_code").Trim(), out entry))
+            {
+                entryName = entry.Name;
+            }
+
+            if (!IsEquipmentPurchaseEntry(entryName))
+            {
+                return IsRealQuotaCode(FlatJson.Get(values, "target_kind").Trim(), FlatJson.Get(values, "quota_code").Trim(), resolveDict);
+            }
+            return String.Equals(FlatJson.Get(values, "quota_code").Trim(), "SF", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsRealQuotaCode(string kind, string code, Dictionary<string, ResolvedNameUnit> resolveDict)
+        {
+            if (!String.Equals((kind ?? "").Trim(), "quota", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            if (String.IsNullOrWhiteSpace(code) || resolveDict == null)
+            {
+                return false;
+            }
+            string normalizedCode = code.Trim();
+            if (resolveDict.ContainsKey(CodeKey("quota", normalizedCode)))
+            {
+                return true;
+            }
+            return false;
+        }
+
+        private static bool IsEquipmentPurchaseEntry(string entryName)
+        {
+            return (entryName ?? "").IndexOf("设备购置费", StringComparison.Ordinal) >= 0;
         }
 
         private static void WriteEntrySummary(MethodSpec spec, Dictionary<string, TemplateEntry> template,

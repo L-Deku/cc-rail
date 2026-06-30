@@ -3257,7 +3257,7 @@ namespace RecoQuotaRecommend
         private EntryScope currentEntryScope;
         private string lastScopeKeyUsed;
         // 项目数据库 → 是否按本库编制办法编制（QD/其他办法的项目不做条目过滤）
-        private readonly Dictionary<string, bool> projectMethodCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> projectMethodNoCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         public RecommendDialog(Form owner, string initialQuery)
         {
@@ -3508,13 +3508,14 @@ namespace RecoQuotaRecommend
                 if (chapterLibrary != null && !chapterLibrary.IsEmpty)
                 {
                     System.Data.SqlClient.SqlConnection conn = GetField<System.Data.SqlClient.SqlConnection>(mainForm, "m_ProjectConn");
-                    if (conn != null && ProjectUsesLibraryMethod(conn))
+                    if (conn != null)
                     {
+                        string methodNo = ProjectMethodNo(conn);
                         string projectEntryName;
                         string projectEntryCode = ResolveCurrentChapterNo(conn, out projectEntryName);
                         if (!String.IsNullOrEmpty(projectEntryCode))
                         {
-                            currentEntryScope = chapterLibrary.ResolveScope(projectEntryCode, projectEntryName);
+                            currentEntryScope = chapterLibrary.ResolveScope(methodNo, projectEntryCode, projectEntryName);
                         }
                     }
                 }
@@ -3529,7 +3530,7 @@ namespace RecoQuotaRecommend
         }
 
         // 当前项目是否按本库的编制办法编制（QD 清单变体等其他办法 ⇒ 不做条目过滤）
-        private bool ProjectUsesLibraryMethod(System.Data.SqlClient.SqlConnection conn)
+        private string ProjectMethodNo(System.Data.SqlClient.SqlConnection conn)
         {
             string dbName;
             try
@@ -3538,21 +3539,21 @@ namespace RecoQuotaRecommend
             }
             catch
             {
-                return false;
+                return "";
             }
 
             if (String.IsNullOrWhiteSpace(dbName))
             {
-                return false;
+                return "";
             }
 
-            bool cached;
-            if (projectMethodCache.TryGetValue(dbName, out cached))
+            string cached;
+            if (projectMethodNoCache.TryGetValue(dbName, out cached))
             {
                 return cached;
             }
 
-            bool matches = true;
+            string methodNo = "";
             try
             {
                 EnsureConnectionOpen(conn);
@@ -3560,20 +3561,16 @@ namespace RecoQuotaRecommend
                 {
                     cmd.CommandText = "select 编制办法文号 from 项目信息";
                     object result = cmd.ExecuteScalar();
-                    string methodNo = result == null || result == DBNull.Value ? "" : Convert.ToString(result, CultureInfo.InvariantCulture).Trim();
-                    if (!String.IsNullOrEmpty(methodNo) && !String.IsNullOrEmpty(chapterLibrary.MethodNo))
-                    {
-                        matches = String.Equals(NormalizeMethodNo(methodNo), NormalizeMethodNo(chapterLibrary.MethodNo), StringComparison.OrdinalIgnoreCase);
-                    }
+                    methodNo = result == null || result == DBNull.Value ? "" : Convert.ToString(result, CultureInfo.InvariantCulture).Trim();
                 }
             }
             catch (Exception ex)
             {
-                QuotaRecommendPanel.Log("Project method check failed (treat as match): " + ex.Message);
+                QuotaRecommendPanel.Log("Project methodNo query failed: " + ex.Message);
             }
 
-            projectMethodCache[dbName] = matches;
-            return matches;
+            projectMethodNoCache[dbName] = methodNo;
+            return methodNo;
         }
 
         private static string NormalizeMethodNo(string text)
@@ -4183,11 +4180,6 @@ namespace RecoQuotaRecommend
             List<AiQuotaCandidate> aiCandidates = new List<AiQuotaCandidate>();
             // 人工扶正过的对应框优先（即便是模板，也按用户指定的定额显示）
             List<RecommendationRow> mapped = mappingStore.Find(item, categoryFilter, searchIndex, scope);
-            if (mapped.Count > 0)
-            {
-                stats.MappingHits++;
-                return mapped;
-            }
 
             // 模板类工程量按规则不配定额：保留工程量行，推荐定额留空，且不走 AI 补推
             if (IsFormworkQuantity(item.Name))
@@ -4256,6 +4248,17 @@ namespace RecoQuotaRecommend
                     : "DeepSeek AI\u672a\u542f\u7528\uff0c\u8bf7\u5728AI\u8bbe\u7f6e\u4e2d\u914d\u7f6e";
                 row.Source = "empty";
                 row.TargetKind = "quota";
+            }
+
+            if (mapped.Count > 0)
+            {
+                int mappedScore = mapped.Max(r => r == null ? 0 : r.Score);
+                int rowScore = row == null ? 0 : row.Score;
+                if (mappedScore >= LocalIndexDisplayScore && mappedScore >= rowScore)
+                {
+                    stats.MappingHits++;
+                    return mapped;
+                }
             }
 
             row.AiMappingCandidates = mappingCandidates;
@@ -8172,6 +8175,11 @@ namespace RecoQuotaRecommend
             {
                 value = value.Substring(0, cut);
             }
+            int slash = value.LastIndexOf('/');
+            if (slash > 0 && slash < value.Length - 1 && value.Substring(slash + 1).All(Char.IsDigit))
+            {
+                value = value.Substring(0, slash);
+            }
             value = value.Replace("参", "").Replace("换", "").Replace("借", "");
             return value.Trim();
         }
@@ -9167,6 +9175,7 @@ namespace RecoQuotaRecommend
         public string MatchedEntryCode;   // 前缀上溯后命中的库内条目编号
         public string EntryName;
         public string Method;             // "2020" / "2024"
+        public string MethodNo;           // 项目编制办法文号，用于区分 30号文/101号文/2024 等条目池
         public HashSet<string> PoolKeys;  // "kind:CODE"（大写）
 
         public bool Strict
@@ -9221,12 +9230,14 @@ namespace RecoQuotaRecommend
         private readonly Dictionary<string, HashSet<string>> pools = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         // 规范化条目名称 → 小计/指标条目编号列表（识别用户复制条目的来源）
         private readonly Dictionary<string, List<string>> nameIndex = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        private static readonly object ActiveStoresLock = new object();
+        private static readonly List<ChapterLibraryStore> ActiveStores = new List<ChapterLibraryStore>();
         public string MethodKey = "";
         public string MethodNo = "";
 
         public bool IsEmpty
         {
-            get { return entryNames.Count == 0; }
+            get { return entryNames.Count == 0 && pools.Count == 0; }
         }
 
         public static ChapterLibraryStore Load()
@@ -9268,10 +9279,7 @@ namespace RecoQuotaRecommend
                     }
                 }
 
-                if (store.entryNames.Count == 0)
-                {
-                    return store;
-                }
+                HashSet<string> validQuotaCodes = LoadReferenceQuotaCodes(dataDir);
 
                 foreach (string line in File.ReadAllLines(libraryPath, Encoding.UTF8))
                 {
@@ -9287,23 +9295,41 @@ namespace RecoQuotaRecommend
                     }
 
                     string entryCode = LearningStore.Get(values, "entry_code").Trim();
-                    string code = LearningStore.Get(values, "quota_code").Trim();
-                    if (String.IsNullOrEmpty(entryCode) || String.IsNullOrEmpty(code) || !store.entryNames.ContainsKey(entryCode))
+                    string code = QuotaEntry.NormalizeCode(LearningStore.Get(values, "quota_code").Trim());
+                    string methodNo = LearningStore.Get(values, "method_no").Trim();
+                    string targetKind = LearningStore.Get(values, "target_kind").Trim();
+                    if (String.IsNullOrEmpty(entryCode) || String.IsNullOrEmpty(code))
+                    {
+                        continue;
+                    }
+                    if (String.IsNullOrEmpty(store.MethodNo) && !String.IsNullOrEmpty(methodNo))
+                    {
+                        store.MethodNo = methodNo;
+                    }
+
+                    string entryName = LearningStore.Get(values, "entry_name").Trim();
+                    string knownEntryName;
+                    if (String.IsNullOrEmpty(entryName) && store.entryNames.TryGetValue(entryCode, out knownEntryName))
+                    {
+                        entryName = knownEntryName;
+                    }
+                    if (!IsAllowedReferencePoolCode(entryName, targetKind, code, validQuotaCodes))
                     {
                         continue;
                     }
 
                     if (LearningStore.Get(values, "deleted").Trim() == "1")
                     {
-                        store.RemovePoolKey(entryCode, LearningStore.Get(values, "target_kind"), code);
+                        store.RemovePoolKey(methodNo, entryCode, ReferencePoolKind(entryName, targetKind, code), code);
                     }
                     else
                     {
-                        store.AddPoolKey(entryCode, LearningStore.Get(values, "target_kind"), code);
+                        store.AddPoolKey(methodNo, entryCode, ReferencePoolKind(entryName, targetKind, code), code);
                     }
                 }
 
                 store.BuildNameIndex();
+                RegisterActiveStore(store);
                 QuotaRecommendPanel.Log("ChapterLibraryStore loaded. method=" + store.MethodKey + " entries=" + store.entryNames.Count.ToString(CultureInfo.InvariantCulture) + " pooledEntries=" + store.pools.Count.ToString(CultureInfo.InvariantCulture));
             }
             catch (Exception ex)
@@ -9344,29 +9370,179 @@ namespace RecoQuotaRecommend
             return "2020";
         }
 
-        private void AddPoolKey(string entryCode, string kind, string code)
+        private static string NormalizePoolMethodNo(string text)
+        {
+            return (text ?? "").Replace('\u2013', '-').Replace('\u2014', '-').Replace('\uff0d', '-').Replace(" ", "").Trim();
+        }
+
+        private string EffectiveMethodNo(string methodNo)
+        {
+            return String.IsNullOrWhiteSpace(methodNo) ? (MethodNo ?? "") : methodNo.Trim();
+        }
+
+        private static string PoolKey(string methodNo, string entryCode)
+        {
+            return NormalizePoolMethodNo(methodNo) + "|" + ((entryCode ?? "").Trim());
+        }
+
+        private static HashSet<string> LoadReferenceQuotaCodes(string dataDir)
+        {
+            HashSet<string> result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                string path = Path.Combine(dataDir, "quota-index.jsonl");
+                if (!File.Exists(path))
+                {
+                    return result;
+                }
+
+                foreach (string line in File.ReadLines(path, Encoding.UTF8))
+                {
+                    if (String.IsNullOrWhiteSpace(line))
+                    {
+                        continue;
+                    }
+
+                    Dictionary<string, string> values = LearningStore.ParseFlatJson(line);
+                    string code = QuotaEntry.NormalizeCode(LearningStore.Get(values, "quota_code").Trim());
+                    if (!String.IsNullOrEmpty(code))
+                    {
+                        result.Add(code.ToUpperInvariant());
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                QuotaRecommendPanel.Log("Reference quota code whitelist load failed: " + ex.Message);
+            }
+            return result;
+        }
+
+        private static bool IsEquipmentPurchaseEntry(string entryName)
+        {
+            return NormalizeEntryName(entryName).IndexOf("\u8bbe\u5907\u8d2d\u7f6e\u8d39", StringComparison.Ordinal) >= 0;
+        }
+
+        private static bool IsSfCode(string code)
+        {
+            return String.Equals(QuotaEntry.NormalizeCode(code), "SF", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsAllowedReferencePoolCode(string entryName, string targetKind, string code, HashSet<string> validQuotaCodes)
+        {
+            string normalizedCode = QuotaEntry.NormalizeCode(code);
+            if (String.IsNullOrEmpty(normalizedCode))
+            {
+                return false;
+            }
+
+            if (IsEquipmentPurchaseEntry(entryName))
+            {
+                return IsSfCode(normalizedCode);
+            }
+
+            string kind = String.IsNullOrWhiteSpace(targetKind) ? QuotaEntry.GuessKind(normalizedCode) : targetKind.Trim().ToLowerInvariant();
+            if (!String.Equals(kind, "quota", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return validQuotaCodes != null && validQuotaCodes.Contains(normalizedCode.ToUpperInvariant());
+        }
+
+        private static string ReferencePoolKind(string entryName, string targetKind, string code)
+        {
+            return "quota";
+        }
+
+        private static bool TrySplitPoolKey(string poolKey, out string methodNo, out string entryCode)
+        {
+            methodNo = "";
+            entryCode = "";
+            if (String.IsNullOrEmpty(poolKey))
+            {
+                return false;
+            }
+            int sep = poolKey.IndexOf('|');
+            if (sep < 0)
+            {
+                entryCode = poolKey;
+                return true;
+            }
+            methodNo = poolKey.Substring(0, sep);
+            entryCode = poolKey.Substring(sep + 1);
+            return !String.IsNullOrEmpty(entryCode);
+        }
+
+        private static void RegisterActiveStore(ChapterLibraryStore store)
+        {
+            if (store == null)
+            {
+                return;
+            }
+            lock (ActiveStoresLock)
+            {
+                if (!ActiveStores.Contains(store))
+                {
+                    ActiveStores.Add(store);
+                }
+            }
+        }
+
+        private static void ApplyPoolMutationToActiveStores(string methodKey, string methodNo, string entryCode, string kind, string code, bool add)
+        {
+            List<ChapterLibraryStore> stores;
+            lock (ActiveStoresLock)
+            {
+                stores = new List<ChapterLibraryStore>(ActiveStores);
+            }
+            foreach (ChapterLibraryStore store in stores)
+            {
+                if (store == null || !String.Equals(store.MethodKey, methodKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                if (add)
+                {
+                    store.AddPoolKey(methodNo, entryCode, kind, code);
+                }
+                else
+                {
+                    store.RemovePoolKey(methodNo, entryCode, kind, code);
+                }
+                store.BuildNameIndex();
+            }
+        }
+
+        private void AddPoolKey(string methodNo, string entryCode, string kind, string code)
         {
             HashSet<string> pool;
-            if (!pools.TryGetValue(entryCode, out pool))
+            string poolKey = PoolKey(methodNo, entryCode);
+            if (!pools.TryGetValue(poolKey, out pool))
             {
                 pool = new HashSet<string>(StringComparer.Ordinal);
-                pools[entryCode] = pool;
+                pools[poolKey] = pool;
             }
 
             string normalizedKind = String.IsNullOrWhiteSpace(kind) ? QuotaEntry.GuessKind(code) : kind.Trim().ToLowerInvariant();
             pool.Add(normalizedKind + ":" + code.ToUpperInvariant());
         }
 
-        private void RemovePoolKey(string entryCode, string kind, string code)
+        private void RemovePoolKey(string methodNo, string entryCode, string kind, string code)
         {
             HashSet<string> pool;
-            if (String.IsNullOrEmpty(entryCode) || String.IsNullOrEmpty(code) || !pools.TryGetValue(entryCode, out pool))
+            string poolKey = PoolKey(methodNo, entryCode);
+            if (String.IsNullOrEmpty(entryCode) || String.IsNullOrEmpty(code) || !pools.TryGetValue(poolKey, out pool))
             {
                 return;
             }
 
             string normalizedKind = String.IsNullOrWhiteSpace(kind) ? QuotaEntry.GuessKind(code) : kind.Trim().ToLowerInvariant();
             pool.Remove(normalizedKind + ":" + code.ToUpperInvariant());
+            if (pool.Count == 0)
+            {
+                pools.Remove(poolKey);
+            }
         }
 
         private static bool IsQuotaInputEntryType(string entryType)
@@ -9379,24 +9555,46 @@ namespace RecoQuotaRecommend
             return Regex.Replace(name ?? "", "[\\s　]+", "").ToLowerInvariant();
         }
 
+        private static string NameIndexKey(string methodNo, string normalizedName)
+        {
+            if (String.IsNullOrEmpty(normalizedName))
+            {
+                return "";
+            }
+            return NormalizePoolMethodNo(methodNo) + "|" + normalizedName;
+        }
+
         // 名称索引只收"小计/指标"且有池的条目——只有这两类条目有定额输入框
         private void BuildNameIndex()
         {
             nameIndex.Clear();
-            foreach (KeyValuePair<string, string> pair in entryNames)
+            foreach (KeyValuePair<string, HashSet<string>> poolPair in pools)
             {
-                string entryType;
-                HashSet<string> pool;
-                if (!entryTypes.TryGetValue(pair.Key, out entryType) || !IsQuotaInputEntryType(entryType))
-                {
-                    continue;
-                }
-                if (!pools.TryGetValue(pair.Key, out pool) || pool.Count == 0)
+                if (poolPair.Value == null || poolPair.Value.Count == 0)
                 {
                     continue;
                 }
 
-                string nameKey = NormalizeEntryName(pair.Value);
+                string methodNo;
+                string entryCode;
+                if (!TrySplitPoolKey(poolPair.Key, out methodNo, out entryCode))
+                {
+                    continue;
+                }
+
+                string entryType;
+                if (!entryTypes.TryGetValue(entryCode, out entryType) || !IsQuotaInputEntryType(entryType))
+                {
+                    continue;
+                }
+
+                string entryName;
+                if (!entryNames.TryGetValue(entryCode, out entryName))
+                {
+                    continue;
+                }
+
+                string nameKey = NameIndexKey(methodNo, NormalizeEntryName(entryName));
                 if (String.IsNullOrEmpty(nameKey))
                 {
                     continue;
@@ -9408,7 +9606,10 @@ namespace RecoQuotaRecommend
                     codes = new List<string>();
                     nameIndex[nameKey] = codes;
                 }
-                codes.Add(pair.Key);
+                if (!codes.Contains(entryCode))
+                {
+                    codes.Add(entryCode);
+                }
             }
         }
 
@@ -9416,13 +9617,19 @@ namespace RecoQuotaRecommend
         // 顺序：编号精确命中 → 按名称识别"复制条目"的来源（同祖先链优先，再全局唯一）→ 逐级前缀上溯。
         public EntryScope ResolveScope(string projectEntryCode, string projectEntryName)
         {
+            return ResolveScope(MethodNo, projectEntryCode, projectEntryName);
+        }
+
+        public EntryScope ResolveScope(string methodNo, string projectEntryCode, string projectEntryName)
+        {
+            methodNo = EffectiveMethodNo(methodNo);
             string current = (projectEntryCode ?? "").Trim();
             if (String.IsNullOrEmpty(current) || IsEmpty)
             {
                 return null;
             }
 
-            EntryScope exact = BuildScope(current, current);
+            EntryScope exact = BuildScope(methodNo, current, current, projectEntryName);
             if (exact != null)
             {
                 return exact;
@@ -9431,7 +9638,7 @@ namespace RecoQuotaRecommend
             // 编号不在库内（用户新建/复制的条目）⇒ 按名称找复制来源条目，用它的定额池
             if (!entryNames.ContainsKey(current))
             {
-                string nameKey = NormalizeEntryName(projectEntryName);
+                string nameKey = NameIndexKey(methodNo, NormalizeEntryName(projectEntryName));
                 List<string> sameName;
                 if (!String.IsNullOrEmpty(nameKey) && nameIndex.TryGetValue(nameKey, out sameName) && sameName.Count > 0)
                 {
@@ -9449,7 +9656,7 @@ namespace RecoQuotaRecommend
                         {
                             if (candidate.StartsWith(withDash, StringComparison.Ordinal) || candidate == prefix)
                             {
-                                EntryScope copied = BuildScope(current, candidate);
+                                EntryScope copied = BuildScope(methodNo, current, candidate, projectEntryName);
                                 if (copied != null)
                                 {
                                     return copied;
@@ -9460,7 +9667,7 @@ namespace RecoQuotaRecommend
 
                     if (sameName.Count == 1)
                     {
-                        EntryScope unique = BuildScope(current, sameName[0]);
+                        EntryScope unique = BuildScope(methodNo, current, sameName[0], projectEntryName);
                         if (unique != null)
                         {
                             return unique;
@@ -9473,7 +9680,7 @@ namespace RecoQuotaRecommend
             string probe = current;
             while (!String.IsNullOrEmpty(probe) && probe != "0")
             {
-                EntryScope scope = BuildScope(current, probe);
+                EntryScope scope = BuildScope(methodNo, current, probe, projectEntryName);
                 if (scope != null)
                 {
                     return scope;
@@ -9498,10 +9705,10 @@ namespace RecoQuotaRecommend
             return null;
         }
 
-        private EntryScope BuildScope(string projectEntryCode, string matchedCode)
+        private EntryScope BuildScope(string methodNo, string projectEntryCode, string matchedCode, string fallbackEntryName)
         {
             HashSet<string> pool;
-            if (!entryNames.ContainsKey(matchedCode) || !pools.TryGetValue(matchedCode, out pool) || pool.Count == 0)
+            if (!pools.TryGetValue(PoolKey(methodNo, matchedCode), out pool) || pool.Count == 0)
             {
                 return null;
             }
@@ -9509,8 +9716,10 @@ namespace RecoQuotaRecommend
             EntryScope scope = new EntryScope();
             scope.ProjectEntryCode = projectEntryCode;
             scope.MatchedEntryCode = matchedCode;
-            scope.EntryName = entryNames[matchedCode];
+            string entryName;
+            scope.EntryName = entryNames.TryGetValue(matchedCode, out entryName) && !String.IsNullOrEmpty(entryName) ? entryName : (fallbackEntryName ?? "");
             scope.Method = MethodKey;
+            scope.MethodNo = methodNo;
             scope.PoolKeys = pool;
             return scope;
         }
@@ -9518,37 +9727,70 @@ namespace RecoQuotaRecommend
         // 用户扶正/采纳了池外定额时补进池子，严格模式不与用户作对；追加 source=user 行持久化
         public void AddUserQuota(EntryScope scope, string targetKind, string code, string name, string unit)
         {
-            if (scope == null || !scope.Strict || String.IsNullOrWhiteSpace(code))
+            AddUserQuota(scope, targetKind, code, name, unit, "");
+        }
+
+        public void AddUserQuota(EntryScope scope, string targetKind, string code, string name, string unit, string price)
+        {
+            if (scope == null || String.IsNullOrEmpty(scope.MatchedEntryCode) || String.IsNullOrWhiteSpace(code))
             {
                 return;
             }
 
+            AddUserQuota(scope.MethodNo, scope.MatchedEntryCode, scope.EntryName, targetKind, code, name, unit, price);
+        }
+
+        public void AddUserQuota(string methodNo, string entryCode, string entryName, string targetKind, string code, string name, string unit)
+        {
+            AddUserQuota(methodNo, entryCode, entryName, targetKind, code, name, unit, "");
+        }
+
+        public void AddUserQuota(string methodNo, string entryCode, string entryName, string targetKind, string code, string name, string unit, string price)
+        {
+            code = QuotaEntry.NormalizeCode(code);
+            if (String.IsNullOrEmpty(entryCode) || String.IsNullOrWhiteSpace(code))
+            {
+                return;
+            }
+
+            methodNo = EffectiveMethodNo(methodNo);
             string kind = String.IsNullOrWhiteSpace(targetKind) ? QuotaEntry.GuessKind(code) : targetKind.Trim().ToLowerInvariant();
+            if (!IsAllowedReferencePoolCode(entryName, kind, code, LoadReferenceQuotaCodes(LearningStore.FindDataDir())))
+            {
+                QuotaRecommendPanel.Log("ChapterLibrary user quota ignored by reference-pool rule. entry=" + entryCode + " code=" + code + " kind=" + kind);
+                return;
+            }
+            kind = ReferencePoolKind(entryName, kind, code);
             string key = kind + ":" + code.Trim().ToUpperInvariant();
-            if (scope.PoolKeys.Contains(key))
+            HashSet<string> pool;
+            if (pools.TryGetValue(PoolKey(methodNo, entryCode), out pool) && pool.Contains(key))
             {
                 return;
             }
 
-            AddPoolKey(scope.MatchedEntryCode, kind, code.Trim());
             try
             {
                 Dictionary<string, string> record = new Dictionary<string, string>();
                 record["record_type"] = "entry_quota";
                 record["method"] = MethodKey;
-                record["method_no"] = MethodNo;
-                record["entry_code"] = scope.MatchedEntryCode;
-                record["entry_name"] = scope.EntryName ?? "";
+                record["method_no"] = methodNo;
+                record["entry_code"] = entryCode;
+                record["entry_name"] = entryName ?? "";
                 record["target_kind"] = kind;
                 record["quota_code"] = code.Trim();
                 record["quota_name"] = name ?? "";
                 record["quota_unit"] = unit ?? "";
+                if (!String.IsNullOrWhiteSpace(price))
+                {
+                    record["base_price"] = price.Trim();
+                }
                 record["project_count"] = "0";
                 record["source"] = "user";
                 record["last_seen"] = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
                 string path = Path.Combine(LearningStore.FindDataDir(), "chapter-quota-library.jsonl");
                 File.AppendAllText(path, LearningStore.ToJson(record) + Environment.NewLine, Encoding.UTF8);
-                QuotaRecommendPanel.Log("ChapterLibrary user quota added. entry=" + scope.MatchedEntryCode + " code=" + code);
+                ApplyPoolMutationToActiveStores(MethodKey, methodNo, entryCode, kind, code.Trim(), true);
+                QuotaRecommendPanel.Log("ChapterLibrary user quota added. methodNo=" + methodNo + " entry=" + entryCode + " code=" + code);
             }
             catch (Exception ex)
             {
@@ -9564,17 +9806,28 @@ namespace RecoQuotaRecommend
                 return;
             }
 
+            RemoveUserQuota(scope.MethodNo, scope.MatchedEntryCode, scope.EntryName, targetKind, code);
+        }
+
+        public void RemoveUserQuota(string methodNo, string entryCode, string entryName, string targetKind, string code)
+        {
+            code = QuotaEntry.NormalizeCode(code);
+            if (String.IsNullOrEmpty(entryCode) || String.IsNullOrWhiteSpace(code))
+            {
+                return;
+            }
+
+            methodNo = EffectiveMethodNo(methodNo);
             string kind = String.IsNullOrWhiteSpace(targetKind) ? QuotaEntry.GuessKind(code) : targetKind.Trim().ToLowerInvariant();
-            RemovePoolKey(scope.MatchedEntryCode, kind, code.Trim());
 
             try
             {
                 Dictionary<string, string> record = new Dictionary<string, string>();
                 record["record_type"] = "entry_quota";
                 record["method"] = MethodKey;
-                record["method_no"] = MethodNo;
-                record["entry_code"] = scope.MatchedEntryCode;
-                record["entry_name"] = scope.EntryName ?? "";
+                record["method_no"] = methodNo;
+                record["entry_code"] = entryCode;
+                record["entry_name"] = entryName ?? "";
                 record["target_kind"] = kind;
                 record["quota_code"] = code.Trim();
                 record["quota_name"] = "";
@@ -9585,7 +9838,8 @@ namespace RecoQuotaRecommend
                 record["last_seen"] = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
                 string path = Path.Combine(LearningStore.FindDataDir(), "chapter-quota-library.jsonl");
                 File.AppendAllText(path, LearningStore.ToJson(record) + Environment.NewLine, Encoding.UTF8);
-                QuotaRecommendPanel.Log("ChapterLibrary user quota removed. entry=" + scope.MatchedEntryCode + " code=" + code);
+                ApplyPoolMutationToActiveStores(MethodKey, methodNo, entryCode, kind, code.Trim(), false);
+                QuotaRecommendPanel.Log("ChapterLibrary user quota removed. methodNo=" + methodNo + " entry=" + entryCode + " code=" + code);
             }
             catch (Exception ex)
             {
