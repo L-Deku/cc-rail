@@ -9620,6 +9620,29 @@ namespace RecoQuotaRecommend
             return ResolveScope(MethodNo, projectEntryCode, projectEntryName);
         }
 
+        public EntryScope ResolveScopeForUserEdit(string projectEntryCode, string projectEntryName)
+        {
+            return ResolveScopeForUserEdit(MethodNo, projectEntryCode, projectEntryName);
+        }
+
+        public EntryScope ResolveScopeForUserEdit(string methodNo, string projectEntryCode, string projectEntryName)
+        {
+            EntryScope scope = ResolveScope(methodNo, projectEntryCode, projectEntryName);
+            if (scope != null)
+            {
+                return scope;
+            }
+
+            methodNo = EffectiveMethodNo(methodNo);
+            string current = (projectEntryCode ?? "").Trim();
+            if (String.IsNullOrEmpty(current))
+            {
+                return null;
+            }
+
+            return BuildEditableScope(methodNo, current, current, projectEntryName);
+        }
+
         public EntryScope ResolveScope(string methodNo, string projectEntryCode, string projectEntryName)
         {
             methodNo = EffectiveMethodNo(methodNo);
@@ -9721,6 +9744,20 @@ namespace RecoQuotaRecommend
             scope.Method = MethodKey;
             scope.MethodNo = methodNo;
             scope.PoolKeys = pool;
+            return scope;
+        }
+
+        private EntryScope BuildEditableScope(string methodNo, string projectEntryCode, string matchedCode, string fallbackEntryName)
+        {
+            EntryScope scope = new EntryScope();
+            scope.ProjectEntryCode = projectEntryCode;
+            scope.MatchedEntryCode = matchedCode;
+            string entryName;
+            scope.EntryName = entryNames.TryGetValue(matchedCode, out entryName) && !String.IsNullOrEmpty(entryName) ? entryName : (fallbackEntryName ?? "");
+            scope.Method = MethodKey;
+            scope.MethodNo = methodNo;
+            HashSet<string> pool;
+            scope.PoolKeys = pools.TryGetValue(PoolKey(methodNo, matchedCode), out pool) ? pool : new HashSet<string>(StringComparer.Ordinal);
             return scope;
         }
 

@@ -56,9 +56,101 @@ namespace RecoNet
 
         private static string TemplateFillDir()
         {
-            string dir = Path.Combine(FindRecoQuotaDataDir(), "fill-templates");
+            string dir = Path.Combine(FindSharedRecoQuotaDataDir(), "fill-templates");
             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
             return dir;
+        }
+
+        private static string FindSharedRecoQuotaDataDir()
+        {
+            string localDataDir = FindRecoQuotaDataDir();
+            string aiRoot = FindAiRoot(localDataDir);
+            if (!String.IsNullOrEmpty(aiRoot))
+            {
+                string autoBudgetRoot = Path.Combine(aiRoot, "\u81ea\u52a8\u9884\u7b97");
+                if (Directory.Exists(autoBudgetRoot))
+                {
+                    return Path.Combine(autoBudgetRoot, "RecoQuotaData");
+                }
+            }
+
+            return localDataDir;
+        }
+
+        private static string FindAiRoot(string startPath)
+        {
+            try
+            {
+                DirectoryInfo dir = new DirectoryInfo(startPath);
+                while (dir != null)
+                {
+                    if (Directory.Exists(Path.Combine(dir.FullName, "\u81ea\u52a8\u9884\u7b97")))
+                    {
+                        return dir.FullName;
+                    }
+                    dir = dir.Parent;
+                }
+            }
+            catch { }
+
+            return "";
+        }
+
+        private static List<string> TemplateFillDirs()
+        {
+            List<string> dirs = new List<string>();
+            AddTemplateFillDir(dirs, TemplateFillDir(), true);
+            AddTemplateFillDir(dirs, Path.Combine(FindRecoQuotaDataDir(), "fill-templates"), false);
+
+            string aiRoot = FindAiRoot(FindRecoQuotaDataDir());
+            if (!String.IsNullOrEmpty(aiRoot))
+            {
+                string[] roots = new[]
+                {
+                    Path.Combine(aiRoot, "\u81ea\u52a8\u9884\u7b97"),
+                    Path.Combine(aiRoot, "\u81ea\u52a8\u9884\u7b97\u4e13\u7528\u7ebf"),
+                    Path.Combine(aiRoot, "\u94c1\u8def\u5de5\u7a0b\u4e91\u8ba1\u4ef7\u7cfb\u7edf\u7f51\u7edc\u7248V1.0-\u5f90\u603b")
+                };
+
+                foreach (string root in roots)
+                {
+                    if (!Directory.Exists(root))
+                    {
+                        continue;
+                    }
+                    try
+                    {
+                        foreach (string dataDir in Directory.GetDirectories(root, "RecoQuotaData", SearchOption.AllDirectories))
+                        {
+                            AddTemplateFillDir(dirs, Path.Combine(dataDir, "fill-templates"), false);
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            return dirs;
+        }
+
+        private static void AddTemplateFillDir(List<string> dirs, string dir, bool create)
+        {
+            if (String.IsNullOrWhiteSpace(dir))
+            {
+                return;
+            }
+            if (create && !Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+            if (!Directory.Exists(dir))
+            {
+                return;
+            }
+            string full = Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (!dirs.Any(x => String.Equals(x, full, StringComparison.OrdinalIgnoreCase)))
+            {
+                dirs.Add(full);
+            }
         }
 
         private static void SaveFillTemplate(FillTemplate template)
@@ -72,16 +164,22 @@ namespace RecoNet
 
         private static List<string> ListFillTemplateNames()
         {
-            return Directory.GetFiles(TemplateFillDir(), "*.json")
+            return TemplateFillDirs()
+                .SelectMany(dir => Directory.GetFiles(dir, "*.json"))
                 .Select(p => Path.GetFileNameWithoutExtension(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
 
         private static FillTemplate LoadFillTemplate(string name)
         {
-            string path = Path.Combine(TemplateFillDir(), name + ".json");
-            if (!File.Exists(path)) return null;
+            string path = TemplateFillDirs()
+                .Select(dir => Path.Combine(dir, name + ".json"))
+                .Where(File.Exists)
+                .OrderByDescending(File.GetLastWriteTimeUtc)
+                .FirstOrDefault();
+            if (String.IsNullOrEmpty(path)) return null;
             JavaScriptSerializer serializer = new JavaScriptSerializer();
             serializer.MaxJsonLength = 1024 * 1024 * 16;
             return serializer.Deserialize<FillTemplate>(File.ReadAllText(path, Encoding.UTF8));
@@ -90,8 +188,11 @@ namespace RecoNet
         private static void DeleteFillTemplate(string name)
         {
             if (String.IsNullOrWhiteSpace(name)) return;
-            string path = Path.Combine(TemplateFillDir(), name + ".json");
-            if (File.Exists(path)) File.Delete(path);
+            foreach (string dir in TemplateFillDirs())
+            {
+                string path = Path.Combine(dir, name + ".json");
+                if (File.Exists(path)) File.Delete(path);
+            }
         }
 
         // 绑定库里出现过的 Excel 工作表名（去重），供"源sheet"下拉。

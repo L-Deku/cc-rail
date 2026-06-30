@@ -321,9 +321,10 @@ namespace RecoQuotaRecommend
                 List<PoolItem> items;
                 poolByEntry.TryGetValue(scope.MatchedEntryCode, out items);
                 // 参考框只显示定额，过滤掉材料（全数字代号等）
+                string effectiveEntryName = ResolveEffectiveEntryName(scope);
                 List<PoolItem> quotas = items == null
                     ? null
-                    : items.Where(x => IsAllowedReferencePoolItem(scope.EntryName, x.Kind, x.Code, quotaIndex)).ToList();
+                    : items.Where(x => IsAllowedReferencePoolItem(effectiveEntryName, x.Kind, x.Code, quotaIndex)).ToList();
                 if (quotas == null || quotas.Count == 0)
                 {
                     SetKey("\0empty:" + scope.Method + ":" + scope.MatchedEntryCode);
@@ -353,7 +354,7 @@ namespace RecoQuotaRecommend
                 }
                 string entryName;
                 string entryCode = ResolveCurrentChapterNo(conn, out entryName);
-                EntryScope scope = String.IsNullOrWhiteSpace(entryCode) ? null : chapterLibrary.ResolveScope(entryCode, entryName);
+                EntryScope scope = String.IsNullOrWhiteSpace(entryCode) ? null : chapterLibrary.ResolveScopeForUserEdit(entryCode, entryName);
                 string diag = "entryCode=" + (entryCode ?? "<null>") + " entryName=" + (entryName ?? "")
                     + " scope=" + (scope == null ? "<null>" : scope.MatchedEntryCode)
                     + " pool=" + (scope != null && poolByEntry.ContainsKey(scope.MatchedEntryCode) ? poolByEntry[scope.MatchedEntryCode].Count : 0).ToString(CultureInfo.InvariantCulture);
@@ -363,6 +364,39 @@ namespace RecoQuotaRecommend
                     QuotaRecommendPanel.Log("Reference scope diag: " + diag);
                 }
                 return scope;
+            }
+
+            private string ResolveEffectiveEntryName(EntryScope scope)
+            {
+                List<string> names = new List<string>();
+                AddEntryName(names, ReadPropertyGridValue("\u5de5\u7a0b\u6216\u8d39\u7528\u9879\u76ee\u540d\u79f0"));
+
+                TreeView tv = GetField<TreeView>(mainForm, "Tv_tree");
+                TreeNode node = tv != null ? tv.SelectedNode : GetField<TreeNode>(mainForm, "CurrNode");
+                if (node != null)
+                {
+                    AddEntryName(names, node.Text);
+                }
+
+                if (scope != null)
+                {
+                    AddEntryName(names, scope.EntryName);
+                }
+
+                return String.Join(" ", names.ToArray());
+            }
+
+            private static void AddEntryName(List<string> names, string value)
+            {
+                if (String.IsNullOrWhiteSpace(value))
+                {
+                    return;
+                }
+                value = value.Trim();
+                if (!names.Any(x => String.Equals(x, value, StringComparison.Ordinal)))
+                {
+                    names.Add(value);
+                }
             }
 
             private void UpdateEntryLabel(EntryScope scope)
@@ -621,11 +655,12 @@ namespace RecoQuotaRecommend
                 try
                 {
                     EntryScope scope = ResolveCurrentScope();
-                    if (scope == null || !scope.Strict)
+                    if (scope == null || String.IsNullOrEmpty(scope.MatchedEntryCode))
                     {
-                        MessageBox.Show(mainForm, "\u8bf7\u5148\u5728\u5b9a\u989d\u8f93\u5165\u8868\u5b9a\u4f4d\u5230\u4e00\u4e2a\u6709\u53c2\u8003\u6c60\u7684\u7ae0\u8282\u6761\u76ee\u3002", "\u589e\u52a0\u53c2\u8003\u5b9a\u989d", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        MessageBox.Show(mainForm, "\u8bf7\u5148\u5728\u5b9a\u989d\u8f93\u5165\u8868\u5b9a\u4f4d\u5230\u4e00\u4e2a\u6709\u6761\u76ee\u7f16\u53f7\u7684\u7ae0\u8282\u6761\u76ee\u3002", "\u589e\u52a0\u53c2\u8003\u5b9a\u989d", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         return;
                     }
+                    string effectiveEntryName = ResolveEffectiveEntryName(scope);
                     string initial = grid.CurrentRow != null && !grid.CurrentRow.IsNewRow ? GetRowValue(grid.CurrentRow, QuotaCodeColumns()) : "";
                     string code = PromptForCode(initial);
                     if (String.IsNullOrWhiteSpace(code))
@@ -633,7 +668,7 @@ namespace RecoQuotaRecommend
                         return;
                     }
                     code = QuotaEntry.NormalizeCode(code.Trim());
-                    if (!IsAllowedReferencePoolItem(scope.EntryName, "", code, quotaIndex))
+                    if (!IsAllowedReferencePoolItem(effectiveEntryName, "", code, quotaIndex))
                     {
                         MessageBox.Show(mainForm,
                             "\u53c2\u8003\u5b9a\u989d\u6c60\u53ea\u80fd\u6dfb\u52a0\u5168\u91cf\u5b9a\u989d\u5e93\u4e2d\u7684\u539f\u5b9a\u989d\u7f16\u53f7\uff1b\u8bbe\u5907\u8d2d\u7f6e\u8d39\u6761\u76ee\u4ec5\u5141\u8bb8 SF\u3002",
@@ -644,7 +679,7 @@ namespace RecoQuotaRecommend
                     }
                     string name, unit, price;
                     FindQuotaDisplay(code, out name, out unit, out price);
-                    chapterLibrary.AddUserQuota(scope, "", code, name, unit, price);
+                    chapterLibrary.AddUserQuota(scope.MethodNo, scope.MatchedEntryCode, effectiveEntryName, "", code, name, unit, price);
                     ReloadPool();
                     currentKey = null;
                     RefreshSafe();
@@ -676,11 +711,12 @@ namespace RecoQuotaRecommend
                     {
                         return;
                     }
+                    string effectiveEntryName = ResolveEffectiveEntryName(scope);
                     if (MessageBox.Show(mainForm, "\u786e\u8ba4\u4ece\u5f53\u524d\u6761\u76ee\u7684\u53c2\u8003\u5b9a\u989d\u6c60\u5220\u9664\uff1a" + item.Code + " \uff1f", "\u5220\u9664\u53c2\u8003\u5b9a\u989d", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
                     {
                         return;
                     }
-                    chapterLibrary.RemoveUserQuota(scope, item.Kind, item.Code);
+                    chapterLibrary.RemoveUserQuota(scope.MethodNo, scope.MatchedEntryCode, effectiveEntryName, item.Kind, item.Code);
                     ReloadPool();
                     currentKey = null;
                     RefreshSafe();
