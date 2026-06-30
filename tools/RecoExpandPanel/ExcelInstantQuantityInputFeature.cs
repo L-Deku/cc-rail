@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
+using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.Reflection;
@@ -39,6 +40,7 @@ namespace RecoNet
         {
             private const int PollIntervalMs = 100;
             private const int ReconnectDelayMs = 2000;
+            private const int SpreadsheetReadThrottleMs = 160;
             private readonly Form mainForm;
             private readonly Timer pollTimer;
             private readonly ToolTip statusTip;
@@ -53,10 +55,12 @@ namespace RecoNet
             private bool waitingForSoftwareBlur;
             private bool hasReusableSpreadsheetSelection;
             private bool applyingQuantity;
+            private InstantExcelCell reusableSpreadsheetCell;
             private string lastStatusMessage = "";
             private DateTime lastStatusUtc = DateTime.MinValue;
             private DateTime lastToggleShortcutUtc = DateTime.MinValue;
             private DateTime nextConnectionAttemptUtc = DateTime.MinValue;
+            private DateTime nextSpreadsheetReadUtc = DateTime.MinValue;
             private InstantStatusPopup enabledPopup;
 
             public ExcelInstantQuantityInputRuntime(Form mainForm)
@@ -174,6 +178,7 @@ namespace RecoNet
 
             private void GridDataSourceChanged(object sender, EventArgs e)
             {
+                ClearSpreadsheetSelectionCache();
                 ClearQuantityTargets();
                 CaptureCurrentQuantityTarget(false);
             }
@@ -192,7 +197,7 @@ namespace RecoNet
                 else
                 {
                     lastExcelKey = "";
-                    hasReusableSpreadsheetSelection = false;
+                    ClearSpreadsheetSelectionCache();
                     pollTimer.Stop();
                     ShowStatus("\u5df2\u5173\u95edExcel\u70b9\u9009\u5373\u586b\u3002");
                 }
@@ -249,9 +254,15 @@ namespace RecoNet
             private void ArmSpreadsheetSelectionForCurrentTarget()
             {
                 wasSpreadsheetForeground = false;
+                nextSpreadsheetReadUtc = DateTime.MinValue;
+                if (TryApplyReusableSpreadsheetCellToCurrentTarget())
+                {
+                    return;
+                }
+
                 if (!hasReusableSpreadsheetSelection)
                 {
-                    lastExcelKey = TryReadCurrentSpreadsheetKey();
+                    lastExcelKey = "";
                 }
 
                 waitingForSpreadsheetClick = true;
@@ -267,6 +278,29 @@ namespace RecoNet
                 waitingForSoftwareBlur = false;
                 wasSpreadsheetForeground = false;
                 lastExcelKey = "";
+            }
+
+            private void ClearSpreadsheetSelectionCache()
+            {
+                lastExcelKey = "";
+                hasReusableSpreadsheetSelection = false;
+                reusableSpreadsheetCell = null;
+                nextSpreadsheetReadUtc = DateTime.MinValue;
+            }
+
+            private bool TryApplyReusableSpreadsheetCellToCurrentTarget()
+            {
+                if (!hasReusableSpreadsheetSelection || reusableSpreadsheetCell == null || !HasValidTarget())
+                {
+                    return false;
+                }
+
+                waitingForSpreadsheetClick = true;
+                awaitingSpreadsheetActivation = false;
+                waitingForSoftwareBlur = false;
+                lastExcelKey = reusableSpreadsheetCell.Key;
+                ApplySpreadsheetCell(reusableSpreadsheetCell);
+                return true;
             }
 
             private List<InstantQuantityTarget> CollectSelectedQuantityTargets(DataGridViewCell currentCell)
@@ -405,6 +439,19 @@ namespace RecoNet
                         waitingForSoftwareBlur = false;
                     }
 
+                    if (!IsSpreadsheetForegroundCandidate())
+                    {
+                        wasSpreadsheetForeground = false;
+                        return;
+                    }
+
+                    DateTime now = DateTime.UtcNow;
+                    if (now < nextSpreadsheetReadUtc)
+                    {
+                        return;
+                    }
+
+                    nextSpreadsheetReadUtc = now.AddMilliseconds(SpreadsheetReadThrottleMs);
                     InstantExcelCell cell;
                     string error;
                     if (!TryReadActiveSpreadsheetCell(out cell, out error))
@@ -434,7 +481,7 @@ namespace RecoNet
                     awaitingSpreadsheetActivation = false;
                     if (ApplySpreadsheetCell(cell))
                     {
-                        MarkSpreadsheetCellApplied();
+                        MarkSpreadsheetCellApplied(cell);
                     }
                 }
                 catch (Exception ex)
@@ -443,10 +490,12 @@ namespace RecoNet
                 }
             }
 
-            private void MarkSpreadsheetCellApplied()
+            private void MarkSpreadsheetCellApplied(InstantExcelCell cell)
             {
                 hasReusableSpreadsheetSelection = true;
+                reusableSpreadsheetCell = cell == null ? null : cell.Clone();
                 waitingForSpreadsheetClick = true;
+                nextSpreadsheetReadUtc = DateTime.MinValue;
             }
 
             private bool HasValidTarget()
@@ -733,13 +782,6 @@ namespace RecoNet
                 }
             }
 
-            private string TryReadCurrentSpreadsheetKey()
-            {
-                InstantExcelCell cell;
-                string error;
-                return TryReadActiveSpreadsheetCell(out cell, out error) ? cell.Key : "";
-            }
-
             private bool TryReadActiveSpreadsheetCell(out InstantExcelCell cell, out string error)
             {
                 cell = null;
@@ -845,6 +887,41 @@ namespace RecoNet
                     }
 
                     return WindowContainsExcelGrid(foreground);
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            private static bool IsSpreadsheetForegroundCandidate()
+            {
+                try
+                {
+                    IntPtr foreground = InstantGetForegroundWindow();
+                    if (foreground == IntPtr.Zero)
+                    {
+                        return false;
+                    }
+
+                    if (WindowContainsExcelGrid(foreground))
+                    {
+                        return true;
+                    }
+
+                    uint foregroundPid;
+                    InstantGetWindowThreadProcessId(foreground, out foregroundPid);
+                    if (foregroundPid == 0)
+                    {
+                        return false;
+                    }
+
+                    using (Process process = Process.GetProcessById((int)foregroundPid))
+                    {
+                        string processName = process.ProcessName;
+                        return String.Equals(processName, "EXCEL", StringComparison.OrdinalIgnoreCase) ||
+                            String.Equals(processName, "et", StringComparison.OrdinalIgnoreCase);
+                    }
                 }
                 catch
                 {
@@ -1197,6 +1274,20 @@ namespace RecoNet
                 public string UnitText;
                 public string Key;
                 public bool IsForeground;
+
+                public InstantExcelCell Clone()
+                {
+                    return new InstantExcelCell
+                    {
+                        WorkbookPath = WorkbookPath,
+                        WorksheetName = WorksheetName,
+                        Address = Address,
+                        ValueText = ValueText,
+                        UnitText = UnitText,
+                        Key = Key,
+                        IsForeground = IsForeground
+                    };
+                }
             }
 
             private sealed class InstantStatusPopup : Form
