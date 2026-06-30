@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
+using System.Drawing;
 using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -56,6 +57,7 @@ namespace RecoNet
             private DateTime lastStatusUtc = DateTime.MinValue;
             private DateTime lastToggleShortcutUtc = DateTime.MinValue;
             private DateTime nextConnectionAttemptUtc = DateTime.MinValue;
+            private InstantStatusPopup enabledPopup;
 
             public ExcelInstantQuantityInputRuntime(Form mainForm)
             {
@@ -87,6 +89,7 @@ namespace RecoNet
             {
                 pollTimer.Stop();
                 pollTimer.Dispose();
+                CloseEnabledPopup();
                 statusTip.Dispose();
                 spreadsheetApplication = null;
                 ClearQuantityTargets();
@@ -1102,19 +1105,80 @@ namespace RecoNet
             private void ShowEnabledDialog(string message)
             {
                 ShowStatus(message);
-                if (mainForm == null || mainForm.IsDisposed)
+                ShowEnabledPopup(message);
+            }
+
+            private void ShowEnabledPopup(string message)
+            {
+                if (mainForm == null || mainForm.IsDisposed || !mainForm.IsHandleCreated)
                 {
                     return;
                 }
 
                 try
                 {
-                    MessageBox.Show(mainForm, message, "Excel点选即时填", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MethodInvoker showPopup = delegate
+                    {
+                        CloseEnabledPopup();
+                        enabledPopup = new InstantStatusPopup(message);
+                        int x = Math.Max(12, mainForm.ClientSize.Width - enabledPopup.Width - 24);
+                        Point location = mainForm.PointToScreen(new Point(x, 48));
+                        enabledPopup.StartPosition = FormStartPosition.Manual;
+                        enabledPopup.Location = location;
+                        enabledPopup.Show(mainForm);
+
+                        Timer closeTimer = new Timer();
+                        closeTimer.Interval = 1800;
+                        closeTimer.Tick += delegate
+                        {
+                            closeTimer.Stop();
+                            closeTimer.Dispose();
+                            CloseEnabledPopup();
+                        };
+                        closeTimer.Start();
+                    };
+
+                    if (mainForm.InvokeRequired)
+                    {
+                        mainForm.BeginInvoke(showPopup);
+                    }
+                    else
+                    {
+                        showPopup();
+                    }
                 }
                 catch
                 {
                 }
             }
+
+            private void CloseEnabledPopup()
+            {
+                try
+                {
+                    if (enabledPopup != null && !enabledPopup.IsDisposed)
+                    {
+                        enabledPopup.Close();
+                    }
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    if (enabledPopup != null)
+                    {
+                        enabledPopup.Dispose();
+                    }
+                }
+                catch
+                {
+                }
+
+                enabledPopup = null;
+            }
+
             [DllImport("user32.dll")]
             private static extern IntPtr InstantGetForegroundWindow();
 
@@ -1133,6 +1197,44 @@ namespace RecoNet
                 public string UnitText;
                 public string Key;
                 public bool IsForeground;
+            }
+
+            private sealed class InstantStatusPopup : Form
+            {
+                private const int WsExNoActivate = 0x08000000;
+
+                public InstantStatusPopup(string message)
+                {
+                    FormBorderStyle = FormBorderStyle.None;
+                    ShowInTaskbar = false;
+                    TopMost = true;
+                    BackColor = Color.FromArgb(255, 255, 225);
+                    Size = new Size(360, 58);
+
+                    Label label = new Label();
+                    label.AutoEllipsis = true;
+                    label.Dock = DockStyle.Fill;
+                    label.Font = SystemFonts.MessageBoxFont;
+                    label.Padding = new Padding(12, 0, 12, 0);
+                    label.Text = message;
+                    label.TextAlign = ContentAlignment.MiddleLeft;
+                    Controls.Add(label);
+                }
+
+                protected override bool ShowWithoutActivation
+                {
+                    get { return true; }
+                }
+
+                protected override CreateParams CreateParams
+                {
+                    get
+                    {
+                        CreateParams cp = base.CreateParams;
+                        cp.ExStyle |= WsExNoActivate;
+                        return cp;
+                    }
+                }
             }
 
             private struct InstantQuantityTarget
