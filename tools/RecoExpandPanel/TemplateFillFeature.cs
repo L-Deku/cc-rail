@@ -43,6 +43,7 @@ namespace RecoNet
         public sealed class FillPreviewItem
         {
             public bool Selected = true;
+            public string TemplateName;
             public string ItemNo;
             public string QuotaCode;
             public string Adjust;
@@ -347,6 +348,7 @@ namespace RecoNet
             {
                 FillPreviewItem item = new FillPreviewItem
                 {
+                    TemplateName = template.Name,
                     ItemNo = row.ItemNo, QuotaCode = row.QuotaCode, Adjust = row.Adjust,
                     SourceName = row.SourceName, OrderInItem = row.OrderInItem,
                     SourceQuotaSeq = row.SourceQuotaSeq
@@ -416,9 +418,10 @@ namespace RecoNet
 
                 AgentUndoRecord undo = new AgentUndoRecord { Summary = "模板铺量 -> 单元 " + targetUnitNo, Time = DateTime.Now };
                 StringBuilder msg = new StringBuilder();
-                int inserted = 0, skipped = 0;
+                int inserted = 0, markerRows = 0, skipped = 0;
                 // 每个 (条目序号) 的下一个顺号，写入时递增。
                 Dictionary<long, int> nextShun = new Dictionary<long, int>();
+                HashSet<long> markerInserted = new HashSet<long>();
 
                 foreach (FillPreviewItem item in selected)
                 {
@@ -432,6 +435,27 @@ namespace RecoNet
                     if (!nextShun.TryGetValue(itemSeq, out shun))
                     {
                         shun = GetMaxShun(conn, targetSeq, itemSeq) + 1;
+                    }
+
+                    if (!markerInserted.Contains(itemSeq))
+                    {
+                        Dictionary<string, object> marker = new Dictionary<string, object>(row);
+                        ApplyTemplateFillMarkerFields(marker, targetSeq, shun, item.TemplateName);
+                        marker.Remove("定额序号"); // 让数据库分配新标识
+
+                        long markerId = InsertQuotaRowReturnId(conn, marker);
+                        if (markerId > 0)
+                        {
+                            undo.Rows.Add(new AgentUndoRow { Kind = "I", QuotaSequence = markerId });
+                            inserted++;
+                            markerRows++;
+                            markerInserted.Add(itemSeq);
+                            shun++;
+                        }
+                        else
+                        {
+                            skipped++;
+                        }
                     }
 
                     // 数量：用预览取到的目标工程量。
@@ -462,10 +486,42 @@ namespace RecoNet
                 RefreshCurrentQuotaGrid(mainForm);
 
                 msg.Append("已向单元 ").Append(targetUnitNo).Append(" 追加定额 ")
-                   .Append(inserted.ToString(CultureInfo.InvariantCulture)).Append(" 条");
+                   .Append((inserted - markerRows).ToString(CultureInfo.InvariantCulture)).Append(" 条");
+                if (markerRows > 0) msg.Append("，标记 ").Append(markerRows.ToString(CultureInfo.InvariantCulture)).Append(" 条");
                 if (skipped > 0) msg.Append("，跳过 ").Append(skipped.ToString(CultureInfo.InvariantCulture)).Append(" 条");
                 msg.Append("。请在软件点一次“计算”刷新单价/合价与汇总。");
                 return msg.ToString();
+            }
+        }
+
+        private static void ApplyTemplateFillMarkerFields(Dictionary<string, object> row, long targetSeq, int shun, string templateName)
+        {
+            row["总概算序号"] = targetSeq;
+            row["顺号"] = shun;
+            SetIfPresent(row, "定额编号", "-");
+            SetIfPresent(row, "工程或费用项目名称", BuildTemplateFillMarkerText(templateName));
+            SetIfPresent(row, "单位", "");
+            SetIfPresent(row, "工程数量输入", "");
+            SetIfPresent(row, "工程数量", 0m);
+            SetIfPresent(row, "定额调整", "");
+
+            foreach (string name in new string[] { "单价", "合价", "基价", "工费", "料费", "机费", "单重", "合重", "人工费", "材料费", "机械费", "设备费", "主材费", "价差" })
+            {
+                SetIfPresent(row, name, 0m);
+            }
+        }
+
+        private static string BuildTemplateFillMarkerText(string templateName)
+        {
+            string name = (templateName ?? "").Trim();
+            return String.IsNullOrEmpty(name) ? "AI推送" : "AI推送：" + name;
+        }
+
+        private static void SetIfPresent(Dictionary<string, object> row, string key, object value)
+        {
+            if (row.ContainsKey(key))
+            {
+                row[key] = value;
             }
         }
 

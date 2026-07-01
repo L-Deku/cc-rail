@@ -30,6 +30,7 @@ namespace RecoNet
         private static readonly Dictionary<Form, ExcelSmartBindPanel> ExcelSmartBindPanels = new Dictionary<Form, ExcelSmartBindPanel>();
         private static readonly Dictionary<Form, QuickBindPanel> QuickBindPanels = new Dictionary<Form, QuickBindPanel>();
         private static readonly HashSet<DataGridView> HookedQuotaGrids = new HashSet<DataGridView>();
+        private const int ExpressionSelectionAddressLimit = 50;
 
         private static void EnsureExcelLinkRuntime(Form mainForm)
         {
@@ -474,7 +475,7 @@ namespace RecoNet
                 }
 
                 ExcelCellAddress cell;
-                if (!TryGetActiveExcelCell(out cell, out error))
+                if (!TryGetActiveExcelCell(out cell, out error, false))
                 {
                     if (!PromptExcelCell(mainForm, error, out cell))
                     {
@@ -531,7 +532,7 @@ namespace RecoNet
 
                 ExcelCellAddress startCell;
                 string error;
-                if (!TryGetActiveExcelCell(out startCell, out error))
+                if (!TryGetActiveExcelCell(out startCell, out error, false))
                 {
                     if (!PromptExcelCell(mainForm, error, out startCell))
                     {
@@ -621,7 +622,7 @@ namespace RecoNet
         private static void RefreshExcelLinkPanel(Form mainForm)
         {
             ExcelLinkPanel panel;
-            if (ExcelLinkPanels.TryGetValue(mainForm, out panel) && panel != null && !panel.IsDisposed)
+            if (ExcelLinkPanels.TryGetValue(mainForm, out panel) && panel != null && !panel.IsDisposed && panel.Visible)
             {
                 panel.Reload();
             }
@@ -745,7 +746,7 @@ namespace RecoNet
             return 0;
         }
 
-        private static bool TryGetActiveExcelCell(out ExcelCellAddress cell, out string error)
+        private static bool TryGetActiveExcelCell(out ExcelCellAddress cell, out string error, bool includeSelectionAddresses)
         {
             cell = null;
             error = null;
@@ -783,7 +784,7 @@ namespace RecoNet
                 cell.WorksheetName = worksheetName;
                 cell.CellAddress = address;
                 cell.DisplayValue = ExcelValueToText(value);
-                cell.SelectionAddresses = ReadSelectedCellAddresses(selection);
+                cell.SelectionAddresses = includeSelectionAddresses ? ReadSelectedCellAddresses(selection, ExpressionSelectionAddressLimit) : null;
                 return true;
             }
             catch (COMException ex)
@@ -803,13 +804,13 @@ namespace RecoNet
             return reason + "。已尝试通过 Excel/WPS 注册接口和 Excel 窗口对象连接。若仍失败，请确认：1. Excel/WPS 已打开工程量表；2. 已单击选中一个工程数量单元格且没有处于编辑状态；3. 表格不在受保护视图；4. Excel/WPS 与本软件使用相同权限运行（都普通运行，或都以管理员运行）；5. 当前 Office/WPS 已正确安装并注册 COM。若现场仍连不上，可在随后弹出的手动窗口里选择文件、工作表并输入单元格地址完成绑定。";
         }
 
-        private static List<string> ReadSelectedCellAddresses(dynamic selection)
+        private static List<string> ReadSelectedCellAddresses(dynamic selection, int maxCount)
         {
             List<string> addresses = new List<string>();
             try
             {
                 int count = Convert.ToInt32(selection.Cells.Count, CultureInfo.InvariantCulture);
-                int limit = Math.Min(count, 200);
+                int limit = Math.Min(count, Math.Max(1, maxCount));
                 for (int i = 1; i <= limit; i++)
                 {
                     dynamic selectedCell = selection.Cells[i];
@@ -2495,6 +2496,138 @@ namespace RecoNet
             return true;
         }
 
+        private static bool TryEvaluateExpressionWithKnownCell(string expression, string cellAddress, string cellValue, out string valueText, out decimal quantity, out string error)
+        {
+            valueText = null;
+            quantity = 0;
+            error = null;
+
+            string normalized = NormalizeExpressionOperators(expression);
+            string knownAddress = NormalizeCellAddress(cellAddress);
+            if (String.IsNullOrWhiteSpace(normalized) || String.IsNullOrWhiteSpace(knownAddress) || String.IsNullOrWhiteSpace(cellValue))
+            {
+                return false;
+            }
+
+            decimal knownValue;
+            if (!TryEvaluateDecimal(cellValue, out knownValue, out error))
+            {
+                return false;
+            }
+
+            StringBuilder builder = new StringBuilder();
+            for (int i = 0; i < normalized.Length;)
+            {
+                char ch = normalized[i];
+                if (Char.IsLetter(ch))
+                {
+                    int start = i;
+                    while (i < normalized.Length && Char.IsLetter(normalized[i]))
+                    {
+                        i++;
+                    }
+                    while (i < normalized.Length && Char.IsDigit(normalized[i]))
+                    {
+                        i++;
+                    }
+
+                    string token = normalized.Substring(start, i - start).ToUpperInvariant();
+                    if (!String.Equals(token, knownAddress, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return false;
+                    }
+
+                    builder.Append(knownValue.ToString(CultureInfo.InvariantCulture));
+                    continue;
+                }
+
+                if ("0123456789.+-*/() ".IndexOf(ch) >= 0)
+                {
+                    builder.Append(ch);
+                    i++;
+                    continue;
+                }
+
+                return false;
+            }
+
+            if (!TryEvaluateDecimal(builder.ToString(), out quantity, out error))
+            {
+                return false;
+            }
+
+            valueText = builder.ToString();
+            return true;
+        }
+
+        private static bool IsValidWorkbookExpressionSyntax(string expression, out string error)
+        {
+            error = null;
+            string normalized = NormalizeExpressionOperators(expression);
+            if (String.IsNullOrWhiteSpace(normalized))
+            {
+                error = "Excel 表达式为空";
+                return false;
+            }
+
+            bool hasCell = false;
+            StringBuilder probe = new StringBuilder();
+            for (int i = 0; i < normalized.Length;)
+            {
+                char ch = normalized[i];
+                if (Char.IsLetter(ch))
+                {
+                    int start = i;
+                    while (i < normalized.Length && Char.IsLetter(normalized[i]))
+                    {
+                        i++;
+                    }
+                    while (i < normalized.Length && Char.IsDigit(normalized[i]))
+                    {
+                        i++;
+                    }
+
+                    string token = normalized.Substring(start, i - start).ToUpperInvariant();
+                    CellRef cell;
+                    if (!TryParseCellAddress(token, out cell))
+                    {
+                        error = "表达式里包含无法识别的单元格：" + token;
+                        return false;
+                    }
+
+                    hasCell = true;
+                    probe.Append("1");
+                    continue;
+                }
+
+                if ("0123456789.+-*/() ".IndexOf(ch) >= 0)
+                {
+                    probe.Append(ch);
+                    i++;
+                    continue;
+                }
+
+                error = "表达式里包含不支持的字符：" + ch;
+                return false;
+            }
+
+            if (!hasCell)
+            {
+                error = "表达式里至少需要一个单元格地址。";
+                return false;
+            }
+
+            decimal ignored;
+            string parseError;
+            if (!TryEvaluateDecimal(probe.ToString(), out ignored, out parseError))
+            {
+                error = "表达式计算结构无效：" + parseError;
+                return false;
+            }
+
+            return true;
+        }
+
         private static bool TryEvaluateDecimal(string expression, out decimal value, out string error)
         {
             value = 0;
@@ -3848,6 +3981,10 @@ namespace RecoNet
 
         private sealed class ExcelSmartBindPanel : Form
         {
+            private const int RefreshIntervalMs = 1200;
+            private const int WmEnterSizeMove = 0x0231;
+            private const int WmExitSizeMove = 0x0232;
+
             private readonly Form mainForm;
             private readonly Label currentQuotaLabel;
             private readonly Label currentExcelLabel;
@@ -3855,12 +3992,17 @@ namespace RecoNet
             private readonly RadioButton expressionMode;
             private readonly TextBox expressionText;
             private readonly Label status;
+            private readonly Button bindButton;
             private readonly Timer refreshTimer;
             private ExcelCellAddress lastExcelCell;
             private string lastQuotaKey;
             private string lastExcelKey;
             private string lastExpressionExcelKey;
+            private string lastAutoCellToken;
             private string lastAutoExpressionText;
+            private bool movingOrSizing;
+            private bool editingExpression;
+            private bool bindingQuota;
 
             public ExcelSmartBindPanel(Form mainForm)
             {
@@ -3911,12 +4053,24 @@ namespace RecoNet
                 expressionText.Top = 150;
                 expressionText.Width = 330;
                 expressionText.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-                expressionText.GotFocus += delegate { expressionMode.Checked = true; };
+                expressionText.GotFocus += delegate
+                {
+                    expressionMode.Checked = true;
+                    BeginExpressionEdit();
+                };
+                expressionText.LostFocus += delegate { EndExpressionEdit(); };
                 expressionMode.CheckedChanged += delegate
                 {
                     if (expressionMode.Checked && lastExcelCell != null)
                     {
                         ApplyExcelCellToExpression(lastExcelCell, true);
+                    }
+                };
+                simpleMode.CheckedChanged += delegate
+                {
+                    if (simpleMode.Checked)
+                    {
+                        ClearExpressionInput();
                     }
                 };
 
@@ -3956,13 +4110,13 @@ namespace RecoNet
                 aiMatch.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
                 aiMatch.Click += delegate { MatchSelectedQuotasWithAi(); };
 
-                Button bind = new Button();
-                bind.Text = "绑定到当前定额";
-                bind.Left = 350;
-                bind.Top = 226;
-                bind.Width = 115;
-                bind.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
-                bind.Click += delegate { BindToCurrentQuota(); };
+                bindButton = new Button();
+                bindButton.Text = "绑定到当前定额";
+                bindButton.Left = 350;
+                bindButton.Top = 226;
+                bindButton.Width = 115;
+                bindButton.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
+                bindButton.Click += delegate { BindToCurrentQuota(); };
 
                 Button close = new Button();
                 close.Text = "关闭";
@@ -3990,15 +4144,15 @@ namespace RecoNet
                 Controls.Add(plus);
                 Controls.Add(minus);
                 Controls.Add(aiMatch);
-                Controls.Add(bind);
+                Controls.Add(bindButton);
                 Controls.Add(close);
                 Controls.Add(status);
 
                 refreshTimer = new Timer();
-                refreshTimer.Interval = 700;
+                refreshTimer.Interval = RefreshIntervalMs;
                 refreshTimer.Tick += delegate
                 {
-                    if (Visible)
+                    if (Visible && !movingOrSizing && !editingExpression && !bindingQuota)
                     {
                         RefreshCurrentContext();
                     }
@@ -4019,6 +4173,21 @@ namespace RecoNet
                 base.OnFormClosing(e);
             }
 
+            protected override void WndProc(ref Message m)
+            {
+                if (m.Msg == WmEnterSizeMove)
+                {
+                    BeginMoveOrResize();
+                }
+
+                base.WndProc(ref m);
+
+                if (m.Msg == WmExitSizeMove)
+                {
+                    EndMoveOrResize();
+                }
+            }
+
             protected override void OnVisibleChanged(EventArgs e)
             {
                 base.OnVisibleChanged(e);
@@ -4029,8 +4198,11 @@ namespace RecoNet
 
                 if (Visible)
                 {
-                    refreshTimer.Start();
-                    RefreshCurrentContext();
+                    if (!movingOrSizing)
+                    {
+                        refreshTimer.Start();
+                        RefreshCurrentContext();
+                    }
                 }
                 else
                 {
@@ -4038,8 +4210,95 @@ namespace RecoNet
                 }
             }
 
+            private void BeginMoveOrResize()
+            {
+                movingOrSizing = true;
+                if (refreshTimer != null)
+                {
+                    refreshTimer.Stop();
+                }
+            }
+
+            private void EndMoveOrResize()
+            {
+                bool shouldRefresh = movingOrSizing;
+                movingOrSizing = false;
+                if (refreshTimer != null && Visible && !editingExpression && !bindingQuota)
+                {
+                    refreshTimer.Start();
+                    if (shouldRefresh)
+                    {
+                        RefreshCurrentContext();
+                    }
+                }
+            }
+
+            private void BeginExpressionEdit()
+            {
+                editingExpression = true;
+                if (refreshTimer != null)
+                {
+                    refreshTimer.Stop();
+                }
+            }
+
+            private void EndExpressionEdit()
+            {
+                editingExpression = false;
+                if (refreshTimer != null && Visible && !movingOrSizing && !bindingQuota)
+                {
+                    refreshTimer.Start();
+                }
+            }
+
+            private bool BeginBindOperation()
+            {
+                if (bindingQuota)
+                {
+                    status.Text = "上一条绑定仍在保存，请稍候。";
+                    status.Refresh();
+                    return false;
+                }
+
+                bindingQuota = true;
+                if (refreshTimer != null)
+                {
+                    refreshTimer.Stop();
+                }
+
+                if (bindButton != null)
+                {
+                    bindButton.Enabled = false;
+                }
+
+                UseWaitCursor = true;
+                status.Text = "正在绑定...";
+                status.Refresh();
+                return true;
+            }
+
+            private void EndBindOperation()
+            {
+                bindingQuota = false;
+                UseWaitCursor = false;
+                if (bindButton != null)
+                {
+                    bindButton.Enabled = true;
+                }
+
+                if (refreshTimer != null && Visible && !movingOrSizing && !editingExpression)
+                {
+                    refreshTimer.Start();
+                }
+            }
+
             public void RefreshCurrentContext()
             {
+                if (movingOrSizing || editingExpression || bindingQuota)
+                {
+                    return;
+                }
+
                 DataGridView grid = GetField<DataGridView>(mainForm, "dataGridViewDE");
                 DataGridViewRow row = GetCurrentQuotaRow(grid);
                 string quotaText = row == null
@@ -4052,9 +4311,14 @@ namespace RecoNet
                     lastQuotaKey = quotaKey;
                 }
 
+                if (mainForm != null && mainForm.ContainsFocus && !ContainsFocus)
+                {
+                    return;
+                }
+
                 ExcelCellAddress cell;
                 string error;
-                if (TryGetActiveExcelCell(out cell, out error))
+                if (TryGetActiveExcelCell(out cell, out error, false))
                 {
                     string excelKey = cell.WorkbookPath + "|" + cell.WorksheetName + "|" + BuildSelectionDisplay(cell);
                     if (!String.Equals(lastExcelKey, excelKey, StringComparison.OrdinalIgnoreCase))
@@ -4083,6 +4347,14 @@ namespace RecoNet
                 expressionText.Focus();
             }
 
+            private void ClearExpressionInput()
+            {
+                expressionText.Text = "";
+                lastExpressionExcelKey = "";
+                lastAutoCellToken = "";
+                lastAutoExpressionText = "";
+            }
+
             private void ApplyExcelCellToExpression(ExcelCellAddress cell, bool force)
             {
                 if (!expressionMode.Checked || cell == null)
@@ -4101,27 +4373,61 @@ namespace RecoNet
                 if (String.IsNullOrEmpty(current))
                 {
                     expressionText.Text = token;
+                    lastAutoCellToken = token;
                     lastAutoExpressionText = token;
                 }
                 else if (EndsWithExpressionOperator(current))
                 {
                     expressionText.Text = expressionText.Text + token;
+                    lastAutoCellToken = token;
                     lastAutoExpressionText = expressionText.Text.Trim().ToUpperInvariant();
-                }
-                else if (String.Equals(current, lastAutoExpressionText, StringComparison.OrdinalIgnoreCase))
-                {
-                    expressionText.Text = token;
-                    lastAutoExpressionText = token;
                 }
                 else
                 {
-                    lastExpressionExcelKey = excelKey;
-                    return;
+                    string updated;
+                    if (!TryReplaceAutoExpressionCell(current, token, out updated))
+                    {
+                        lastExpressionExcelKey = excelKey;
+                        return;
+                    }
+
+                    expressionText.Text = updated;
+                    lastAutoCellToken = token;
+                    lastAutoExpressionText = updated.Trim().ToUpperInvariant();
                 }
 
                 expressionText.SelectionStart = expressionText.Text.Length;
                 lastExpressionExcelKey = excelKey;
                 status.Text = "已添加：" + token;
+            }
+
+            private bool TryReplaceAutoExpressionCell(string current, string newToken, out string updated)
+            {
+                updated = null;
+                string oldToken = (lastAutoCellToken ?? "").Trim().ToUpperInvariant();
+                if (String.IsNullOrEmpty(oldToken))
+                {
+                    oldToken = (lastAutoExpressionText ?? "").Trim().ToUpperInvariant();
+                }
+
+                if (String.IsNullOrEmpty(oldToken))
+                {
+                    return false;
+                }
+
+                if (!current.StartsWith(oldToken, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                string suffix = current.Substring(oldToken.Length);
+                if (suffix.Length > 0 && !EndsWithExpressionOperator(oldToken) && "+-*/".IndexOf(suffix[0]) < 0 && suffix[0] != ')' && suffix[0] != ' ')
+                {
+                    return false;
+                }
+
+                updated = newToken + suffix;
+                return true;
             }
 
             private static bool EndsWithExpressionOperator(string text)
@@ -4275,6 +4581,11 @@ namespace RecoNet
 
             private void BindToCurrentQuota()
             {
+                if (!BeginBindOperation())
+                {
+                    return;
+                }
+
                 try
                 {
                     SqlConnection conn = GetProjectConnection(mainForm);
@@ -4294,13 +4605,17 @@ namespace RecoNet
 
                     ExcelCellAddress cell;
                     string error;
-                    if (!TryGetActiveExcelCell(out cell, out error))
+                    if (!TryGetActiveExcelCell(out cell, out error, false))
                     {
                         status.Text = "请先在WPS/Excel里点击工程数量单元格。";
                         return;
                     }
 
-                    string expression = simpleMode.Checked ? cell.CellAddress : expressionText.Text.Trim().ToUpperInvariant();
+                    string expression = simpleMode.Checked ? NormalizeCellAddress(cell.CellAddress) : expressionText.Text.Trim().ToUpperInvariant();
+                    if (!simpleMode.Checked && String.IsNullOrEmpty(expression))
+                    {
+                        expression = BuildDefaultExpression(cell);
+                    }
                     if (String.IsNullOrEmpty(expression))
                     {
                         status.Text = "请填写表达式，或在表达式模式下点击WPS/Excel单元格自动加入。";
@@ -4336,11 +4651,27 @@ namespace RecoNet
                             displayValue = cell.DisplayValue;
                         }
                     }
+                    else if (simpleMode.Checked &&
+                        String.Equals(NormalizeCellAddress(expression), NormalizeCellAddress(cell.CellAddress), StringComparison.OrdinalIgnoreCase) &&
+                        String.IsNullOrWhiteSpace(cell.DisplayValue))
+                    {
+                        evaluated = true;
+                        displayValue = "";
+                    }
+                    else if (!simpleMode.Checked && !String.IsNullOrWhiteSpace(cell.DisplayValue))
+                    {
+                        evaluated = TryEvaluateExpressionWithKnownCell(expression, cell.CellAddress, cell.DisplayValue, out displayValue, out quantity, out readError);
+                    }
 
                     if (!evaluated && !TryEvaluateWorkbookExpression(cell.WorkbookPath, cell.WorksheetName, expression, out displayValue, out quantity, out readError))
                     {
-                        status.Text = "表达式无法读取或计算：" + readError;
-                        return;
+                        if (!IsValidWorkbookExpressionSyntax(expression, out readError))
+                        {
+                            status.Text = "表达式无法读取或计算：" + readError;
+                            return;
+                        }
+
+                        displayValue = "";
                     }
 
                     link.ExcelPath = cell.WorkbookPath;
@@ -4355,6 +4686,10 @@ namespace RecoNet
                     store.Upsert(link);
                     SaveStore(conn, store);
 
+                    string boundMessage = "已绑定：" + link.QuotaCode + " -> " + expression + (String.IsNullOrWhiteSpace(displayValue) ? "（当前为空，等待同步）" : "");
+                    status.Text = boundMessage;
+                    status.Refresh();
+
                     EnsureExcelLinkRuntime(mainForm);
                     if (ExcelLinkRuntimes.ContainsKey(mainForm))
                     {
@@ -4362,13 +4697,16 @@ namespace RecoNet
                     }
 
                     RefreshExcelLinkPanel(mainForm);
-                    RefreshCurrentContext();
-                    status.Text = "已绑定：" + link.QuotaCode + " -> " + expression;
+                    status.Text = boundMessage;
                 }
                 catch (Exception ex)
                 {
                     Log("ExcelSmartBindPanel bind failed: " + ex);
                     status.Text = "绑定失败：" + ex.Message;
+                }
+                finally
+                {
+                    EndBindOperation();
                 }
             }
         }
@@ -4514,7 +4852,7 @@ namespace RecoNet
 
                 ExcelCellAddress cell;
                 string error;
-                if (!TryGetActiveExcelCell(out cell, out error))
+                if (!TryGetActiveExcelCell(out cell, out error, true))
                 {
                     status.Text = "请先在WPS/Excel里点选工程数量单元格。";
                     return;
@@ -4893,7 +5231,7 @@ namespace RecoNet
             {
                 ExcelCellAddress cell;
                 string error;
-                if (!TryGetActiveExcelCell(out cell, out error))
+                if (!TryGetActiveExcelCell(out cell, out error, false))
                 {
                     status.Text = error;
                     return;
@@ -4966,8 +5304,13 @@ namespace RecoNet
                     decimal quantity;
                     if (!TryEvaluateWorkbookExpression(path, sheet, expression, out displayValue, out quantity, out readError))
                     {
-                        status.Text = "计算式无法读取或计算：" + readError;
-                        return;
+                        if (!IsValidWorkbookExpressionSyntax(expression, out readError))
+                        {
+                            status.Text = "计算式无法读取或计算：" + readError;
+                            return;
+                        }
+
+                        displayValue = "";
                     }
 
                     link.ExcelPath = path;
@@ -4989,7 +5332,7 @@ namespace RecoNet
                     }
 
                     RefreshExcelLinkPanel(mainForm);
-                    status.Text = "已绑定：" + link.QuotaCode + " -> " + Path.GetFileName(path) + "!" + sheet + "!" + expression;
+                    status.Text = "已绑定：" + link.QuotaCode + " -> " + Path.GetFileName(path) + "!" + sheet + "!" + expression + (String.IsNullOrWhiteSpace(displayValue) ? "（当前为空，等待同步）" : "");
                     if (!String.Equals(address, expression, StringComparison.OrdinalIgnoreCase))
                     {
                         expressionText.Text = "";
