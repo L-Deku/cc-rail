@@ -50,7 +50,7 @@ namespace RecoNet
                 cmbSourceSheet.SetBounds(225, 12, 150, 23);
                 cmbSourceSheet.DropDownStyle = ComboBoxStyle.DropDown; // 可选可填
                 AddLabel("模板名", 388, 15, 48);
-                txtName.SetBounds(438, 12, 120, 23); txtName.Text = "轨道-模板";
+                txtName.SetBounds(438, 12, 120, 23); txtName.Text = "";
                 btnBuild.SetBounds(568, 11, 130, 25); btnBuild.Text = "从该单元生成模板";
                 btnBuild.Click += delegate { OnBuild(); };
 
@@ -64,9 +64,9 @@ namespace RecoNet
                 cmbMode.Items.AddRange(new object[] { "一·列锚点", "二·固定绑定列" });
                 cmbMode.SelectedIndex = 0;
                 AddLabel("目标sheet", 12, 82, 60);
-                txtSheet.SetBounds(75, 79, 120, 23); txtSheet.Text = "方案二";
+                txtSheet.SetBounds(75, 79, 120, 23); txtSheet.Text = "";
                 AddLabel("目标列", 205, 82, 50);
-                txtColumn.SetBounds(255, 79, 50, 23); txtColumn.Text = "E";
+                txtColumn.SetBounds(255, 79, 50, 23); txtColumn.Text = "";
                 AddLabel("目标单元", 315, 82, 60);
                 txtTargetUnit.SetBounds(380, 79, 90, 23); txtTargetUnit.Text = "_ZGS_02";
                 btnPreview.SetBounds(480, 78, 70, 25); btnPreview.Text = "预览";

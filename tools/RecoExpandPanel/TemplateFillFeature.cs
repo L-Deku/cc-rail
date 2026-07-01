@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
+using System.Xml;
 
 namespace RecoNet
 {
@@ -344,6 +346,7 @@ namespace RecoNet
             FillTemplate template, Func<FillTemplateRow, KeyValuePair<string, string>> resolver)
         {
             List<FillPreviewItem> items = new List<FillPreviewItem>();
+            Dictionary<string, HashSet<int>> hiddenColumnCache = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
             foreach (FillTemplateRow row in template.Rows)
             {
                 FillPreviewItem item = new FillPreviewItem
@@ -368,7 +371,7 @@ namespace RecoNet
                 }
 
                 item.QuantityText = display;
-                item.TargetName = ReadRowNameAt(template.WorkbookPath, sheet, expr);
+                item.TargetName = ReadRowNameAt(template.WorkbookPath, sheet, expr, hiddenColumnCache);
                 if (qty == 0m) { item.Status = "数量为0"; }
                 items.Add(item);
             }
@@ -376,16 +379,22 @@ namespace RecoNet
         }
 
         // 读某表达式首个单元格所在行的名称（A 到该格列前的非数字文本拼接），仅供人工核对。
-        private static string ReadRowNameAt(string workbook, string sheet, string expr)
+        private static string ReadRowNameAt(string workbook, string sheet, string expr, Dictionary<string, HashSet<int>> hiddenColumnCache)
         {
             try
             {
                 string first = ExtractFirstCellAddress(expr);
                 CellRef cr;
                 if (String.IsNullOrEmpty(first) || !TryParseCellAddress(first, out cr)) return "";
+                HashSet<int> hiddenColumns = GetSavedHiddenColumns(workbook, sheet, hiddenColumnCache);
                 List<string> parts = new List<string>();
                 for (int col = 1; col < cr.Column; col++)
                 {
+                    if (hiddenColumns.Contains(col))
+                    {
+                        continue;
+                    }
+
                     string addr = ColumnNumberToName(col) + cr.Row.ToString(CultureInfo.InvariantCulture);
                     string val; string e;
                     if (TryReadXlsxCellValue(workbook, sheet, addr, out val, out e) && !String.IsNullOrWhiteSpace(val))
@@ -397,6 +406,82 @@ namespace RecoNet
                 return String.Join(" ", parts.Take(6).ToArray()).Trim();
             }
             catch { return ""; }
+        }
+
+        private static HashSet<int> GetSavedHiddenColumns(string workbook, string sheet, Dictionary<string, HashSet<int>> cache)
+        {
+            string key = (workbook ?? "") + "|" + (sheet ?? "");
+            HashSet<int> hidden;
+            if (cache != null && cache.TryGetValue(key, out hidden))
+            {
+                return hidden;
+            }
+
+            hidden = new HashSet<int>();
+            try
+            {
+                using (ZipArchive archive = OpenZipArchiveShared(workbook))
+                {
+                    string sheetPath = ResolveSheetPath(archive, sheet);
+                    if (!String.IsNullOrEmpty(sheetPath))
+                    {
+                        ZipArchiveEntry sheetEntry = archive.GetEntry(sheetPath);
+                        if (sheetEntry != null)
+                        {
+                            using (Stream stream = sheetEntry.Open())
+                            using (XmlReader reader = XmlReader.Create(stream))
+                            {
+                                while (reader.Read())
+                                {
+                                    if (reader.NodeType != XmlNodeType.Element || reader.LocalName != "col")
+                                    {
+                                        continue;
+                                    }
+
+                                    string hiddenText = reader.GetAttribute("hidden");
+                                    if (!String.Equals(hiddenText, "1", StringComparison.OrdinalIgnoreCase) &&
+                                        !String.Equals(hiddenText, "true", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        continue;
+                                    }
+
+                                    int min;
+                                    int max;
+                                    if (!Int32.TryParse(reader.GetAttribute("min"), NumberStyles.Integer, CultureInfo.InvariantCulture, out min) ||
+                                        !Int32.TryParse(reader.GetAttribute("max"), NumberStyles.Integer, CultureInfo.InvariantCulture, out max))
+                                    {
+                                        continue;
+                                    }
+
+                                    if (min > max)
+                                    {
+                                        int tmp = min;
+                                        min = max;
+                                        max = tmp;
+                                    }
+
+                                    max = Math.Min(max, 16384);
+                                    for (int col = Math.Max(1, min); col <= max; col++)
+                                    {
+                                        hidden.Add(col);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Read saved hidden columns failed: " + ex.Message);
+            }
+
+            if (cache != null)
+            {
+                cache[key] = hidden;
+            }
+
+            return hidden;
         }
 
         // 写入：把选中预览项对应的源定额行，直接复制到【目标单元】的对应条目（条目序号全局共享，原样保留），
