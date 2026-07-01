@@ -2396,7 +2396,7 @@ namespace RecoNet
                     return false;
                 }
 
-                valueText = quantity.ToString(CultureInfo.InvariantCulture);
+                valueText = resolved;
                 return true;
             }
             catch (COMException ex)
@@ -2491,7 +2491,7 @@ namespace RecoNet
                 return false;
             }
 
-            valueText = quantity.ToString(CultureInfo.InvariantCulture);
+            valueText = resolved;
             return true;
         }
 
