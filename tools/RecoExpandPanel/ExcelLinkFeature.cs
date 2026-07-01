@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Globalization;
@@ -31,6 +32,13 @@ namespace RecoNet
         private static readonly Dictionary<Form, QuickBindPanel> QuickBindPanels = new Dictionary<Form, QuickBindPanel>();
         private static readonly HashSet<DataGridView> HookedQuotaGrids = new HashSet<DataGridView>();
         private const int ExpressionSelectionAddressLimit = 50;
+        private const int SpreadsheetApplicationCacheMs = 5000;
+        private const int ExcelLinkUnitCacheMs = 5000;
+        private const int ExcelLinkCacheLimit = 800;
+        private static object CachedSpreadsheetApplication;
+        private static DateTime CachedSpreadsheetApplicationUtc = DateTime.MinValue;
+        private static readonly Dictionary<string, ExcelLinkStringCacheEntry> ExcelLinkUnitCache = new Dictionary<string, ExcelLinkStringCacheEntry>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, ExcelLinkBoolCacheEntry> ExcelLinkHiddenColumnCache = new Dictionary<string, ExcelLinkBoolCacheEntry>(StringComparer.OrdinalIgnoreCase);
 
         private static void EnsureExcelLinkRuntime(Form mainForm)
         {
@@ -378,6 +386,338 @@ namespace RecoNet
             }
 
             return String.Join("+", cell.SelectionAddresses.ToArray());
+        }
+
+        private static string ReadExcelLinkUnitNearCell(dynamic sheet, string workbookPath, string worksheetName, int row, int quantityColumn)
+        {
+            if (sheet == null || row <= 0 || quantityColumn <= 1)
+            {
+                return "";
+            }
+
+            string cacheKey = BuildExcelLinkCacheKey(workbookPath, worksheetName, row.ToString(CultureInfo.InvariantCulture), quantityColumn.ToString(CultureInfo.InvariantCulture));
+            ExcelLinkStringCacheEntry cached;
+            if (ExcelLinkUnitCache.TryGetValue(cacheKey, out cached) &&
+                (DateTime.UtcNow - cached.Utc).TotalMilliseconds <= ExcelLinkUnitCacheMs)
+            {
+                return cached.Value ?? "";
+            }
+
+            int visibleChecked = 0;
+            string result = "";
+            for (int col = quantityColumn - 1; col >= 1 && visibleChecked < 6; col--)
+            {
+                try
+                {
+                    if (IsExcelLinkColumnHidden(sheet, workbookPath, worksheetName, col))
+                    {
+                        continue;
+                    }
+
+                    visibleChecked++;
+                    dynamic unitCell = sheet.Cells[row, col];
+                    string text = ExcelValueToText(unitCell.Value2);
+                    if (LooksLikeExcelLinkUnit(text))
+                    {
+                        result = text.Trim();
+                        break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log("Read Excel link unit cell failed: " + ex.Message);
+                    result = "";
+                    break;
+                }
+            }
+
+            RememberExcelLinkUnit(cacheKey, result);
+            return result;
+        }
+
+        private static bool IsExcelLinkColumnHidden(dynamic sheet, string workbookPath, string worksheetName, int column)
+        {
+            string cacheKey = BuildExcelLinkCacheKey(workbookPath, worksheetName, "col", column.ToString(CultureInfo.InvariantCulture));
+            ExcelLinkBoolCacheEntry cached;
+            if (ExcelLinkHiddenColumnCache.TryGetValue(cacheKey, out cached) &&
+                (DateTime.UtcNow - cached.Utc).TotalMilliseconds <= ExcelLinkUnitCacheMs)
+            {
+                return cached.Value;
+            }
+
+            try
+            {
+                object hidden = sheet.Columns[column].Hidden;
+                bool result;
+                if (hidden is bool)
+                {
+                    result = (bool)hidden;
+                }
+                else
+                {
+                    result = String.Equals(Convert.ToString(hidden, CultureInfo.InvariantCulture), "True", StringComparison.OrdinalIgnoreCase);
+                }
+
+                RememberExcelLinkHiddenColumn(cacheKey, result);
+                return result;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string BuildExcelLinkCacheKey(string workbookPath, string worksheetName, string part1, string part2)
+        {
+            return NormalizeExcelLinkCachePath(workbookPath) + "|" + (worksheetName ?? "").Trim() + "|" + part1 + "|" + part2;
+        }
+
+        private static string NormalizeExcelLinkCachePath(string path)
+        {
+            try
+            {
+                return Path.GetFullPath(path ?? "");
+            }
+            catch
+            {
+                return path ?? "";
+            }
+        }
+
+        private static void RememberExcelLinkUnit(string cacheKey, string value)
+        {
+            if (ExcelLinkUnitCache.Count > ExcelLinkCacheLimit)
+            {
+                ExcelLinkUnitCache.Clear();
+            }
+
+            ExcelLinkUnitCache[cacheKey] = new ExcelLinkStringCacheEntry { Value = value ?? "", Utc = DateTime.UtcNow };
+        }
+
+        private static void RememberExcelLinkHiddenColumn(string cacheKey, bool value)
+        {
+            if (ExcelLinkHiddenColumnCache.Count > ExcelLinkCacheLimit)
+            {
+                ExcelLinkHiddenColumnCache.Clear();
+            }
+
+            ExcelLinkHiddenColumnCache[cacheKey] = new ExcelLinkBoolCacheEntry { Value = value, Utc = DateTime.UtcNow };
+        }
+
+        private static bool TryBuildExcelLinkUnitScaleSuffix(string excelUnitText, string quotaUnitText, out string suffix)
+        {
+            suffix = "";
+            ExcelLinkUnitScale excelUnit = ParseExcelLinkUnitScale(excelUnitText);
+            ExcelLinkUnitScale quotaUnit = ParseExcelLinkUnitScale(quotaUnitText);
+            if (String.IsNullOrEmpty(excelUnit.BaseUnit) ||
+                String.IsNullOrEmpty(quotaUnit.BaseUnit) ||
+                excelUnit.Scale <= 0m ||
+                quotaUnit.Scale <= 0m ||
+                !String.Equals(excelUnit.BaseUnit, quotaUnit.BaseUnit, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            suffix = FormatExcelLinkScaleSuffix(excelUnit.Scale / quotaUnit.Scale);
+            return true;
+        }
+
+        private static bool TryBuildQuotaUnitFallbackSuffix(string quotaUnitText, out string suffix)
+        {
+            suffix = "";
+            decimal factor;
+            string baseUnit;
+            if (!TryParseExcelLinkUnitPrefix(quotaUnitText, out factor, out baseUnit) ||
+                factor <= 1m ||
+                !LooksLikeExcelLinkUnit(baseUnit))
+            {
+                return false;
+            }
+
+            suffix = "/" + FormatExcelLinkFactor(factor);
+            return true;
+        }
+
+        private static bool TryParseExcelLinkUnitPrefix(string unitText, out decimal factor, out string baseUnit)
+        {
+            factor = 1m;
+            baseUnit = "";
+            string unit = NormalizeExcelLinkUnit(unitText);
+            if (String.IsNullOrEmpty(unit))
+            {
+                return false;
+            }
+
+            if (unit[0] == '\u4e07')
+            {
+                factor = 10000m;
+                baseUnit = unit.Substring(1);
+                return !String.IsNullOrEmpty(baseUnit);
+            }
+
+            int index = 0;
+            bool hasDot = false;
+            while (index < unit.Length)
+            {
+                char ch = unit[index];
+                if (Char.IsDigit(ch))
+                {
+                    index++;
+                    continue;
+                }
+
+                if (ch == '.' && !hasDot)
+                {
+                    hasDot = true;
+                    index++;
+                    continue;
+                }
+
+                break;
+            }
+
+            if (index == 0)
+            {
+                baseUnit = unit;
+                return true;
+            }
+
+            if (!Decimal.TryParse(unit.Substring(0, index), NumberStyles.Float, CultureInfo.InvariantCulture, out factor))
+            {
+                return false;
+            }
+
+            baseUnit = unit.Substring(index);
+            return !String.IsNullOrEmpty(baseUnit);
+        }
+
+        private static bool LooksLikeExcelLinkUnit(string text)
+        {
+            ExcelLinkUnitScale unit = ParseExcelLinkUnitScale(text);
+            return !String.IsNullOrEmpty(unit.BaseUnit);
+        }
+
+        private static ExcelLinkUnitScale ParseExcelLinkUnitScale(string text)
+        {
+            decimal scale;
+            string baseUnit;
+            if (!TryParseExcelLinkUnitPrefix(text, out scale, out baseUnit))
+            {
+                return new ExcelLinkUnitScale();
+            }
+
+            decimal unitScale;
+            baseUnit = NormalizeExcelLinkBaseUnit(baseUnit, out unitScale);
+            if (String.IsNullOrEmpty(baseUnit))
+            {
+                return new ExcelLinkUnitScale();
+            }
+
+            ExcelLinkUnitScale result = new ExcelLinkUnitScale();
+            result.BaseUnit = baseUnit;
+            result.Scale = (scale <= 0m ? 1m : scale) * unitScale;
+            return result;
+        }
+
+        private static string NormalizeExcelLinkUnit(string text)
+        {
+            string unit = (text ?? "").Trim().ToLowerInvariant();
+            unit = unit.Replace(" ", "").Replace("\u3000", "");
+            unit = unit.Replace("\uff08", "(").Replace("\uff09", ")");
+            unit = unit.Replace("\uff0e", ".").Replace("\u00b7", ".").Replace("\ufe52", ".");
+            unit = unit.Replace("\uff4d", "m").Replace("\uff2d", "m");
+            unit = unit.Replace("\uff10", "0").Replace("\uff11", "1").Replace("\uff12", "2")
+                .Replace("\uff13", "3").Replace("\uff14", "4").Replace("\uff15", "5")
+                .Replace("\uff16", "6").Replace("\uff17", "7").Replace("\uff18", "8")
+                .Replace("\uff19", "9");
+            unit = unit.Replace("\u00b2", "2").Replace("\u00b3", "3");
+            unit = unit.Replace("\u33a1", "m2").Replace("\u33a5", "m3");
+            unit = unit.Replace("m^2", "m2").Replace("m\uff3e2", "m2");
+            unit = unit.Replace("m^3", "m3").Replace("m\uff3e3", "m3");
+            unit = unit.Replace("\u5343\u7c73", "km").Replace("\u516c\u91cc", "km");
+            unit = unit.Replace("\u767e\u7c73", "hm");
+            unit = unit.Replace("\u5343\u514b", "kg").Replace("\u516c\u65a4", "kg");
+            unit = unit.Replace("\u5428", "t");
+            unit = unit.Replace("\u7acb\u65b9\u7c73", "m3");
+            unit = unit.Replace("\u5e73\u7c73", "m2");
+            unit = unit.Replace("\u5e73\u65b9\u7c73", "m2");
+            unit = unit.Replace("\u7c73", "m");
+            return unit;
+        }
+
+        private static string NormalizeExcelLinkBaseUnit(string unit, out decimal unitScale)
+        {
+            unitScale = 1m;
+            unit = NormalizeExcelLinkUnit(unit);
+            if (unit == "km")
+            {
+                unitScale = 1000m;
+                return "m";
+            }
+            if (unit == "hm")
+            {
+                unitScale = 100m;
+                return "m";
+            }
+            if (unit == "t")
+            {
+                unitScale = 1000m;
+                return "kg";
+            }
+            if (unit == "m" || unit == "m2" || unit == "m3" || unit == "kg")
+            {
+                return unit;
+            }
+            if (IsExcelLinkCountUnit(unit))
+            {
+                return unit;
+            }
+
+            return "";
+        }
+
+        private static bool IsExcelLinkCountUnit(string unit)
+        {
+            string[] units = new string[]
+            {
+                "\u5904", "\u5ea7", "\u7ec4", "\u6839", "\u9879", "\u53f0", "\u5b54", "\u5957",
+                "\u4e2a", "\u5757", "\u7247", "\u6bb5", "\u773c", "\u53e3", "\u69c0", "\u6a18", "\u95f4"
+            };
+            for (int i = 0; i < units.Length; i++)
+            {
+                if (String.Equals(unit, units[i], StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static string FormatExcelLinkScaleSuffix(decimal factor)
+        {
+            if (factor == 1m)
+            {
+                return "";
+            }
+
+            if (factor > 1m)
+            {
+                return "*" + FormatExcelLinkFactor(factor);
+            }
+
+            return "/" + FormatExcelLinkFactor(1m / factor);
+        }
+
+        private static string FormatExcelLinkFactor(decimal value)
+        {
+            decimal rounded = Decimal.Round(value, 6, MidpointRounding.AwayFromZero);
+            if (rounded == Decimal.Truncate(rounded))
+            {
+                return rounded.ToString("0", CultureInfo.InvariantCulture);
+            }
+
+            return rounded.ToString("0.######", CultureInfo.InvariantCulture);
         }
 
         private static bool IsValidRowSuffix(string suffix)
@@ -769,10 +1109,13 @@ namespace RecoNet
                 }
 
                 dynamic firstCell = selection.Cells[1, 1];
+                int rowIndex = Convert.ToInt32(firstCell.Row, CultureInfo.InvariantCulture);
+                int columnIndex = Convert.ToInt32(firstCell.Column, CultureInfo.InvariantCulture);
                 string workbookPath = Convert.ToString(workbook.FullName, CultureInfo.InvariantCulture);
                 string worksheetName = Convert.ToString(sheet.Name, CultureInfo.InvariantCulture);
                 string address = Convert.ToString(firstCell.Address(false, false), CultureInfo.InvariantCulture);
                 object value = firstCell.Value2;
+                string unitText = ReadExcelLinkUnitNearCell(sheet, workbookPath, worksheetName, rowIndex, columnIndex);
                 if (String.IsNullOrEmpty(workbookPath) || String.IsNullOrEmpty(worksheetName) || String.IsNullOrEmpty(address))
                 {
                     error = BuildExcelConnectError("无法读取当前 Excel 单元格地址");
@@ -784,16 +1127,19 @@ namespace RecoNet
                 cell.WorksheetName = worksheetName;
                 cell.CellAddress = address;
                 cell.DisplayValue = ExcelValueToText(value);
+                cell.UnitText = unitText;
                 cell.SelectionAddresses = includeSelectionAddresses ? ReadSelectedCellAddresses(selection, ExpressionSelectionAddressLimit) : null;
                 return true;
             }
             catch (COMException ex)
             {
+                ClearCachedSpreadsheetApplication(excel);
                 error = BuildExcelConnectError("读取 Excel/WPS 当前单元格失败：" + ex.Message);
                 return false;
             }
             catch (Exception ex)
             {
+                ClearCachedSpreadsheetApplication(excel);
                 error = BuildExcelConnectError("读取 Excel/WPS 当前单元格失败：" + ex.Message);
                 return false;
             }
@@ -1504,6 +1850,24 @@ namespace RecoNet
             return value.ToString("0.########", CultureInfo.InvariantCulture);
         }
 
+        private static string FormatExcelInputNumber(string valueText)
+        {
+            decimal value;
+            string error;
+            if (!TryEvaluateDecimal(valueText, out value, out error))
+            {
+                return valueText;
+            }
+
+            return FormatExcelInputNumber(value);
+        }
+
+        private static string FormatExcelInputNumber(decimal value)
+        {
+            decimal rounded = Decimal.Round(value, 3, MidpointRounding.AwayFromZero);
+            return rounded.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
         private static string NormalizeExpressionOperators(string expression)
         {
             return (expression ?? "").Trim().ToUpperInvariant()
@@ -1969,20 +2333,43 @@ namespace RecoNet
 
         private static object GetActiveSpreadsheetApplication()
         {
+            if (CachedSpreadsheetApplication != null &&
+                (DateTime.UtcNow - CachedSpreadsheetApplicationUtc).TotalMilliseconds <= SpreadsheetApplicationCacheMs)
+            {
+                return CachedSpreadsheetApplication;
+            }
+
             List<string> diagnostics = new List<string>();
             object app;
             if (TryGetActiveSpreadsheetApplicationByProgId(out app, diagnostics))
             {
+                RememberCachedSpreadsheetApplication(app);
                 return app;
             }
 
             if (TryGetExcelApplicationByWindowObject(out app, diagnostics))
             {
+                RememberCachedSpreadsheetApplication(app);
                 return app;
             }
 
             Log("GetActiveSpreadsheetApplication failed: " + String.Join(" | ", diagnostics.ToArray()));
             return null;
+        }
+
+        private static void RememberCachedSpreadsheetApplication(object app)
+        {
+            CachedSpreadsheetApplication = app;
+            CachedSpreadsheetApplicationUtc = DateTime.UtcNow;
+        }
+
+        private static void ClearCachedSpreadsheetApplication(object app)
+        {
+            if (app == null || Object.ReferenceEquals(CachedSpreadsheetApplication, app))
+            {
+                CachedSpreadsheetApplication = null;
+                CachedSpreadsheetApplicationUtc = DateTime.MinValue;
+            }
         }
 
         private static bool TryGetActiveSpreadsheetApplicationByProgId(out object app, List<string> diagnostics)
@@ -2422,6 +2809,89 @@ namespace RecoNet
             }
         }
 
+        private static bool TryReadExcelCellValue(ExcelQuotaLink link, ExcelSyncReadContext context, out string valueText, out decimal quantity, out string error)
+        {
+            valueText = null;
+            quantity = 0;
+            error = null;
+
+            string expression = String.IsNullOrWhiteSpace(link.Expression) ? link.CellAddress : link.Expression;
+            if (context != null)
+            {
+                ExcelSyncReadResult liveResult = TryEvaluateLiveExcelExpression(link, context, expression, out valueText, out quantity, out error);
+                if (liveResult == ExcelSyncReadResult.Success)
+                {
+                    return true;
+                }
+
+                if (liveResult == ExcelSyncReadResult.Failed)
+                {
+                    return false;
+                }
+            }
+
+            return TryReadExcelCellValueFromFile(link, context, out valueText, out quantity, out error);
+        }
+
+        private static ExcelSyncReadResult TryEvaluateLiveExcelExpression(ExcelQuotaLink link, ExcelSyncReadContext context, string expression, out string valueText, out decimal quantity, out string error)
+        {
+            valueText = null;
+            quantity = 0;
+            error = null;
+
+            object sheetObject;
+            if (context == null || !context.TryGetLiveSheet(link.ExcelPath, link.WorksheetName, out sheetObject, out error))
+            {
+                return ExcelSyncReadResult.FallbackToFile;
+            }
+            dynamic sheet = sheetObject;
+
+            try
+            {
+                string normalizedExpression = NormalizeCellAddress(expression).Replace("\u00d7", "*").Replace("\uff08", "(").Replace("\uff09", ")");
+                CellRef onlyCell;
+                if (TryParseCellAddress(normalizedExpression, out onlyCell))
+                {
+                    dynamic range = sheet.Range[normalizedExpression];
+                    object rawValue = range.Value2;
+                    valueText = FormatExcelInputNumber(ExcelValueToText(rawValue));
+                    if (String.IsNullOrWhiteSpace(valueText))
+                    {
+                        error = "Excel \u5355\u5143\u683c\u4e3a\u7a7a";
+                        return ExcelSyncReadResult.Failed;
+                    }
+
+                    if (!TryEvaluateDecimal(valueText, out quantity, out error))
+                    {
+                        error = "Excel \u5355\u5143\u683c\u503c\u65e0\u6cd5\u8ba1\u7b97: " + error;
+                        return ExcelSyncReadResult.Failed;
+                    }
+
+                    return ExcelSyncReadResult.Success;
+                }
+
+                string resolved = ResolveLiveExpression(sheet, normalizedExpression, out error);
+                if (resolved == null)
+                {
+                    return ExcelSyncReadResult.FallbackToFile;
+                }
+
+                if (!TryEvaluateDecimal(resolved, out quantity, out error))
+                {
+                    error = "\u8868\u8fbe\u5f0f\u8ba1\u7b97\u5931\u8d25: " + error;
+                    return ExcelSyncReadResult.Failed;
+                }
+
+                valueText = resolved;
+                return ExcelSyncReadResult.Success;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return ExcelSyncReadResult.FallbackToFile;
+            }
+        }
+
         private static bool TryReadExcelCellValueFromFile(ExcelQuotaLink link, out string valueText, out decimal quantity, out string error)
         {
             valueText = null;
@@ -2470,13 +2940,13 @@ namespace RecoNet
                     return false;
                 }
 
-                if (!TryEvaluateDecimal(cellValue, out quantity, out error))
+                valueText = FormatExcelInputNumber(cellValue);
+                if (!TryEvaluateDecimal(valueText, out quantity, out error))
                 {
                     error = normalized + " 单元格值无法计算：" + error;
                     return false;
                 }
 
-                valueText = cellValue;
                 return true;
             }
 
@@ -2489,6 +2959,54 @@ namespace RecoNet
             if (!TryEvaluateDecimal(resolved, out quantity, out error))
             {
                 error = "表达式计算失败：" + error;
+                return false;
+            }
+
+            valueText = resolved;
+            return true;
+        }
+
+        private static bool TryEvaluateWorkbookExpression(ExcelSyncReadContext context, string path, string sheetName, string expression, out string valueText, out decimal quantity, out string error)
+        {
+            valueText = null;
+            quantity = 0;
+            error = null;
+
+            if (String.IsNullOrWhiteSpace(expression))
+            {
+                error = "Excel \u8868\u8fbe\u5f0f\u4e3a\u7a7a";
+                return false;
+            }
+
+            string normalized = NormalizeCellAddress(expression).Replace("\u00d7", "*").Replace("\uff08", "(").Replace("\uff09", ")");
+            CellRef onlyCell;
+            if (TryParseCellAddress(normalized, out onlyCell))
+            {
+                string cellValue;
+                if (!context.TryReadWorkbookCellValue(path, sheetName, normalized, out cellValue, out error))
+                {
+                    return false;
+                }
+
+                valueText = FormatExcelInputNumber(cellValue);
+                if (!TryEvaluateDecimal(valueText, out quantity, out error))
+                {
+                    error = normalized + " \u5355\u5143\u683c\u503c\u65e0\u6cd5\u8ba1\u7b97: " + error;
+                    return false;
+                }
+
+                return true;
+            }
+
+            string resolved = ResolveWorkbookExpression(context, path, sheetName, normalized, out error);
+            if (resolved == null)
+            {
+                return false;
+            }
+
+            if (!TryEvaluateDecimal(resolved, out quantity, out error))
+            {
+                error = "\u8868\u8fbe\u5f0f\u8ba1\u7b97\u5931\u8d25: " + error;
                 return false;
             }
 
@@ -2537,7 +3055,7 @@ namespace RecoNet
                         return false;
                     }
 
-                    builder.Append(knownValue.ToString(CultureInfo.InvariantCulture));
+                    builder.Append(FormatExcelInputNumber(knownValue));
                     continue;
                 }
 
@@ -2628,6 +3146,35 @@ namespace RecoNet
             return true;
         }
 
+        private static bool TryReadExcelCellValueFromFile(ExcelQuotaLink link, ExcelSyncReadContext context, out string valueText, out decimal quantity, out string error)
+        {
+            valueText = null;
+            quantity = 0;
+            error = null;
+            if (String.IsNullOrEmpty(link.ExcelPath) || !File.Exists(link.ExcelPath))
+            {
+                error = "Excel \u6587\u4ef6\u4e0d\u5b58\u5728";
+                return false;
+            }
+
+            string expression = String.IsNullOrWhiteSpace(link.Expression) ? link.CellAddress : link.Expression;
+            bool evaluated = context == null
+                ? TryEvaluateWorkbookExpression(link.ExcelPath, link.WorksheetName, expression, out valueText, out quantity, out error)
+                : TryEvaluateWorkbookExpression(context, link.ExcelPath, link.WorksheetName, expression, out valueText, out quantity, out error);
+            if (!evaluated)
+            {
+                return false;
+            }
+
+            if (String.IsNullOrWhiteSpace(valueText))
+            {
+                error = "Excel \u5355\u5143\u683c\u4e3a\u7a7a";
+                return false;
+            }
+
+            return true;
+        }
+
         private static bool TryEvaluateDecimal(string expression, out decimal value, out string error)
         {
             value = 0;
@@ -2687,7 +3234,7 @@ namespace RecoNet
                         return null;
                     }
 
-                    builder.Append(parsed.ToString(CultureInfo.InvariantCulture));
+                    builder.Append(FormatExcelInputNumber(parsed));
                     continue;
                 }
 
@@ -2699,6 +3246,67 @@ namespace RecoNet
                 }
 
                 error = "表达式里包含不支持的字符：" + ch;
+                return null;
+            }
+
+            return builder.ToString();
+        }
+
+        private static string ResolveWorkbookExpression(ExcelSyncReadContext context, string path, string sheetName, string expression, out string error)
+        {
+            error = null;
+            StringBuilder builder = new StringBuilder();
+            for (int i = 0; i < expression.Length;)
+            {
+                char ch = expression[i];
+                if (Char.IsLetter(ch))
+                {
+                    int start = i;
+                    while (i < expression.Length && Char.IsLetter(expression[i]))
+                    {
+                        i++;
+                    }
+
+                    while (i < expression.Length && Char.IsDigit(expression[i]))
+                    {
+                        i++;
+                    }
+
+                    string token = expression.Substring(start, i - start).ToUpperInvariant();
+                    CellRef cell;
+                    if (!TryParseCellAddress(token, out cell))
+                    {
+                        error = "\u8868\u8fbe\u5f0f\u91cc\u5305\u542b\u65e0\u6cd5\u8bc6\u522b\u7684\u5355\u5143\u683c: " + token;
+                        return null;
+                    }
+
+                    string cellValue;
+                    if (!context.TryReadWorkbookCellValue(path, sheetName, token, out cellValue, out error))
+                    {
+                        error = token + " \u8bfb\u53d6\u5931\u8d25: " + error;
+                        return null;
+                    }
+
+                    decimal parsed;
+                    string parseError;
+                    if (!TryEvaluateDecimal(cellValue, out parsed, out parseError))
+                    {
+                        error = token + " \u5355\u5143\u683c\u503c\u65e0\u6cd5\u8ba1\u7b97: " + parseError;
+                        return null;
+                    }
+
+                    builder.Append(FormatExcelInputNumber(parsed));
+                    continue;
+                }
+
+                if ("0123456789.+-*/() ".IndexOf(ch) >= 0)
+                {
+                    builder.Append(ch);
+                    i++;
+                    continue;
+                }
+
+                error = "\u8868\u8fbe\u5f0f\u91cc\u5305\u542b\u4e0d\u652f\u6301\u7684\u5b57\u7b26: " + ch;
                 return null;
             }
 
@@ -2752,7 +3360,7 @@ namespace RecoNet
                         return null;
                     }
 
-                    builder.Append(parsed.ToString(CultureInfo.InvariantCulture));
+                    builder.Append(FormatExcelInputNumber(parsed));
                     continue;
                 }
 
@@ -2831,6 +3439,104 @@ namespace RecoNet
 
                 error = "找不到单元格：" + cellAddress;
                 return false;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+        }
+
+        private static bool TryReadSheetTargetCellsByNpoi(string path, string sheetName, IEnumerable<string> addresses, out Dictionary<string, string> values, out string error)
+        {
+            values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            error = null;
+            try
+            {
+                using (Stream stream = OpenWorkbookStreamShared(path))
+                {
+                    IWorkbook workbook = WorkbookFactory.Create(stream);
+                    ISheet sheet = workbook.GetSheet(sheetName);
+                    if (sheet == null)
+                    {
+                        error = "\u627e\u4e0d\u5230\u5de5\u4f5c\u8868: " + sheetName;
+                        return false;
+                    }
+
+                    foreach (string address in addresses ?? new string[0])
+                    {
+                        string normalized = NormalizeCellAddress(address);
+                        CellRef cellRef;
+                        if (!TryParseCellAddress(normalized, out cellRef))
+                        {
+                            continue;
+                        }
+
+                        IRow row = sheet.GetRow(cellRef.Row - 1);
+                        ICell cell = row == null ? null : row.GetCell(cellRef.Column - 1);
+                        values[normalized] = NpoiCellToText(cell);
+                    }
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+        }
+
+        private static bool TryReadXlsxTargetCells(string path, string sheetName, IEnumerable<string> addresses, out Dictionary<string, string> values, out string error)
+        {
+            values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            error = null;
+            HashSet<string> targets = new HashSet<string>((addresses ?? new string[0]).Select(NormalizeCellAddress).Where(a => !String.IsNullOrEmpty(a)), StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                using (ZipArchive archive = OpenZipArchiveShared(path))
+                {
+                    List<string> sharedStrings = ReadSharedStrings(archive);
+                    string sheetPath = ResolveSheetPath(archive, sheetName);
+                    if (String.IsNullOrEmpty(sheetPath))
+                    {
+                        error = "\u627e\u4e0d\u5230\u5de5\u4f5c\u8868: " + sheetName;
+                        return false;
+                    }
+
+                    ZipArchiveEntry sheetEntry = archive.GetEntry(sheetPath);
+                    if (sheetEntry == null)
+                    {
+                        error = "\u627e\u4e0d\u5230\u5de5\u4f5c\u8868\u6570\u636e: " + sheetPath;
+                        return false;
+                    }
+
+                    using (Stream stream = sheetEntry.Open())
+                    using (XmlReader reader = XmlReader.Create(stream))
+                    {
+                        while (reader.Read() && values.Count < targets.Count)
+                        {
+                            if (reader.NodeType == XmlNodeType.Element && reader.LocalName == "c")
+                            {
+                                string reference = NormalizeCellAddress(reader.GetAttribute("r"));
+                                if (targets.Contains(reference))
+                                {
+                                    values[reference] = ReadCellValue(reader.ReadSubtree(), reader.GetAttribute("t"), sharedStrings);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                foreach (string target in targets)
+                {
+                    if (!values.ContainsKey(target))
+                    {
+                        values[target] = "";
+                    }
+                }
+
+                return true;
             }
             catch (Exception ex)
             {
@@ -3538,6 +4244,10 @@ namespace RecoNet
 
         private static SyncSummary SyncExcelLinks(Form mainForm, bool manual, string tableName)
         {
+            Stopwatch totalTimer = Stopwatch.StartNew();
+            Stopwatch readTimer = new Stopwatch();
+            Stopwatch dbTimer = new Stopwatch();
+            Stopwatch refreshTimer = new Stopwatch();
             SyncSummary summary = new SyncSummary();
             SqlConnection conn = GetProjectConnection(mainForm);
             if (conn == null)
@@ -3567,24 +4277,33 @@ namespace RecoNet
             }
 
             List<PendingSync> pending = new List<PendingSync>();
-            foreach (ExcelQuotaLink link in syncLinks)
+            ExcelSyncReadContext readContext = new ExcelSyncReadContext(syncLinks);
+            readTimer.Start();
+            try
             {
-                string valueText;
-                decimal quantity;
-                string error;
-                if (!TryReadExcelCellValue(link, out valueText, out quantity, out error))
+                foreach (ExcelQuotaLink link in syncLinks)
                 {
-                    link.LastStatus = error;
-                    link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
-                    summary.Skipped++;
-                    continue;
-                }
+                    string valueText;
+                    decimal quantity;
+                    string error;
+                    if (!TryReadExcelCellValue(link, readContext, out valueText, out quantity, out error))
+                    {
+                        link.LastStatus = error;
+                        link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+                        summary.Skipped++;
+                        continue;
+                    }
 
-                PendingSync item = new PendingSync();
-                item.Link = link;
-                item.ValueText = valueText;
-                item.Quantity = quantity;
-                pending.Add(item);
+                    PendingSync item = new PendingSync();
+                    item.Link = link;
+                    item.ValueText = valueText;
+                    item.Quantity = quantity;
+                    pending.Add(item);
+                }
+            }
+            finally
+            {
+                readTimer.Stop();
             }
 
             if (pending.Count == 0)
@@ -3650,9 +4369,24 @@ namespace RecoNet
                 }
             }
 
+            dbTimer.Stop();
             SaveStore(conn, store);
+            refreshTimer.Start();
             RefreshCurrentQuotaGrid(mainForm);
             RefreshExcelLinkPanel(mainForm);
+            refreshTimer.Stop();
+            totalTimer.Stop();
+            Log("Excel sync summary: manual=" + manual.ToString(CultureInfo.InvariantCulture)
+                + ", links=" + syncLinks.Count.ToString(CultureInfo.InvariantCulture)
+                + ", files=" + readContext.FileCount.ToString(CultureInfo.InvariantCulture)
+                + ", sheets=" + readContext.SheetCount.ToString(CultureInfo.InvariantCulture)
+                + ", cells=" + readContext.CellCount.ToString(CultureInfo.InvariantCulture)
+                + ", fileSheetReads=" + readContext.FileSheetReadCount.ToString(CultureInfo.InvariantCulture)
+                + ", liveWorkbookScans=" + readContext.LiveWorkbookScanCount.ToString(CultureInfo.InvariantCulture)
+                + ", readMs=" + readTimer.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture)
+                + ", dbMs=" + dbTimer.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture)
+                + ", refreshMs=" + refreshTimer.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture)
+                + ", totalMs=" + totalTimer.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture));
             summary.Message = "已同步 " + summary.Changed.ToString(CultureInfo.InvariantCulture) + " 条，跳过 " + summary.Skipped.ToString(CultureInfo.InvariantCulture) + " 条。";
             return summary;
         }
@@ -3764,7 +4498,26 @@ namespace RecoNet
             public string WorksheetName;
             public string CellAddress;
             public string DisplayValue;
+            public string UnitText;
             public List<string> SelectionAddresses;
+        }
+
+        private sealed class ExcelLinkStringCacheEntry
+        {
+            public string Value;
+            public DateTime Utc;
+        }
+
+        private sealed class ExcelLinkBoolCacheEntry
+        {
+            public bool Value;
+            public DateTime Utc;
+        }
+
+        private struct ExcelLinkUnitScale
+        {
+            public string BaseUnit;
+            public decimal Scale;
         }
 
         private sealed class ExcelBindOptions
@@ -3900,6 +4653,259 @@ namespace RecoNet
             public string Message;
         }
 
+        private enum ExcelSyncReadResult
+        {
+            Success,
+            Failed,
+            FallbackToFile
+        }
+
+        private sealed class ExcelSyncReadContext
+        {
+            private readonly Dictionary<string, HashSet<string>> sheetAddresses = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            private readonly Dictionary<string, FileSheetValueCache> fileSheets = new Dictionary<string, FileSheetValueCache>(StringComparer.OrdinalIgnoreCase);
+            private readonly Dictionary<string, object> liveWorkbooks = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            private readonly Dictionary<string, object> liveSheets = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            private readonly HashSet<string> missingLiveWorkbooks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            private readonly HashSet<string> missingLiveSheets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            private object liveApp;
+            private bool liveAppInitialized;
+            private readonly int fileCount;
+            private readonly int sheetCount;
+            private readonly int cellCount;
+
+            public int FileSheetReadCount;
+            public int LiveWorkbookScanCount;
+
+            public ExcelSyncReadContext(IEnumerable<ExcelQuotaLink> links)
+            {
+                HashSet<string> files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (ExcelQuotaLink link in links ?? new ExcelQuotaLink[0])
+                {
+                    if (link == null || String.IsNullOrWhiteSpace(link.ExcelPath) || String.IsNullOrWhiteSpace(link.WorksheetName))
+                    {
+                        continue;
+                    }
+
+                    files.Add(NormalizeWorkbookPath(link.ExcelPath));
+                    string key = BuildSheetKey(link.ExcelPath, link.WorksheetName);
+                    HashSet<string> addresses;
+                    if (!sheetAddresses.TryGetValue(key, out addresses))
+                    {
+                        addresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        sheetAddresses[key] = addresses;
+                    }
+
+                    string expression = String.IsNullOrWhiteSpace(link.Expression) ? link.CellAddress : link.Expression;
+                    foreach (string address in ExtractCellAddressesFromExpression(expression))
+                    {
+                        addresses.Add(NormalizeCellAddress(address));
+                    }
+
+                    if (addresses.Count == 0 && !String.IsNullOrWhiteSpace(link.CellAddress))
+                    {
+                        addresses.Add(NormalizeCellAddress(link.CellAddress));
+                    }
+                }
+
+                fileCount = files.Count;
+                sheetCount = sheetAddresses.Count;
+                cellCount = sheetAddresses.Values.Sum(set => set.Count);
+            }
+
+            public int FileCount { get { return fileCount; } }
+            public int SheetCount { get { return sheetCount; } }
+            public int CellCount { get { return cellCount; } }
+
+            public bool TryGetLiveSheet(string path, string sheetName, out object sheet, out string error)
+            {
+                sheet = null;
+                error = null;
+                string sheetKey = BuildSheetKey(path, sheetName);
+                if (liveSheets.TryGetValue(sheetKey, out sheet))
+                {
+                    return true;
+                }
+
+                if (missingLiveSheets.Contains(sheetKey))
+                {
+                    error = "Live Excel sheet is not open.";
+                    return false;
+                }
+
+                object workbook;
+                if (!TryGetLiveWorkbook(path, out workbook, out error))
+                {
+                    missingLiveSheets.Add(sheetKey);
+                    return false;
+                }
+
+                try
+                {
+                    dynamic wb = workbook;
+                    sheet = wb.Worksheets[sheetName];
+                    liveSheets[sheetKey] = sheet;
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    error = ex.Message;
+                    missingLiveSheets.Add(sheetKey);
+                    return false;
+                }
+            }
+
+            public bool TryReadWorkbookCellValue(string path, string sheetName, string cellAddress, out string valueText, out string error)
+            {
+                valueText = null;
+                error = null;
+                string sheetKey = BuildSheetKey(path, sheetName);
+                FileSheetValueCache cache;
+                if (!fileSheets.TryGetValue(sheetKey, out cache))
+                {
+                    cache = LoadFileSheet(path, sheetName);
+                    fileSheets[sheetKey] = cache;
+                }
+
+                if (!cache.Loaded)
+                {
+                    error = cache.Error;
+                    return false;
+                }
+
+                string normalized = NormalizeCellAddress(cellAddress);
+                if (cache.Values.TryGetValue(normalized, out valueText))
+                {
+                    return true;
+                }
+
+                valueText = "";
+                return true;
+            }
+
+            private bool TryGetLiveWorkbook(string path, out object workbook, out string error)
+            {
+                workbook = null;
+                error = null;
+                string normalizedPath = NormalizeWorkbookPath(path);
+                if (liveWorkbooks.TryGetValue(normalizedPath, out workbook))
+                {
+                    return true;
+                }
+
+                if (missingLiveWorkbooks.Contains(normalizedPath))
+                {
+                    error = "Live Excel workbook is not open.";
+                    return false;
+                }
+
+                object app = GetLiveApp();
+                if (app == null)
+                {
+                    error = "Live Excel is unavailable.";
+                    missingLiveWorkbooks.Add(normalizedPath);
+                    return false;
+                }
+
+                try
+                {
+                    LiveWorkbookScanCount++;
+                    dynamic excel = app;
+                    dynamic workbooks = excel.Workbooks;
+                    int count = Convert.ToInt32(workbooks.Count, CultureInfo.InvariantCulture);
+                    for (int i = 1; i <= count; i++)
+                    {
+                        dynamic candidate = workbooks.Item(i);
+                        string fullName = Convert.ToString(candidate.FullName, CultureInfo.InvariantCulture);
+                        if (String.Equals(NormalizeWorkbookPath(fullName), normalizedPath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            workbook = candidate;
+                            liveWorkbooks[normalizedPath] = workbook;
+                            return true;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    error = ex.Message;
+                    missingLiveWorkbooks.Add(normalizedPath);
+                    return false;
+                }
+
+                error = "Live Excel workbook is not open.";
+                missingLiveWorkbooks.Add(normalizedPath);
+                return false;
+            }
+
+            private object GetLiveApp()
+            {
+                if (!liveAppInitialized)
+                {
+                    liveAppInitialized = true;
+                    liveApp = GetActiveSpreadsheetApplication();
+                }
+
+                return liveApp;
+            }
+
+            private FileSheetValueCache LoadFileSheet(string path, string sheetName)
+            {
+                FileSheetReadCount++;
+                FileSheetValueCache cache = new FileSheetValueCache();
+                HashSet<string> addresses;
+                if (!sheetAddresses.TryGetValue(BuildSheetKey(path, sheetName), out addresses))
+                {
+                    addresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                }
+
+                Dictionary<string, string> values;
+                string npoiError;
+                if (TryReadSheetTargetCellsByNpoi(path, sheetName, addresses, out values, out npoiError))
+                {
+                    cache.Loaded = true;
+                    cache.Values = values;
+                    return cache;
+                }
+
+                string xlsxError;
+                if (TryReadXlsxTargetCells(path, sheetName, addresses, out values, out xlsxError))
+                {
+                    cache.Loaded = true;
+                    cache.Values = values;
+                    return cache;
+                }
+
+                cache.Loaded = false;
+                cache.Values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                cache.Error = "NPOI read failed: " + npoiError + "; direct xlsx read failed: " + xlsxError;
+                return cache;
+            }
+
+            private static string BuildSheetKey(string path, string sheetName)
+            {
+                return NormalizeWorkbookPath(path) + "|" + (sheetName ?? "").Trim();
+            }
+
+            private static string NormalizeWorkbookPath(string path)
+            {
+                try
+                {
+                    return Path.GetFullPath(path ?? "");
+                }
+                catch
+                {
+                    return path ?? "";
+                }
+            }
+        }
+
+        private sealed class FileSheetValueCache
+        {
+            public bool Loaded;
+            public Dictionary<string, string> Values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            public string Error;
+        }
+
         private sealed class ExcelLinkRuntime : IDisposable
         {
             private readonly Form mainForm;
@@ -4007,6 +5013,7 @@ namespace RecoNet
             private readonly Label currentQuotaLabel;
             private readonly Label currentExcelLabel;
             private readonly RadioButton simpleMode;
+            private readonly TextBox simpleScaleText;
             private readonly RadioButton expressionMode;
             private readonly TextBox expressionText;
             private readonly Label status;
@@ -4018,6 +5025,7 @@ namespace RecoNet
             private string lastExpressionExcelKey;
             private string lastAutoCellToken;
             private string lastAutoExpressionText;
+            private string lastAutoSimpleScaleText;
             private bool movingOrSizing;
             private bool editingExpression;
             private bool bindingQuota;
@@ -4056,9 +5064,16 @@ namespace RecoNet
                 simpleMode = new RadioButton();
                 simpleMode.Left = 16;
                 simpleMode.Top = 118;
-                simpleMode.Width = 160;
+                simpleMode.Width = 130;
                 simpleMode.Text = "简单绑定当前格";
                 simpleMode.Checked = true;
+
+                simpleScaleText = new TextBox();
+                simpleScaleText.Left = 150;
+                simpleScaleText.Top = 116;
+                simpleScaleText.Width = 330;
+                simpleScaleText.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+                simpleScaleText.GotFocus += delegate { simpleMode.Checked = true; };
 
                 expressionMode = new RadioButton();
                 expressionMode.Left = 16;
@@ -4155,6 +5170,7 @@ namespace RecoNet
                 Controls.Add(currentQuotaLabel);
                 Controls.Add(currentExcelLabel);
                 Controls.Add(simpleMode);
+                Controls.Add(simpleScaleText);
                 Controls.Add(expressionMode);
                 Controls.Add(expressionText);
                 Controls.Add(multiply);
@@ -4319,14 +5335,16 @@ namespace RecoNet
 
                 DataGridView grid = GetField<DataGridView>(mainForm, "dataGridViewDE");
                 DataGridViewRow row = GetCurrentQuotaRow(grid);
+                string quotaUnitText = row == null ? "" : GetRowValue(row, "\u5355\u4f4d", "\u5b9a\u989d\u5355\u4f4d", "\u8ba1\u91cf\u5355\u4f4d");
                 string quotaText = row == null
                     ? "当前定额：未选中"
                     : "当前定额：" + GetRowValue(row, "定额编号", "定额编号DE", "编号") + " " + GetRowValue(row, "工程或费用项目名称", "名称", "项目名称");
-                string quotaKey = row == null ? "" : row.Index.ToString(CultureInfo.InvariantCulture) + "|" + quotaText;
+                string quotaKey = row == null ? "" : row.Index.ToString(CultureInfo.InvariantCulture) + "|" + quotaText + "|" + quotaUnitText;
                 if (!String.Equals(lastQuotaKey, quotaKey, StringComparison.Ordinal))
                 {
                     currentQuotaLabel.Text = quotaText;
                     lastQuotaKey = quotaKey;
+                    UpdateSimpleScaleSuggestion(row, lastExcelCell);
                 }
 
                 if (mainForm != null && mainForm.ContainsFocus && !ContainsFocus)
@@ -4338,12 +5356,13 @@ namespace RecoNet
                 string error;
                 if (TryGetActiveExcelCell(out cell, out error, false))
                 {
-                    string excelKey = cell.WorkbookPath + "|" + cell.WorksheetName + "|" + BuildSelectionDisplay(cell);
+                    string excelKey = cell.WorkbookPath + "|" + cell.WorksheetName + "|" + BuildSelectionDisplay(cell) + "|" + (cell.DisplayValue ?? "") + "|" + (cell.UnitText ?? "");
                     if (!String.Equals(lastExcelKey, excelKey, StringComparison.OrdinalIgnoreCase))
                     {
-                        currentExcelLabel.Text = "当前Excel：" + Path.GetFileName(cell.WorkbookPath) + "!" + cell.WorksheetName + "!" + BuildSelectionDisplay(cell);
+                        currentExcelLabel.Text = "当前Excel：" + Path.GetFileName(cell.WorkbookPath) + "!" + cell.WorksheetName + "!" + BuildSelectionDisplay(cell) + (String.IsNullOrWhiteSpace(cell.UnitText) ? "" : " 单位：" + cell.UnitText);
                         lastExcelKey = excelKey;
                         lastExcelCell = cell;
+                        UpdateSimpleScaleSuggestion(row, cell);
                         ApplyExcelCellToExpression(cell, false);
                     }
                 }
@@ -4363,6 +5382,322 @@ namespace RecoNet
                 expressionText.Text = expressionText.Text + token;
                 expressionText.SelectionStart = expressionText.Text.Length;
                 expressionText.Focus();
+            }
+
+            private void UpdateSimpleScaleSuggestion(DataGridViewRow row, ExcelCellAddress cell)
+            {
+                bool suppressDisplay;
+                string suffix = SuggestSimpleScaleSuffix(row, cell, out suppressDisplay);
+                string suggestion = suppressDisplay ? "" : BuildSimpleBindingDisplay(cell, suffix);
+                string current = simpleScaleText == null ? "" : simpleScaleText.Text.Trim();
+                string lastAuto = lastAutoSimpleScaleText ?? "";
+                if (simpleScaleText != null &&
+                    (String.IsNullOrEmpty(current) || String.Equals(current, lastAuto, StringComparison.OrdinalIgnoreCase)))
+                {
+                    simpleScaleText.Text = suggestion;
+                    simpleScaleText.SelectionStart = 0;
+                    simpleScaleText.SelectionLength = 0;
+                    lastAutoSimpleScaleText = suggestion;
+                }
+                else if (String.IsNullOrEmpty(suggestion))
+                {
+                    lastAutoSimpleScaleText = "";
+                }
+            }
+
+            private static string BuildSimpleBindingDisplay(ExcelCellAddress cell, string suffix)
+            {
+                suffix = NormalizeSimpleBindingText(suffix);
+                if (cell == null || String.IsNullOrWhiteSpace(cell.DisplayValue))
+                {
+                    return suffix;
+                }
+
+                decimal value;
+                string error;
+                if (!TryEvaluateDecimal(cell.DisplayValue, out value, out error))
+                {
+                    return suffix;
+                }
+
+                return FormatExcelInputNumber(value) + suffix;
+            }
+
+            private static string BuildSimpleBindingExpression(ExcelCellAddress cell, string suffixText)
+            {
+                if (cell == null)
+                {
+                    return "";
+                }
+
+                string cellAddress = NormalizeCellAddress(cell.CellAddress);
+                string input = NormalizeSimpleBindingText(suffixText);
+                if (String.IsNullOrEmpty(input))
+                {
+                    return cellAddress;
+                }
+
+                if (!String.IsNullOrEmpty(ExtractFirstCellAddress(input)))
+                {
+                    return NormalizeExpressionOperators(input);
+                }
+
+                string suffix;
+                if (TryExtractSimpleSuffixFromDisplay(input, cell.DisplayValue, out suffix))
+                {
+                    return cellAddress + suffix;
+                }
+
+                if ("+-*/".IndexOf(input[0]) >= 0)
+                {
+                    return cellAddress + input;
+                }
+
+                return cellAddress + NormalizeSimpleScaleSuffix(input);
+            }
+
+            private static bool TryExtractSimpleSuffixFromDisplay(string input, string cellValue, out string suffix)
+            {
+                suffix = "";
+                if (String.IsNullOrWhiteSpace(input) || String.IsNullOrWhiteSpace(cellValue))
+                {
+                    return false;
+                }
+
+                decimal currentValue;
+                string error;
+                if (!TryEvaluateDecimal(cellValue, out currentValue, out error))
+                {
+                    return false;
+                }
+
+                int index = 0;
+                if (index < input.Length && (input[index] == '+' || input[index] == '-'))
+                {
+                    index++;
+                }
+
+                bool hasDigit = false;
+                bool hasDot = false;
+                while (index < input.Length)
+                {
+                    char ch = input[index];
+                    if (Char.IsDigit(ch))
+                    {
+                        hasDigit = true;
+                        index++;
+                        continue;
+                    }
+
+                    if (ch == '.' && !hasDot)
+                    {
+                        hasDot = true;
+                        index++;
+                        continue;
+                    }
+
+                    break;
+                }
+
+                if (!hasDigit)
+                {
+                    return false;
+                }
+
+                decimal displayedValue;
+                if (!Decimal.TryParse(input.Substring(0, index), NumberStyles.Float, CultureInfo.InvariantCulture, out displayedValue))
+                {
+                    return false;
+                }
+
+                decimal roundedCellValue = Decimal.Round(currentValue, 3, MidpointRounding.AwayFromZero);
+                if (displayedValue != roundedCellValue)
+                {
+                    return false;
+                }
+
+                suffix = input.Substring(index);
+                return String.IsNullOrEmpty(suffix) || "+-*/".IndexOf(suffix[0]) >= 0;
+            }
+
+            private static string NormalizeSimpleBindingText(string text)
+            {
+                if (String.IsNullOrWhiteSpace(text))
+                {
+                    return "";
+                }
+
+                return ConvertFullWidthDigits(text.Trim())
+                    .Replace(" ", "")
+                    .Replace("\u3000", "")
+                    .Replace("\u00d7", "*")
+                    .Replace("\u2715", "*")
+                    .Replace("\u00f7", "/")
+                    .Replace("\uff0f", "/")
+                    .Replace("\uff08", "(")
+                    .Replace("\uff09", ")")
+                    .ToUpperInvariant();
+            }
+
+            private static string NormalizeSimpleScaleSuffix(string suffixText)
+            {
+                string suffix = NormalizeSimpleBindingText(suffixText);
+                if (String.IsNullOrEmpty(suffix))
+                {
+                    return "";
+                }
+
+                decimal number;
+                if (Decimal.TryParse(suffix, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out number) && number > 0)
+                {
+                    return "/" + suffix;
+                }
+
+                return suffix.ToUpperInvariant();
+            }
+
+            private static string SuggestSimpleScaleSuffix(DataGridViewRow row, ExcelCellAddress cell, out bool suppressDisplay)
+            {
+                suppressDisplay = false;
+                if (row == null)
+                {
+                    return "";
+                }
+
+                string unit = GetRowValue(row, "\u5355\u4f4d", "\u5b9a\u989d\u5355\u4f4d", "\u8ba1\u91cf\u5355\u4f4d");
+                string suffix;
+                if (cell != null &&
+                    !String.IsNullOrWhiteSpace(cell.UnitText) &&
+                    TryBuildExcelLinkUnitScaleSuffix(cell.UnitText, unit, out suffix))
+                {
+                    return suffix;
+                }
+
+                if (cell != null &&
+                    !String.IsNullOrWhiteSpace(cell.UnitText) &&
+                    LooksLikeExcelLinkUnit(cell.UnitText) &&
+                    LooksLikeExcelLinkUnit(unit))
+                {
+                    suppressDisplay = true;
+                    return "";
+                }
+
+                return TryBuildQuotaUnitFallbackSuffix(unit, out suffix) ? suffix : "";
+            }
+
+            private static bool TryParseUnitScale(string unitText, out int factor, out string baseUnit)
+            {
+                factor = 1;
+                baseUnit = "";
+                string normalized = NormalizeUnitForScale(unitText);
+                if (String.IsNullOrEmpty(normalized))
+                {
+                    return false;
+                }
+
+                if (normalized[0] == '\u4e07')
+                {
+                    factor = 10000;
+                    baseUnit = normalized.Substring(1);
+                    return !String.IsNullOrEmpty(baseUnit);
+                }
+
+                int index = 0;
+                while (index < normalized.Length && Char.IsDigit(normalized[index]))
+                {
+                    index++;
+                }
+
+                if (index == 0)
+                {
+                    baseUnit = normalized;
+                    return true;
+                }
+
+                if (!Int32.TryParse(normalized.Substring(0, index), NumberStyles.Integer, CultureInfo.InvariantCulture, out factor))
+                {
+                    return false;
+                }
+
+                baseUnit = normalized.Substring(index);
+                return !String.IsNullOrEmpty(baseUnit);
+            }
+
+            private static string NormalizeUnitForScale(string unitText)
+            {
+                if (String.IsNullOrWhiteSpace(unitText))
+                {
+                    return "";
+                }
+
+                string text = ConvertFullWidthDigits(unitText.Trim())
+                    .Replace(" ", "")
+                    .Replace("\u3000", "")
+                    .Replace("\u00b2", "2")
+                    .Replace("\u00b3", "3")
+                    .Replace("\u33a1", "m2")
+                    .Replace("\u33a5", "m3")
+                    .Replace("\u7acb\u65b9\u7c73", "m3")
+                    .Replace("\u5e73\u65b9\u7c73", "m2")
+                    .Replace("\u516c\u91cc", "km")
+                    .Replace("\u5343\u514b", "kg")
+                    .Replace("\u5428", "t")
+                    .Replace("\u7c73", "m")
+                    .ToLowerInvariant();
+                return text;
+            }
+
+            private static bool IsRecognizedAutoScaleUnit(string unit)
+            {
+                if (String.IsNullOrEmpty(unit))
+                {
+                    return false;
+                }
+
+                string normalized = NormalizeUnitForScale(unit);
+                string[] units = new string[]
+                {
+                    "m", "m2", "m3", "km", "kg", "t",
+                    "\u5904", "\u5ea7", "\u7ec4", "\u6839", "\u9879", "\u53f0", "\u5b54", "\u5957",
+                    "\u4e2a", "\u5757", "\u7247", "\u6bb5", "\u773c", "\u53e3", "\u69c0", "\u6a18", "\u95f4"
+                };
+                for (int i = 0; i < units.Length; i++)
+                {
+                    if (String.Equals(normalized, units[i], StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            private static string ConvertFullWidthDigits(string text)
+            {
+                if (String.IsNullOrEmpty(text))
+                {
+                    return "";
+                }
+
+                StringBuilder builder = new StringBuilder(text.Length);
+                for (int i = 0; i < text.Length; i++)
+                {
+                    char ch = text[i];
+                    if (ch >= '\uff10' && ch <= '\uff19')
+                    {
+                        builder.Append((char)('0' + (ch - '\uff10')));
+                    }
+                    else if (ch == '\uff0e')
+                    {
+                        builder.Append('.');
+                    }
+                    else
+                    {
+                        builder.Append(ch);
+                    }
+                }
+
+                return builder.ToString();
             }
 
             private void ClearExpressionInput()
@@ -4629,7 +5964,7 @@ namespace RecoNet
                         return;
                     }
 
-                    string expression = simpleMode.Checked ? NormalizeCellAddress(cell.CellAddress) : expressionText.Text.Trim().ToUpperInvariant();
+                    string expression = simpleMode.Checked ? BuildSimpleBindingExpression(cell, simpleScaleText.Text) : expressionText.Text.Trim().ToUpperInvariant();
                     if (!simpleMode.Checked && String.IsNullOrEmpty(expression))
                     {
                         expression = BuildDefaultExpression(cell);
@@ -4663,10 +5998,11 @@ namespace RecoNet
                         String.Equals(NormalizeCellAddress(expression), NormalizeCellAddress(cell.CellAddress), StringComparison.OrdinalIgnoreCase) &&
                         !String.IsNullOrWhiteSpace(cell.DisplayValue))
                     {
-                        evaluated = TryEvaluateDecimal(cell.DisplayValue, out quantity, out readError);
+                        displayValue = FormatExcelInputNumber(cell.DisplayValue);
+                        evaluated = TryEvaluateDecimal(displayValue, out quantity, out readError);
                         if (evaluated)
                         {
-                            displayValue = cell.DisplayValue;
+                            displayValue = FormatExcelInputNumber(quantity);
                         }
                     }
                     else if (simpleMode.Checked &&
@@ -4676,7 +6012,7 @@ namespace RecoNet
                         evaluated = true;
                         displayValue = "";
                     }
-                    else if (!simpleMode.Checked && !String.IsNullOrWhiteSpace(cell.DisplayValue))
+                    else if (!String.IsNullOrWhiteSpace(cell.DisplayValue))
                     {
                         evaluated = TryEvaluateExpressionWithKnownCell(expression, cell.CellAddress, cell.DisplayValue, out displayValue, out quantity, out readError);
                     }
@@ -5423,7 +6759,6 @@ namespace RecoNet
                     {
                         SyncSummary result = SyncExcelLinks(mainForm, true, tableName);
                         status.Text = result.Message;
-                        Reload();
                     }
                     catch (Exception ex)
                     {
