@@ -3533,6 +3533,11 @@ namespace RecoNet
 
         private static SyncSummary SyncExcelLinks(Form mainForm, bool manual)
         {
+            return SyncExcelLinks(mainForm, manual, null);
+        }
+
+        private static SyncSummary SyncExcelLinks(Form mainForm, bool manual, string tableName)
+        {
             SyncSummary summary = new SyncSummary();
             SqlConnection conn = GetProjectConnection(mainForm);
             if (conn == null)
@@ -3548,8 +3553,21 @@ namespace RecoNet
                 return summary;
             }
 
+            string selectedTable = (tableName ?? "").Trim();
+            bool filterByTable = !String.IsNullOrEmpty(selectedTable);
+            List<ExcelQuotaLink> syncLinks = store.Links
+                .Where(link => link != null && (!filterByTable || String.Equals(GetLinkTableName(link), selectedTable, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+            if (syncLinks.Count == 0)
+            {
+                summary.Message = filterByTable
+                    ? "\u5f53\u524d\u6570\u91cf\u8868\u6ca1\u6709 Excel \u8054\u52a8\u7ed1\u5b9a\u3002"
+                    : "\u5f53\u524d\u9879\u76ee\u8fd8\u6ca1\u6709 Excel \u8054\u52a8\u7ed1\u5b9a\u3002";
+                return summary;
+            }
+
             List<PendingSync> pending = new List<PendingSync>();
-            foreach (ExcelQuotaLink link in store.Links)
+            foreach (ExcelQuotaLink link in syncLinks)
             {
                 string valueText;
                 decimal quantity;
@@ -5393,9 +5411,17 @@ namespace RecoNet
                 sync.Width = 90;
                 sync.Click += delegate
                 {
+                    string tableName = GetSelectedTableNameForSync();
+                    sync.Enabled = false;
+                    Cursor.Current = Cursors.WaitCursor;
+                    status.Text = String.IsNullOrEmpty(tableName)
+                        ? "\u6b63\u5728\u540c\u6b65\u5168\u90e8\u6570\u91cf\u8868..."
+                        : "\u6b63\u5728\u540c\u6b65\u6570\u91cf\u8868\uff1a" + tableName + "...";
+                    status.Refresh();
+                    sync.Refresh();
                     try
                     {
-                        SyncSummary result = SyncExcelLinks(mainForm, true);
+                        SyncSummary result = SyncExcelLinks(mainForm, true, tableName);
                         status.Text = result.Message;
                         Reload();
                     }
@@ -5403,6 +5429,11 @@ namespace RecoNet
                     {
                         status.Text = "同步失败：" + ex.Message;
                         Log("Manual Excel sync failed: " + ex);
+                    }
+                    finally
+                    {
+                        Cursor.Current = Cursors.Default;
+                        sync.Enabled = true;
                     }
                 };
 
@@ -5478,6 +5509,17 @@ namespace RecoNet
             }
 
             private const string AllTablesOption = "全部";
+
+            private string GetSelectedTableNameForSync()
+            {
+                string selected = cmbTable.SelectedItem == null ? "" : Convert.ToString(cmbTable.SelectedItem);
+                if (String.IsNullOrEmpty(selected) || selected == AllTablesOption)
+                {
+                    return "";
+                }
+
+                return selected;
+            }
 
             public void Reload()
             {
