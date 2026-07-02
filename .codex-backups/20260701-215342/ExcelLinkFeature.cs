@@ -1088,11 +1088,6 @@ namespace RecoNet
 
         private static bool TryGetActiveExcelCell(out ExcelCellAddress cell, out string error, bool includeSelectionAddresses)
         {
-            return TryGetActiveExcelCell(out cell, out error, includeSelectionAddresses, true);
-        }
-
-        private static bool TryGetActiveExcelCell(out ExcelCellAddress cell, out string error, bool includeSelectionAddresses, bool readUnit)
-        {
             cell = null;
             error = null;
             dynamic excel = null;
@@ -1120,7 +1115,7 @@ namespace RecoNet
                 string worksheetName = Convert.ToString(sheet.Name, CultureInfo.InvariantCulture);
                 string address = Convert.ToString(firstCell.Address(false, false), CultureInfo.InvariantCulture);
                 object value = firstCell.Value2;
-                string unitText = readUnit ? ReadExcelLinkUnitNearCell(sheet, workbookPath, worksheetName, rowIndex, columnIndex) : "";
+                string unitText = ReadExcelLinkUnitNearCell(sheet, workbookPath, worksheetName, rowIndex, columnIndex);
                 if (String.IsNullOrEmpty(workbookPath) || String.IsNullOrEmpty(worksheetName) || String.IsNullOrEmpty(address))
                 {
                     error = BuildExcelConnectError("无法读取当前 Excel 单元格地址");
@@ -2973,11 +2968,6 @@ namespace RecoNet
 
         private static bool TryEvaluateWorkbookExpression(ExcelSyncReadContext context, string path, string sheetName, string expression, out string valueText, out decimal quantity, out string error)
         {
-            return TryEvaluateWorkbookExpression(context, path, sheetName, expression, out valueText, out quantity, out error, false);
-        }
-
-        private static bool TryEvaluateWorkbookExpression(ExcelSyncReadContext context, string path, string sheetName, string expression, out string valueText, out decimal quantity, out string error, bool emptyCellAsZero)
-        {
             valueText = null;
             quantity = 0;
             error = null;
@@ -2998,13 +2988,6 @@ namespace RecoNet
                     return false;
                 }
 
-                if (emptyCellAsZero && String.IsNullOrWhiteSpace(cellValue))
-                {
-                    valueText = "0";
-                    quantity = 0m;
-                    return true;
-                }
-
                 valueText = FormatExcelInputNumber(cellValue);
                 if (!TryEvaluateDecimal(valueText, out quantity, out error))
                 {
@@ -3015,7 +2998,7 @@ namespace RecoNet
                 return true;
             }
 
-            string resolved = ResolveWorkbookExpression(context, path, sheetName, normalized, out error, emptyCellAsZero);
+            string resolved = ResolveWorkbookExpression(context, path, sheetName, normalized, out error);
             if (resolved == null)
             {
                 return false;
@@ -3271,11 +3254,6 @@ namespace RecoNet
 
         private static string ResolveWorkbookExpression(ExcelSyncReadContext context, string path, string sheetName, string expression, out string error)
         {
-            return ResolveWorkbookExpression(context, path, sheetName, expression, out error, false);
-        }
-
-        private static string ResolveWorkbookExpression(ExcelSyncReadContext context, string path, string sheetName, string expression, out string error, bool emptyCellAsZero)
-        {
             error = null;
             StringBuilder builder = new StringBuilder();
             for (int i = 0; i < expression.Length;)
@@ -3307,12 +3285,6 @@ namespace RecoNet
                     {
                         error = token + " \u8bfb\u53d6\u5931\u8d25: " + error;
                         return null;
-                    }
-
-                    if (emptyCellAsZero && String.IsNullOrWhiteSpace(cellValue))
-                    {
-                        builder.Append("0");
-                        continue;
                     }
 
                     decimal parsed;
@@ -5613,76 +5585,6 @@ namespace RecoNet
                 return TryBuildQuotaUnitFallbackSuffix(unit, out suffix) ? suffix : "";
             }
 
-            private static bool IsSimpleBindingUnitMismatch(DataGridViewRow row, ExcelCellAddress cell, out string excelUnit, out string quotaUnit)
-            {
-                excelUnit = cell == null ? "" : (cell.UnitText ?? "").Trim();
-                quotaUnit = row == null ? "" : GetRowValue(row, "\u5355\u4f4d", "\u5b9a\u989d\u5355\u4f4d", "\u8ba1\u91cf\u5355\u4f4d").Trim();
-                if (String.IsNullOrWhiteSpace(excelUnit) ||
-                    String.IsNullOrWhiteSpace(quotaUnit) ||
-                    !LooksLikeExcelLinkUnit(excelUnit) ||
-                    !LooksLikeExcelLinkUnit(quotaUnit))
-                {
-                    return false;
-                }
-
-                string ignored;
-                return !TryBuildExcelLinkUnitScaleSuffix(excelUnit, quotaUnit, out ignored);
-            }
-
-            private ExcelCellAddress GetExcelCellForBinding(out string error)
-            {
-                error = null;
-                ExcelCellAddress quickCell;
-                if (TryGetActiveExcelCell(out quickCell, out error, false, false))
-                {
-                    if (IsSameBindingCell(lastExcelCell, quickCell))
-                    {
-                        return lastExcelCell;
-                    }
-
-                    ExcelCellAddress cell;
-                    if (TryGetActiveExcelCell(out cell, out error, false))
-                    {
-                        CacheBindingExcelCell(cell);
-                        return cell;
-                    }
-
-                    return null;
-                }
-
-                if (lastExcelCell != null)
-                {
-                    error = null;
-                    return lastExcelCell;
-                }
-
-                return null;
-            }
-
-            private static bool IsSameBindingCell(ExcelCellAddress left, ExcelCellAddress right)
-            {
-                if (left == null || right == null)
-                {
-                    return false;
-                }
-
-                return String.Equals(left.WorkbookPath ?? "", right.WorkbookPath ?? "", StringComparison.OrdinalIgnoreCase) &&
-                       String.Equals(left.WorksheetName ?? "", right.WorksheetName ?? "", StringComparison.OrdinalIgnoreCase) &&
-                       String.Equals(left.CellAddress ?? "", right.CellAddress ?? "", StringComparison.OrdinalIgnoreCase) &&
-                       String.Equals(left.DisplayValue ?? "", right.DisplayValue ?? "", StringComparison.Ordinal);
-            }
-
-            private void CacheBindingExcelCell(ExcelCellAddress cell)
-            {
-                if (cell == null)
-                {
-                    return;
-                }
-
-                lastExcelCell = cell;
-                lastExcelKey = cell.WorkbookPath + "|" + cell.WorksheetName + "|" + BuildSelectionDisplay(cell) + "|" + (cell.DisplayValue ?? "") + "|" + (cell.UnitText ?? "");
-            }
-
             private static bool TryParseUnitScale(string unitText, out int factor, out string baseUnit)
             {
                 factor = 1;
@@ -6056,18 +5958,9 @@ namespace RecoNet
 
                     ExcelCellAddress cell;
                     string error;
-                    cell = GetExcelCellForBinding(out error);
-                    if (cell == null)
+                    if (!TryGetActiveExcelCell(out cell, out error, false))
                     {
                         status.Text = "请先在WPS/Excel里点击工程数量单元格。";
-                        return;
-                    }
-
-                    string excelUnit;
-                    string quotaUnit;
-                    if (simpleMode.Checked && IsSimpleBindingUnitMismatch(row, cell, out excelUnit, out quotaUnit))
-                    {
-                        status.Text = "\u5355\u4f4d\u4e0d\u4e00\u81f4\uff1aExcel " + excelUnit + " \u2192 \u5b9a\u989d " + quotaUnit + "\uff0c\u7b80\u5355\u7ed1\u5b9a\u5df2\u7981\u6b62\u3002\u53ef\u5207\u6362\u5230\u8868\u8fbe\u5f0f\u7ed1\u5b9a\u624b\u52a8\u5904\u7406\u3002";
                         return;
                     }
 

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Data;
 using System.Data.SqlClient;
 using System.Globalization;
 using System.IO;
@@ -26,7 +25,6 @@ namespace RecoNet
             public string QuotaCode;     // 定额编号，含 *系数 后缀，原样
             public string Adjust;        // 定额调整整串（可空）
             public int OrderInItem;      // 条目内序号，保持插入先后
-            public string SourceWorkbookPath;
             public string SourceSheet;   // 绑定时所在 sheet
             public string SourceExpr;    // 绑定表达式，如 "E5" 或 "E4+E5"
             public string SourceName;    // 源行项目名（供预览核对）
@@ -57,14 +55,6 @@ namespace RecoNet
             public string Status;
             public int OrderInItem;
             public long SourceQuotaSeq;  // 源定额序号（写入时直接复制该行）
-        }
-
-        private sealed class PreparedFillPreviewItem
-        {
-            public FillPreviewItem Item;
-            public string WorkbookPath;
-            public string SheetName;
-            public string Expression;
         }
 
         private static string TemplateFillDir()
@@ -254,6 +244,7 @@ namespace RecoNet
                     && String.Equals((l.WorksheetName ?? "").Trim(), sheet, StringComparison.OrdinalIgnoreCase))
                 .ToList();
             if (picked.Count == 0) return template;
+            template.WorkbookPath = picked[0].ExcelPath;
 
             // 2) 解析 源单元 -> 总概算序号(数字)。定额输入表用 总概算序号 关联单元，不是 _ZGS_编号。
             string srcLabel;
@@ -298,25 +289,10 @@ namespace RecoNet
             {
                 FillTemplateRow row;
                 if (!byId.TryGetValue(link.QuotaSequence, out row)) continue; // 定额已删/不在本单元
-                row.SourceWorkbookPath = link.ExcelPath;
                 row.SourceSheet = link.WorksheetName;
                 row.SourceExpr = String.IsNullOrEmpty(link.Expression) ? link.CellAddress : link.Expression;
                 int shun; shunById.TryGetValue(link.QuotaSequence, out shun);
                 collected.Add(new KeyValuePair<int, FillTemplateRow>(shun, row));
-            }
-
-            string workbookPath = PickTemplateWorkbookPath(collected.Select(p => p.Value.SourceWorkbookPath));
-            if (!String.IsNullOrWhiteSpace(workbookPath))
-            {
-                int before = collected.Count;
-                collected = collected
-                    .Where(p => SameTemplateWorkbookPath(p.Value.SourceWorkbookPath, workbookPath))
-                    .ToList();
-                template.WorkbookPath = workbookPath;
-                if (collected.Count < before)
-                {
-                    Log("Template fill skipped bindings from other workbooks for sheet " + sheet + ".");
-                }
             }
 
             // 4) 按 条目编号 分组，组内按 顺号 排序，分配 OrderInItem。
@@ -331,44 +307,6 @@ namespace RecoNet
                 }
             }
             return template;
-        }
-
-        private static string PickTemplateWorkbookPath(IEnumerable<string> paths)
-        {
-            return (paths ?? new string[0])
-                .Where(p => !String.IsNullOrWhiteSpace(p))
-                .GroupBy(NormalizeTemplateWorkbookPath, StringComparer.OrdinalIgnoreCase)
-                .OrderByDescending(g => g.Count())
-                .Select(g => g.First())
-                .FirstOrDefault() ?? "";
-        }
-
-        private static bool SameTemplateWorkbookPath(string left, string right)
-        {
-            return String.Equals(NormalizeTemplateWorkbookPath(left), NormalizeTemplateWorkbookPath(right), StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static string NormalizeTemplateWorkbookPath(string path)
-        {
-            try
-            {
-                return Path.GetFullPath(path ?? "");
-            }
-            catch
-            {
-                return path ?? "";
-            }
-        }
-
-        private static string GetTemplateRowWorkbookPath(FillTemplate template, FillTemplateRow row)
-        {
-            string path = row == null ? "" : row.SourceWorkbookPath;
-            if (String.IsNullOrWhiteSpace(path) && template != null)
-            {
-                path = template.WorkbookPath;
-            }
-
-            return path ?? "";
         }
 
         // 把表达式里每个单元格的列字母替换为 targetColumn（行号不变）。
@@ -408,8 +346,6 @@ namespace RecoNet
             FillTemplate template, Func<FillTemplateRow, KeyValuePair<string, string>> resolver)
         {
             List<FillPreviewItem> items = new List<FillPreviewItem>();
-            List<PreparedFillPreviewItem> prepared = new List<PreparedFillPreviewItem>();
-            List<ExcelQuotaLink> readLinks = new List<ExcelQuotaLink>();
             Dictionary<string, HashSet<int>> hiddenColumnCache = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
             foreach (FillTemplateRow row in template.Rows)
             {
@@ -428,64 +364,22 @@ namespace RecoNet
 
                 KeyValuePair<string, string> tgt = resolver(row);
                 string sheet = tgt.Key, expr = tgt.Value;
-                string workbook = GetTemplateRowWorkbookPath(template, row);
-                if (String.IsNullOrWhiteSpace(workbook))
-                {
-                    item.Status = "模板未记录 Excel 文件"; item.Selected = false; items.Add(item); continue;
-                }
-
-                PreparedFillPreviewItem preparedItem = new PreparedFillPreviewItem();
-                preparedItem.Item = item;
-                preparedItem.WorkbookPath = workbook;
-                preparedItem.SheetName = sheet;
-                preparedItem.Expression = expr;
-                string first = ExtractFirstCellAddress(expr);
-                CellRef firstCell;
-                if (!String.IsNullOrEmpty(first) && TryParseCellAddress(first, out firstCell))
-                {
-                    readLinks.Add(new ExcelQuotaLink { ExcelPath = workbook, WorksheetName = sheet, CellAddress = first, Expression = expr });
-
-                    HashSet<int> hiddenColumns = GetSavedHiddenColumns(workbook, sheet, hiddenColumnCache);
-                    for (int col = 1; col < firstCell.Column; col++)
-                    {
-                        if (hiddenColumns.Contains(col))
-                        {
-                            continue;
-                        }
-
-                        string address = ColumnNumberToName(col) + firstCell.Row.ToString(CultureInfo.InvariantCulture);
-                        readLinks.Add(new ExcelQuotaLink { ExcelPath = workbook, WorksheetName = sheet, CellAddress = address, Expression = address });
-                    }
-                }
-                else
-                {
-                    readLinks.Add(new ExcelQuotaLink { ExcelPath = workbook, WorksheetName = sheet, Expression = expr });
-                }
-
-                prepared.Add(preparedItem);
-                items.Add(item);
-            }
-
-            ExcelSyncReadContext readContext = new ExcelSyncReadContext(readLinks);
-            foreach (PreparedFillPreviewItem preparedItem in prepared)
-            {
-                FillPreviewItem item = preparedItem.Item;
                 string display; decimal qty; string err;
-                if (!TryEvaluateWorkbookExpression(readContext, preparedItem.WorkbookPath, preparedItem.SheetName, preparedItem.Expression, out display, out qty, out err, true))
+                if (!TryEvaluateWorkbookExpression(template.WorkbookPath, sheet, expr, out display, out qty, out err))
                 {
-                    item.Status = "取数失败：" + err; item.Selected = false; continue;
+                    item.Status = "取数失败：" + err; item.Selected = false; items.Add(item); continue;
                 }
 
                 item.QuantityText = display;
-                item.TargetName = ReadRowNameAt(preparedItem.WorkbookPath, preparedItem.SheetName, preparedItem.Expression, hiddenColumnCache, readContext);
-                if (qty == 0m) { item.Status = "数量为0"; item.Selected = false; }
+                item.TargetName = ReadRowNameAt(template.WorkbookPath, sheet, expr, hiddenColumnCache);
+                if (qty == 0m) { item.Status = "数量为0"; }
+                items.Add(item);
             }
-
             return items;
         }
 
         // 读某表达式首个单元格所在行的名称（A 到该格列前的非数字文本拼接），仅供人工核对。
-        private static string ReadRowNameAt(string workbook, string sheet, string expr, Dictionary<string, HashSet<int>> hiddenColumnCache, ExcelSyncReadContext readContext)
+        private static string ReadRowNameAt(string workbook, string sheet, string expr, Dictionary<string, HashSet<int>> hiddenColumnCache)
         {
             try
             {
@@ -503,16 +397,10 @@ namespace RecoNet
 
                     string addr = ColumnNumberToName(col) + cr.Row.ToString(CultureInfo.InvariantCulture);
                     string val; string e;
-                    if (readContext != null &&
-                        readContext.TryReadWorkbookCellValue(workbook, sheet, addr, out val, out e) &&
-                        !String.IsNullOrWhiteSpace(val))
+                    if (TryReadXlsxCellValue(workbook, sheet, addr, out val, out e) && !String.IsNullOrWhiteSpace(val))
                     {
                         decimal d; string pe;
                         if (!TryEvaluateDecimal(val, out d, out pe)) parts.Add(val.Trim());
-                        if (parts.Count >= 6)
-                        {
-                            break;
-                        }
                     }
                 }
                 return String.Join(" ", parts.Take(6).ToArray()).Trim();
@@ -601,9 +489,7 @@ namespace RecoNet
         private static string ApplyFill(Form mainForm, string targetUnitNo, List<FillPreviewItem> items)
         {
             List<FillPreviewItem> selected = items
-                .Where(i => i.Selected &&
-                    (String.IsNullOrEmpty(i.Status) || String.Equals(i.Status, "\u6570\u91cf\u4e3a0", StringComparison.Ordinal)) &&
-                    i.SourceQuotaSeq > 0)
+                .Where(i => i.Selected && String.IsNullOrEmpty(i.Status) && i.SourceQuotaSeq > 0)
                 .OrderBy(i => i.ItemNo, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(i => i.OrderInItem)
                 .ToList();
@@ -622,72 +508,59 @@ namespace RecoNet
                 Dictionary<long, int> nextShun = new Dictionary<long, int>();
                 HashSet<long> markerInserted = new HashSet<long>();
 
-                using (SqlTransaction transaction = conn.BeginTransaction())
+                foreach (FillPreviewItem item in selected)
                 {
-                    try
+                    Dictionary<string, object> row = LoadAgentFullRow(conn, item.SourceQuotaSeq);
+                    if (row == null) { skipped++; continue; }
+
+                    // 条目序号(全局)保持不变 -> 落到目标单元的同一条目。
+                    long itemSeq = Convert.ToInt64(row["条目序号"], CultureInfo.InvariantCulture);
+
+                    int shun;
+                    if (!nextShun.TryGetValue(itemSeq, out shun))
                     {
-                        foreach (FillPreviewItem item in selected)
+                        shun = GetMaxShun(conn, targetSeq, itemSeq) + 1;
+                    }
+
+                    if (!markerInserted.Contains(itemSeq))
+                    {
+                        Dictionary<string, object> marker = new Dictionary<string, object>(row);
+                        ApplyTemplateFillMarkerFields(marker, targetSeq, shun, item.TemplateName);
+                        marker.Remove("定额序号"); // 让数据库分配新标识
+
+                        long markerId = InsertQuotaRowReturnId(conn, marker);
+                        if (markerId > 0)
                         {
-                            Dictionary<string, object> row = LoadTemplateFullRow(conn, transaction, item.SourceQuotaSeq);
-                            if (row == null) { skipped++; continue; }
-
-                            // 条目序号(全局)保持不变 -> 落到目标单元的同一条目。
-                            long itemSeq = Convert.ToInt64(row["条目序号"], CultureInfo.InvariantCulture);
-
-                            int shun;
-                            if (!nextShun.TryGetValue(itemSeq, out shun))
-                            {
-                                shun = GetMaxShun(conn, transaction, targetSeq, itemSeq) + 1;
-                            }
-
-                            if (!markerInserted.Contains(itemSeq))
-                            {
-                                Dictionary<string, object> marker = new Dictionary<string, object>(row);
-                                ApplyTemplateFillMarkerFields(marker, targetSeq, shun, item.TemplateName);
-                                marker.Remove("定额序号"); // 让数据库分配新标识
-
-                                long markerId = InsertQuotaRowReturnId(conn, transaction, marker);
-                                if (markerId > 0)
-                                {
-                                    undo.Rows.Add(new AgentUndoRow { Kind = "I", QuotaSequence = markerId });
-                                    inserted++;
-                                    markerRows++;
-                                    markerInserted.Add(itemSeq);
-                                    shun++;
-                                }
-                                else
-                                {
-                                    skipped++;
-                                }
-                            }
-
-                            // 数量：用预览取到的目标工程量。
-                            decimal qty; string qErr;
-                            bool okQty = TryEvaluateDecimal(item.QuantityText, out qty, out qErr);
-
-                            row["总概算序号"] = targetSeq;
-                            row["顺号"] = shun;
-                            row["工程数量输入"] = (object)(item.QuantityText ?? "");
-                            row["工程数量"] = okQty ? (object)qty : DBNull.Value;
-                            row.Remove("定额序号"); // 让数据库分配新标识
-
-                            long newId = InsertQuotaRowReturnId(conn, transaction, row);
-                            if (newId > 0)
-                            {
-                                undo.Rows.Add(new AgentUndoRow { Kind = "I", QuotaSequence = newId });
-                                inserted++;
-                                nextShun[itemSeq] = shun + 1;
-                            }
-                            else { skipped++; }
+                            undo.Rows.Add(new AgentUndoRow { Kind = "I", QuotaSequence = markerId });
+                            inserted++;
+                            markerRows++;
+                            markerInserted.Add(itemSeq);
+                            shun++;
                         }
+                        else
+                        {
+                            skipped++;
+                        }
+                    }
 
-                        transaction.Commit();
-                    }
-                    catch
+                    // 数量：用预览取到的目标工程量。
+                    decimal qty; string qErr;
+                    bool okQty = TryEvaluateDecimal(item.QuantityText, out qty, out qErr);
+
+                    row["总概算序号"] = targetSeq;
+                    row["顺号"] = shun;
+                    row["工程数量输入"] = (object)(item.QuantityText ?? "") ;
+                    row["工程数量"] = okQty ? (object)qty : DBNull.Value;
+                    row.Remove("定额序号"); // 让数据库分配新标识
+
+                    long newId = InsertQuotaRowReturnId(conn, row);
+                    if (newId > 0)
                     {
-                        transaction.Rollback();
-                        throw;
+                        undo.Rows.Add(new AgentUndoRow { Kind = "I", QuotaSequence = newId });
+                        inserted++;
+                        nextShun[itemSeq] = shun + 1;
                     }
+                    else { skipped++; }
                 }
 
                 if (undo.Rows.Count > 0)
@@ -737,44 +610,11 @@ namespace RecoNet
             }
         }
 
-        private static Dictionary<string, object> LoadTemplateFullRow(SqlConnection conn, SqlTransaction transaction, long quotaSequence)
-        {
-            using (SqlCommand cmd = conn.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = "select * from 定额输入 where 定额序号=@id";
-                cmd.Parameters.AddWithValue("@id", quotaSequence);
-                using (SqlDataAdapter adapter = new SqlDataAdapter(cmd))
-                {
-                    DataTable table = new DataTable();
-                    adapter.Fill(table);
-                    if (table.Rows.Count == 0)
-                    {
-                        return null;
-                    }
-
-                    Dictionary<string, object> values = new Dictionary<string, object>();
-                    foreach (DataColumn column in table.Columns)
-                    {
-                        values[column.ColumnName] = table.Rows[0][column];
-                    }
-
-                    return values;
-                }
-            }
-        }
-
         // 目标单元某条目下当前最大顺号(无则0)。
         private static int GetMaxShun(SqlConnection conn, long zgsSeq, long itemSeq)
         {
-            return GetMaxShun(conn, null, zgsSeq, itemSeq);
-        }
-
-        private static int GetMaxShun(SqlConnection conn, SqlTransaction transaction, long zgsSeq, long itemSeq)
-        {
             using (SqlCommand cmd = conn.CreateCommand())
             {
-                cmd.Transaction = transaction;
                 cmd.CommandText = "select isnull(max(顺号),0) from 定额输入 where 总概算序号=@z and 条目序号=@t";
                 cmd.Parameters.AddWithValue("@z", zgsSeq);
                 cmd.Parameters.AddWithValue("@t", itemSeq);
@@ -786,11 +626,6 @@ namespace RecoNet
         // 插入一行 定额输入(不含 定额序号)，返回新分配的 定额序号。
         private static long InsertQuotaRowReturnId(SqlConnection conn, Dictionary<string, object> values)
         {
-            return InsertQuotaRowReturnId(conn, null, values);
-        }
-
-        private static long InsertQuotaRowReturnId(SqlConnection conn, SqlTransaction transaction, Dictionary<string, object> values)
-        {
             List<string> cols = values.Keys.ToList();
             StringBuilder sql = new StringBuilder();
             sql.Append("insert into 定额输入 (")
@@ -800,7 +635,6 @@ namespace RecoNet
                .Append("); select cast(scope_identity() as bigint);");
             using (SqlCommand cmd = conn.CreateCommand())
             {
-                cmd.Transaction = transaction;
                 cmd.CommandText = sql.ToString();
                 for (int i = 0; i < cols.Count; i++)
                     cmd.Parameters.AddWithValue("@p" + i.ToString(CultureInfo.InvariantCulture), values[cols[i]] ?? DBNull.Value);

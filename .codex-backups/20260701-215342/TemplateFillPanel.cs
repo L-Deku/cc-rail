@@ -170,7 +170,6 @@ namespace RecoNet
 
             private void OnPreview()
             {
-                SetBusy(true, "预览中...");
                 try
                 {
                     if (cmbTemplate.SelectedItem == null) { MessageBox.Show(this, "请先选择模板。", "模板铺量"); return; }
@@ -184,7 +183,6 @@ namespace RecoNet
                         MessageBox.Show(this, "预览为空：该模板里没有定额。请回到上一步重新“从该单元生成模板”，并确认收到的定额条数大于 0。", "模板铺量");
                 }
                 catch (Exception ex) { MessageBox.Show(this, "预览失败：" + ex.Message, "模板铺量"); }
-                finally { SetBusy(false, ""); }
             }
 
             private void FillGrid()
@@ -210,22 +208,10 @@ namespace RecoNet
                     if (MessageBox.Show(this, "确认把勾选定额复制到目标单元【" + targetUnit + "】的对应条目？",
                         "模板铺量", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
 
-                    SetBusy(true, "写入中...");
                     string result = ApplyFill(mainForm, targetUnit, preview);
                     MessageBox.Show(this, result, "模板铺量");
                 }
                 catch (Exception ex) { MessageBox.Show(this, "写入失败：" + ex.Message, "模板铺量"); }
-                finally { SetBusy(false, ""); }
-            }
-
-            private void SetBusy(bool busy, string action)
-            {
-                UseWaitCursor = busy;
-                Cursor = busy ? Cursors.WaitCursor : Cursors.Default;
-                btnPreview.Enabled = !busy;
-                btnApply.Enabled = !busy;
-                Text = busy && !String.IsNullOrEmpty(action) ? "模板铺量 - " + action : "模板铺量";
-                Refresh();
             }
         }
 
