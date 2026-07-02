@@ -35,10 +35,13 @@ namespace RecoNet
         private const int SpreadsheetApplicationCacheMs = 5000;
         private const int ExcelLinkUnitCacheMs = 5000;
         private const int ExcelLinkCacheLimit = 800;
+        private const string ExcelLinkUnitsFileName = "excel-link-units.txt";
         private static object CachedSpreadsheetApplication;
         private static DateTime CachedSpreadsheetApplicationUtc = DateTime.MinValue;
         private static readonly Dictionary<string, ExcelLinkStringCacheEntry> ExcelLinkUnitCache = new Dictionary<string, ExcelLinkStringCacheEntry>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, ExcelLinkBoolCacheEntry> ExcelLinkHiddenColumnCache = new Dictionary<string, ExcelLinkBoolCacheEntry>(StringComparer.OrdinalIgnoreCase);
+        private static readonly object ExcelLinkKnownUnitLock = new object();
+        private static HashSet<string> ExcelLinkKnownUnits;
 
         private static void EnsureExcelLinkRuntime(Form mainForm)
         {
@@ -548,6 +551,8 @@ namespace RecoNet
                 return false;
             }
 
+            unit = StripExcelLinkCubicUnitQualifier(unit);
+
             if (unit[0] == '\u4e07')
             {
                 factor = 10000m;
@@ -591,10 +596,91 @@ namespace RecoNet
             return !String.IsNullOrEmpty(baseUnit);
         }
 
+        private static string StripExcelLinkCubicUnitQualifier(string unit)
+        {
+            if (String.IsNullOrEmpty(unit))
+            {
+                return "";
+            }
+
+            string[] prefixes = new string[]
+            {
+                "\u538b\u5b9e\u65b9",
+                "\u5929\u7136\u5bc6\u5b9e\u65b9",
+                "\u81ea\u7136\u65b9",
+                "\u677e\u65b9"
+            };
+
+            for (int i = 0; i < prefixes.Length; i++)
+            {
+                string prefix = prefixes[i];
+                if (String.Equals(unit, prefix, StringComparison.Ordinal))
+                {
+                    return "m3";
+                }
+
+                if (unit.StartsWith(prefix, StringComparison.Ordinal) && unit.Length > prefix.Length)
+                {
+                    string rest = unit.Substring(prefix.Length);
+                    if (StartsWithExcelLinkScaleOrMetricUnit(rest))
+                    {
+                        return rest;
+                    }
+                }
+            }
+
+            return unit;
+        }
+
+        private static bool StartsWithExcelLinkScaleOrMetricUnit(string text)
+        {
+            if (String.IsNullOrEmpty(text))
+            {
+                return false;
+            }
+
+            char first = text[0];
+            return Char.IsDigit(first) ||
+                   first == '.' ||
+                   first == '\u4e07' ||
+                   text.StartsWith("m3", StringComparison.Ordinal);
+        }
+
         private static bool LooksLikeExcelLinkUnit(string text)
         {
             ExcelLinkUnitScale unit = ParseExcelLinkUnitScale(text);
             return !String.IsNullOrEmpty(unit.BaseUnit);
+        }
+
+        private static bool IsExcelLinkSimpleBindingBlocked(DataGridViewRow row, ExcelCellAddress cell, out string excelUnit, out string quotaUnit)
+        {
+            excelUnit = cell == null ? "" : (cell.UnitText ?? "").Trim();
+            quotaUnit = row == null ? "" : GetRowValue(row, "\u5355\u4f4d", "\u5b9a\u989d\u5355\u4f4d", "\u8ba1\u91cf\u5355\u4f4d").Trim();
+            if (row == null)
+            {
+                return false;
+            }
+
+            if (String.IsNullOrWhiteSpace(excelUnit) ||
+                String.IsNullOrWhiteSpace(quotaUnit) ||
+                !LooksLikeExcelLinkUnit(excelUnit) ||
+                !LooksLikeExcelLinkUnit(quotaUnit))
+            {
+                return true;
+            }
+
+            string ignored;
+            return !TryBuildExcelLinkUnitScaleSuffix(excelUnit, quotaUnit, out ignored);
+        }
+
+        private static string BuildSimpleBindingUnitMismatchMessage(string excelUnit, string quotaUnit)
+        {
+            if (String.IsNullOrWhiteSpace(excelUnit) || String.IsNullOrWhiteSpace(quotaUnit))
+            {
+                return "\u5355\u4f4d\u672a\u8bc6\u522b\uff1aExcel " + (String.IsNullOrWhiteSpace(excelUnit) ? "\u672a\u8bc6\u522b" : excelUnit) + " \u2192 \u5b9a\u989d " + (String.IsNullOrWhiteSpace(quotaUnit) ? "\u672a\u8bc6\u522b" : quotaUnit) + "\uff0c\u7b80\u5355\u7ed1\u5b9a\u5df2\u7981\u6b62\u3002\u8bf7\u5207\u6362\u5230\u8868\u8fbe\u5f0f\u7ed1\u5b9a\u624b\u52a8\u5904\u7406\u3002";
+            }
+
+            return "\u5355\u4f4d\u4e0d\u4e00\u81f4\uff1aExcel " + excelUnit + " \u2192 \u5b9a\u989d " + quotaUnit + "\uff0c\u7b80\u5355\u7ed1\u5b9a\u5df2\u7981\u6b62\u3002\u8bf7\u5207\u6362\u5230\u8868\u8fbe\u5f0f\u7ed1\u5b9a\u624b\u52a8\u5904\u7406\u3002";
         }
 
         private static ExcelLinkUnitScale ParseExcelLinkUnitScale(string text)
@@ -678,20 +764,160 @@ namespace RecoNet
 
         private static bool IsExcelLinkCountUnit(string unit)
         {
-            string[] units = new string[]
+            if (String.IsNullOrWhiteSpace(unit))
             {
-                "\u5904", "\u5ea7", "\u7ec4", "\u6839", "\u9879", "\u53f0", "\u5b54", "\u5957",
-                "\u4e2a", "\u5757", "\u7247", "\u6bb5", "\u773c", "\u53e3", "\u69c0", "\u6a18", "\u95f4"
+                return false;
+            }
+
+            return GetExcelLinkKnownUnits().Contains(NormalizeExcelLinkUnit(unit));
+        }
+
+        private static HashSet<string> GetExcelLinkKnownUnits()
+        {
+            lock (ExcelLinkKnownUnitLock)
+            {
+                if (ExcelLinkKnownUnits == null)
+                {
+                    ExcelLinkKnownUnits = BuildExcelLinkKnownUnits();
+                }
+
+                return ExcelLinkKnownUnits;
+            }
+        }
+
+        private static HashSet<string> BuildExcelLinkKnownUnits()
+        {
+            HashSet<string> units = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string unit in GetDefaultExcelLinkCountUnits())
+            {
+                AddExcelLinkKnownUnit(units, unit);
+            }
+
+            try
+            {
+                string dataDir = FindRecoQuotaDataDir();
+                if (!String.IsNullOrWhiteSpace(dataDir))
+                {
+                    string unitPath = Path.Combine(dataDir, ExcelLinkUnitsFileName);
+                    if (ShouldRefreshExcelLinkUnitFile(unitPath, dataDir))
+                    {
+                        SaveExcelLinkUnitsFromIndexes(dataDir, unitPath);
+                    }
+
+                    if (File.Exists(unitPath))
+                    {
+                        foreach (string line in File.ReadAllLines(unitPath, Encoding.UTF8))
+                        {
+                            AddExcelLinkKnownUnit(units, line);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Load Excel link units failed: " + ex.Message);
+            }
+
+            return units;
+        }
+
+        private static bool ShouldRefreshExcelLinkUnitFile(string unitPath, string dataDir)
+        {
+            if (String.IsNullOrWhiteSpace(unitPath) || !File.Exists(unitPath))
+            {
+                return true;
+            }
+
+            DateTime unitUtc = File.GetLastWriteTimeUtc(unitPath);
+            string[] sources = new string[]
+            {
+                Path.Combine(dataDir, "quota-index.jsonl"),
+                Path.Combine(dataDir, "material-index.jsonl")
             };
-            for (int i = 0; i < units.Length; i++)
+            foreach (string source in sources)
             {
-                if (String.Equals(unit, units[i], StringComparison.Ordinal))
+                if (File.Exists(source) && File.GetLastWriteTimeUtc(source) > unitUtc)
                 {
                     return true;
                 }
             }
 
             return false;
+        }
+
+        private static void SaveExcelLinkUnitsFromIndexes(string dataDir, string unitPath)
+        {
+            HashSet<string> rawUnits = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string unit in GetDefaultExcelLinkCountUnits())
+            {
+                rawUnits.Add(unit);
+            }
+
+            CollectExcelLinkUnitsFromIndex(Path.Combine(dataDir, "quota-index.jsonl"), "quota_unit", rawUnits);
+            CollectExcelLinkUnitsFromIndex(Path.Combine(dataDir, "material-index.jsonl"), "material_unit", rawUnits);
+            if (rawUnits.Count == 0)
+            {
+                return;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(unitPath));
+            File.WriteAllLines(unitPath, rawUnits.OrderBy(u => NormalizeExcelLinkUnit(u), StringComparer.Ordinal).ToArray(), new UTF8Encoding(false));
+        }
+
+        private static void CollectExcelLinkUnitsFromIndex(string path, string key, HashSet<string> rawUnits)
+        {
+            if (String.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                return;
+            }
+
+            foreach (string line in File.ReadLines(path, Encoding.UTF8))
+            {
+                Dictionary<string, string> row = ParseFlatJson(line);
+                string unit = GetFlat(row, key).Trim();
+                if (!String.IsNullOrWhiteSpace(unit))
+                {
+                    rawUnits.Add(unit);
+                }
+            }
+        }
+
+        private static void AddExcelLinkKnownUnit(HashSet<string> units, string unitText)
+        {
+            if (units == null || String.IsNullOrWhiteSpace(unitText))
+            {
+                return;
+            }
+
+            decimal factor;
+            string baseUnit;
+            if (!TryParseExcelLinkUnitPrefix(unitText, out factor, out baseUnit))
+            {
+                return;
+            }
+
+            string normalized = NormalizeExcelLinkUnit(baseUnit);
+            if (!String.IsNullOrWhiteSpace(normalized) &&
+                normalized != "m" &&
+                normalized != "m2" &&
+                normalized != "m3" &&
+                normalized != "kg" &&
+                normalized != "km" &&
+                normalized != "hm" &&
+                normalized != "t")
+            {
+                units.Add(normalized);
+            }
+        }
+
+        private static string[] GetDefaultExcelLinkCountUnits()
+        {
+            return new string[]
+            {
+                "\u5904", "\u5ea7", "\u7ec4", "\u6839", "\u9879", "\u53f0", "\u5b54", "\u5957",
+                "\u4e2a", "\u5757", "\u7247", "\u6bb5", "\u773c", "\u53e3", "\u69c0", "\u6a18", "\u95f4",
+                "\u68f5", "\u682a"
+            };
         }
 
         private static string FormatExcelLinkScaleSuffix(decimal factor)
@@ -821,6 +1047,14 @@ namespace RecoNet
                     {
                         return;
                     }
+                }
+
+                string excelUnit;
+                string quotaUnit;
+                if (IsExcelLinkSimpleBindingBlocked(row, cell, out excelUnit, out quotaUnit))
+                {
+                    MessageBox.Show(mainForm, BuildSimpleBindingUnitMismatchMessage(excelUnit, quotaUnit), "Excel联动", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
                 }
 
                 link.ExcelPath = cell.WorkbookPath;
@@ -1211,134 +1445,6 @@ namespace RecoNet
             return result;
         }
 
-        private static bool TryReadActiveExcelSelectionContext(out AiExcelSelectionContext context, out string error)
-        {
-            context = null;
-            error = null;
-            try
-            {
-                dynamic excel = GetActiveSpreadsheetApplication();
-                if (excel == null)
-                {
-                    error = BuildExcelConnectError("没有找到正在运行的 Excel/WPS 表格");
-                    return false;
-                }
-
-                dynamic workbook = excel.ActiveWorkbook;
-                dynamic sheet = excel.ActiveSheet;
-                dynamic selection = excel.Selection;
-                if (workbook == null || sheet == null || selection == null)
-                {
-                    error = BuildExcelConnectError("已经连接到 Excel/WPS，但没有读到当前工作簿、工作表或选区");
-                    return false;
-                }
-
-                context = new AiExcelSelectionContext();
-                context.WorkbookPath = Convert.ToString(workbook.FullName, CultureInfo.InvariantCulture);
-                context.WorksheetName = Convert.ToString(sheet.Name, CultureInfo.InvariantCulture);
-
-                if (TryReadActiveExcelSelectionContextBulk(selection, context))
-                {
-                    return true;
-                }
-
-                int count = Convert.ToInt32(selection.Cells.Count, CultureInfo.InvariantCulture);
-                int limit = Math.Min(count, 800);
-                for (int i = 1; i <= limit; i++)
-                {
-                    dynamic selectedCell = selection.Cells[i];
-                    string address = NormalizeCellAddress(Convert.ToString(selectedCell.Address(false, false), CultureInfo.InvariantCulture));
-                    object rawValue = selectedCell.Value2;
-                    string text = ExcelValueToText(rawValue);
-                    if (String.IsNullOrWhiteSpace(address) || String.IsNullOrWhiteSpace(text))
-                    {
-                        continue;
-                    }
-
-                    CellRef cellRef;
-                    if (!TryParseCellAddress(address, out cellRef))
-                    {
-                        continue;
-                    }
-
-                    decimal parsed;
-                    string parseError;
-                    context.Cells.Add(new AiExcelCell
-                    {
-                        Address = address,
-                        Text = text,
-                        Row = cellRef.Row,
-                        Column = cellRef.Column,
-                        IsNumber = TryEvaluateDecimal(text, out parsed, out parseError)
-                    });
-                }
-
-                if (context.Cells.Count == 0)
-                {
-                    error = "当前 Excel 选区没有可读取的内容。请先框选包含工程量名称和数量的区域。";
-                    return false;
-                }
-
-                if (!context.Cells.Any(c => c.IsNumber))
-                {
-                    error = "当前 Excel 选区没有可计算的数量单元格。";
-                    return false;
-                }
-
-                return true;
-            }
-            catch (Exception ex)
-            {
-                error = BuildExcelConnectError("读取 Excel/WPS 当前选区失败：" + ex.Message);
-                return false;
-            }
-        }
-
-        private static bool TryReadActiveExcelSelectionContextBulk(dynamic selection, AiExcelSelectionContext context)
-        {
-            try
-            {
-                int rowCount = Convert.ToInt32(selection.Rows.Count, CultureInfo.InvariantCulture);
-                int colCount = Convert.ToInt32(selection.Columns.Count, CultureInfo.InvariantCulture);
-                if (rowCount <= 0 || colCount <= 0 || rowCount * colCount > 1200)
-                {
-                    return false;
-                }
-
-                int firstRow = Convert.ToInt32(selection.Row, CultureInfo.InvariantCulture);
-                int firstColumn = Convert.ToInt32(selection.Column, CultureInfo.InvariantCulture);
-                object rawValues = selection.Value2;
-                if (rowCount == 1 && colCount == 1)
-                {
-                    AddAiExcelCell(context, firstRow, firstColumn, rawValues);
-                }
-                else
-                {
-                    Array values = rawValues as Array;
-                    if (values == null)
-                    {
-                        return false;
-                    }
-
-                    for (int row = 1; row <= rowCount; row++)
-                    {
-                        for (int col = 1; col <= colCount; col++)
-                        {
-                            AddAiExcelCell(context, firstRow + row - 1, firstColumn + col - 1, values.GetValue(row, col));
-                        }
-                    }
-                }
-
-                return context.Cells.Count > 0 && context.Cells.Any(c => c.IsNumber);
-            }
-            catch (Exception ex)
-            {
-                Log("Bulk read active Excel selection failed: " + ex.Message);
-                context.Cells.Clear();
-                return false;
-            }
-        }
-
         private static void AddAiExcelCell(AiExcelSelectionContext context, int row, int column, object rawValue)
         {
             string text = ExcelValueToText(rawValue);
@@ -1393,128 +1499,6 @@ namespace RecoNet
             return settings;
         }
 
-        private static List<AiMatchResult> RequestAiExcelMatches(DeepSeekExcelMatchSettings settings, List<AiQuotaMatchRow> quotas, AiExcelSelectionContext selection)
-        {
-            List<AiMatchResult> localMatches = BuildLocalQuantityMatchResults(quotas, selection);
-            HashSet<long> localMatchedIds = new HashSet<long>(localMatches.Select(match => match.QuotaSequence));
-            List<AiQuotaMatchRow> remaining = (quotas ?? new List<AiQuotaMatchRow>())
-                .Where(row => row != null && row.Link != null && !localMatchedIds.Contains(row.Link.QuotaSequence))
-                .ToList();
-            if (remaining.Count == 0)
-            {
-                return localMatches;
-            }
-
-            JavaScriptSerializer serializer = new JavaScriptSerializer();
-            serializer.MaxJsonLength = 1024 * 1024 * 4;
-            List<AiMatchResult> all = new List<AiMatchResult>(localMatches);
-            int batchSize = Math.Max(1, settings.MaxRowsPerBatch);
-            Exception lastBatchError = null;
-            int successfulBatches = 0;
-            for (int i = 0; i < remaining.Count; i += batchSize)
-            {
-                List<AiQuotaMatchRow> batch = remaining.Skip(i).Take(batchSize).ToList();
-                try
-                {
-                    string requestJson = BuildAiExcelMatchRequestJson(serializer, settings, batch, selection);
-                    string responseJson = SendDeepSeekExcelMatchRequest(settings, requestJson);
-                    all.AddRange(ParseAiExcelMatchResponse(serializer, responseJson));
-                    successfulBatches++;
-                }
-                catch (Exception ex)
-                {
-                    lastBatchError = ex;
-                    Log("DeepSeek Excel match batch failed: " + ex.Message);
-                }
-            }
-
-            // 全部批次失败时仍按原行为抛出，让调用方提示并回退本地数量匹配；部分失败则保留成功批次结果。
-            if (lastBatchError != null && successfulBatches == 0)
-            {
-                throw lastBatchError;
-            }
-
-            return all;
-        }
-
-        private static string BuildAiExcelMatchRequestJson(JavaScriptSerializer serializer, DeepSeekExcelMatchSettings settings, List<AiQuotaMatchRow> quotas, AiExcelSelectionContext selection)
-        {
-            Dictionary<int, List<AiExcelCell>> rows = selection.Cells
-                .GroupBy(c => c.Row)
-                .OrderBy(g => g.Key)
-                .Take(80)
-                .ToDictionary(g => g.Key, g => g.OrderBy(c => c.Column).ToList());
-
-            List<object> quotaObjects = new List<object>();
-            foreach (AiQuotaMatchRow row in quotas)
-            {
-                quotaObjects.Add(new Dictionary<string, object>
-                {
-                    { "quota_sequence", row.Link.QuotaSequence.ToString(CultureInfo.InvariantCulture) },
-                    { "quota_code", row.Link.QuotaCode ?? "" },
-                    { "quota_name", row.Link.QuotaName ?? "" },
-                    { "quota_unit", row.QuotaUnit ?? "" },
-                    { "current_quantity", row.CurrentQuantityText ?? "" }
-                });
-            }
-
-            List<object> rowObjects = new List<object>();
-            foreach (KeyValuePair<int, List<AiExcelCell>> pair in rows)
-            {
-                List<object> cells = new List<object>();
-                foreach (AiExcelCell cell in pair.Value)
-                {
-                    cells.Add(new Dictionary<string, object>
-                    {
-                        { "address", cell.Address },
-                        { "text", TruncateForPrompt(cell.Text, 120) },
-                        { "is_number", cell.IsNumber }
-                    });
-                }
-
-                rowObjects.Add(new Dictionary<string, object>
-                {
-                    { "row", pair.Key },
-                    { "cells", cells }
-                });
-            }
-
-            Dictionary<string, object> body = new Dictionary<string, object>();
-            body["task"] = "把软件中已选定额逐条匹配到Excel选区里的工程数量单元格。";
-            body["rules"] = new string[]
-            {
-                "只能选择rows里存在的Excel单元格地址，不能编造地址。",
-                "优先结合定额名称、定额单位、当前工程数量和Excel整行文字上下文匹配。",
-                "如果一个定额数量由多个单元格组成，可以用 A1+B1、A1*2、A1/2 这样的表达式，但表达式里的单元格必须来自选区。",
-                "不确定时不要返回该定额。",
-                "返回严格JSON：{\"results\":[{\"quota_sequence\":\"123\",\"cell_address\":\"H3\",\"expression\":\"H3\",\"quantity_name\":\"工程量名称\",\"confidence\":80,\"reason\":\"简短理由\"}]}"
-            };
-            body["quotas"] = quotaObjects;
-            body["rows"] = rowObjects;
-
-            Dictionary<string, object> payload = new Dictionary<string, object>();
-            payload["model"] = settings.Model;
-            payload["stream"] = false;
-            payload["temperature"] = 0.1;
-            payload["max_tokens"] = 3000;
-            payload["response_format"] = new Dictionary<string, object> { { "type", "json_object" } };
-            payload["messages"] = new object[]
-            {
-                new Dictionary<string, object>
-                {
-                    { "role", "system" },
-                    { "content", "你是铁路工程预算软件的Excel工程量绑定助手。你只做定额与Excel数量单元格匹配，必须保守，不能编造单元格地址。" }
-                },
-                new Dictionary<string, object>
-                {
-                    { "role", "user" },
-                    { "content", serializer.Serialize(body) }
-                }
-            };
-
-            return serializer.Serialize(payload);
-        }
-
         private static string SendDeepSeekExcelMatchRequest(DeepSeekExcelMatchSettings settings, string requestJson)
         {
             ServicePointManager.SecurityProtocol = ServicePointManager.SecurityProtocol | (SecurityProtocolType)3072;
@@ -1546,187 +1530,6 @@ namespace RecoNet
             {
                 return reader.ReadToEnd();
             }
-        }
-
-        private static List<AiMatchResult> ParseAiExcelMatchResponse(JavaScriptSerializer serializer, string responseJson)
-        {
-            Dictionary<string, object> root = serializer.DeserializeObject(responseJson) as Dictionary<string, object>;
-            List<object> choices = GetJsonList(root, "choices");
-            Dictionary<string, object> firstChoice = choices == null || choices.Count == 0 ? null : choices[0] as Dictionary<string, object>;
-            Dictionary<string, object> message = firstChoice == null ? null : ReadJsonObject(firstChoice, "message");
-            string content = message == null ? "" : ReadJsonString(message, "content", "");
-            if (String.IsNullOrWhiteSpace(content))
-            {
-                return new List<AiMatchResult>();
-            }
-
-            Dictionary<string, object> resultRoot = serializer.DeserializeObject(content) as Dictionary<string, object>;
-            List<object> results = GetJsonList(resultRoot, "results");
-            if (results == null)
-            {
-                return new List<AiMatchResult>();
-            }
-
-            List<AiMatchResult> matches = new List<AiMatchResult>();
-            foreach (object item in results)
-            {
-                Dictionary<string, object> row = item as Dictionary<string, object>;
-                if (row == null)
-                {
-                    continue;
-                }
-
-                long quotaSequence;
-                if (!Int64.TryParse(ReadJsonString(row, "quota_sequence", ""), NumberStyles.Integer, CultureInfo.InvariantCulture, out quotaSequence))
-                {
-                    continue;
-                }
-
-                matches.Add(new AiMatchResult
-                {
-                    QuotaSequence = quotaSequence,
-                    CellAddress = NormalizeCellAddress(ReadJsonString(row, "cell_address", "")),
-                    Expression = NormalizeCellAddress(ReadJsonString(row, "expression", "")),
-                    QuantityName = ReadJsonString(row, "quantity_name", ""),
-                    Confidence = ReadJsonInt(row, "confidence", 0),
-                    Reason = ReadJsonString(row, "reason", "")
-                });
-            }
-
-            return matches;
-        }
-
-        private static List<AiMatchPreviewItem> BuildAiMatchPreviewItems(List<AiQuotaMatchRow> quotas, AiExcelSelectionContext selection, List<AiMatchResult> results)
-        {
-            Dictionary<long, AiQuotaMatchRow> quotaById = quotas.ToDictionary(q => q.Link.QuotaSequence);
-            HashSet<string> selectedAddresses = selection.AddressSet;
-            HashSet<long> usedQuotas = new HashSet<long>();
-            List<AiMatchPreviewItem> preview = new List<AiMatchPreviewItem>();
-
-            foreach (AiMatchResult result in results ?? new List<AiMatchResult>())
-            {
-                AiQuotaMatchRow quota;
-                if (!quotaById.TryGetValue(result.QuotaSequence, out quota) || usedQuotas.Contains(result.QuotaSequence))
-                {
-                    continue;
-                }
-
-                string expression = String.IsNullOrWhiteSpace(result.Expression) ? result.CellAddress : result.Expression;
-                expression = NormalizeExpressionOperators(expression);
-                string firstCell = ExtractFirstCellAddress(expression);
-                if (String.IsNullOrWhiteSpace(firstCell) || !selectedAddresses.Contains(firstCell))
-                {
-                    continue;
-                }
-
-                List<string> expressionCells = ExtractCellAddressesFromExpression(expression);
-                if (expressionCells.Count == 0 || expressionCells.Any(address => !selectedAddresses.Contains(address)))
-                {
-                    continue;
-                }
-
-                string displayValue;
-                decimal quantity;
-                string readError;
-                if (!TryEvaluateWorkbookExpression(selection.WorkbookPath, selection.WorksheetName, expression, out displayValue, out quantity, out readError))
-                {
-                    continue;
-                }
-
-                preview.Add(new AiMatchPreviewItem
-                {
-                    Checked = result.Confidence >= 65,
-                    Link = quota.Link,
-                    QuotaUnit = quota.QuotaUnit,
-                    WorkbookPath = selection.WorkbookPath,
-                    WorksheetName = selection.WorksheetName,
-                    Expression = expression,
-                    CellAddress = firstCell,
-                    DisplayValue = displayValue,
-                    QuantityName = String.IsNullOrWhiteSpace(result.QuantityName) ? BuildQuantityNameFromExcelRow(selection, firstCell) : result.QuantityName
-                });
-                usedQuotas.Add(result.QuotaSequence);
-            }
-
-            AddUnmatchedAiPreviewItems(preview, quotas, selection);
-            return SortAiPreviewItemsByQuotaOrder(preview, quotas);
-        }
-
-        private static List<AiMatchPreviewItem> BuildLocalQuantityMatchPreviewItems(List<AiQuotaMatchRow> quotas, AiExcelSelectionContext selection)
-        {
-            List<AiMatchPreviewItem> preview = new List<AiMatchPreviewItem>();
-            List<AiExcelCell> numberCells = selection.Cells
-                .Where(c => c.IsNumber)
-                .OrderBy(c => c.Row)
-                .ThenBy(c => c.Column)
-                .ToList();
-
-            foreach (AiQuotaMatchRow quota in quotas ?? new List<AiQuotaMatchRow>())
-            {
-                decimal quotaQuantity;
-                string quotaError;
-                if (quota == null || quota.Link == null || !TryEvaluateDecimal(quota.CurrentQuantityText, out quotaQuantity, out quotaError))
-                {
-                    continue;
-                }
-
-                AiExcelCell bestCell = null;
-                string bestExpression = null;
-                decimal bestScore = Decimal.MaxValue;
-                foreach (AiExcelCell cell in numberCells)
-                {
-                    string expression;
-                    decimal score;
-                    if (!TryBuildLocalQuantityExpression(quota.CurrentQuantityText, quotaQuantity, cell, out expression, out score))
-                    {
-                        continue;
-                    }
-
-                    if (score < bestScore)
-                    {
-                        bestScore = score;
-                        bestCell = cell;
-                        bestExpression = expression;
-                    }
-                }
-
-                if (bestCell == null)
-                {
-                    continue;
-                }
-
-                preview.Add(new AiMatchPreviewItem
-                {
-                    Checked = true,
-                    Link = quota.Link,
-                    QuotaUnit = quota.QuotaUnit,
-                    WorkbookPath = selection.WorkbookPath,
-                    WorksheetName = selection.WorksheetName,
-                    Expression = bestExpression,
-                    CellAddress = bestCell.Address,
-                    DisplayValue = FormatAiMatchDecimal(quotaQuantity),
-                    QuantityName = BuildQuantityNameFromExcelRow(selection, bestCell.Address)
-                });
-            }
-
-            AddUnmatchedAiPreviewItems(preview, quotas, selection);
-            return SortAiPreviewItemsByQuotaOrder(preview, quotas);
-        }
-
-        private static List<AiMatchResult> BuildLocalQuantityMatchResults(List<AiQuotaMatchRow> quotas, AiExcelSelectionContext selection)
-        {
-            return BuildLocalQuantityMatchPreviewItems(quotas, selection)
-                .Where(item => item != null && item.Link != null && !String.IsNullOrWhiteSpace(item.Expression))
-                .Select(item => new AiMatchResult
-                {
-                    QuotaSequence = item.Link.QuotaSequence,
-                    CellAddress = item.CellAddress,
-                    Expression = item.Expression,
-                    QuantityName = item.QuantityName,
-                    Confidence = 100,
-                    Reason = "本地数量匹配"
-                })
-                .ToList();
         }
 
         private static List<AiMatchPreviewItem> SortAiPreviewItemsByQuotaOrder(List<AiMatchPreviewItem> preview, List<AiQuotaMatchRow> quotas)
@@ -2131,7 +1934,7 @@ namespace RecoNet
 
         private const string MappingBoxesMutexName = "RecoQuotaData.mapping-boxes.lock";
 
-        // mapping-boxes.jsonl 有三个写入方（推荐窗口扶正、Excel联动AI匹配、扶正训练器），
+        // mapping-boxes.jsonl 有三个写入方（推荐窗口扶正、Excel联动自动匹配、扶正训练器），
         // 都是整文件读改写，必须用跨程序集一致的命名互斥锁串行化，避免互相覆盖。
         private static void WithMappingBoxesLock(Action action)
         {
@@ -2230,12 +2033,6 @@ namespace RecoNet
         private static int ClampInt(int value, int min, int max)
         {
             return Math.Max(min, Math.Min(max, value));
-        }
-
-        private static string TruncateForPrompt(string text, int maxLength)
-        {
-            string value = (text ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
-            return value.Length <= maxLength ? value : value.Substring(0, maxLength);
         }
 
         private static string NormalizeForSignature(string text)
@@ -4636,16 +4433,6 @@ namespace RecoNet
             public bool IsNumber;
         }
 
-        private sealed class AiMatchResult
-        {
-            public long QuotaSequence;
-            public string CellAddress;
-            public string Expression;
-            public string QuantityName;
-            public int Confidence;
-            public string Reason;
-        }
-
         private sealed class AiMatchPreviewItem
         {
             public bool Checked;
@@ -4657,6 +4444,8 @@ namespace RecoNet
             public string CellAddress;
             public string DisplayValue;
             public string QuantityName;
+            public string MatchStatus;
+            public string CurrentQuantityText;
         }
 
         private sealed class DeepSeekExcelMatchSettings
@@ -5033,7 +4822,8 @@ namespace RecoNet
 
         private sealed class ExcelSmartBindPanel : Form
         {
-            private const int RefreshIntervalMs = 1200;
+            private const int RefreshIntervalMs = 1000;
+            private const int StatusAutoHideMs = 3500;
             private const int WmEnterSizeMove = 0x0231;
             private const int WmExitSizeMove = 0x0232;
 
@@ -5047,6 +4837,7 @@ namespace RecoNet
             private readonly Label status;
             private readonly Button bindButton;
             private readonly Timer refreshTimer;
+            private readonly Timer statusHideTimer;
             private ExcelCellAddress lastExcelCell;
             private string lastQuotaKey;
             private string lastExcelKey;
@@ -5164,12 +4955,12 @@ namespace RecoNet
                 minus.Click += delegate { AppendExpressionToken("-"); };
 
                 Button aiMatch = new Button();
-                aiMatch.Text = "AI智能匹配";
+                aiMatch.Text = "\u81ea\u52a8\u5339\u914d";
                 aiMatch.Left = 12;
                 aiMatch.Top = 226;
                 aiMatch.Width = 120;
                 aiMatch.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
-                aiMatch.Click += delegate { MatchSelectedQuotasWithAi(); };
+                aiMatch.Click += delegate { ShowAutoMatchDialog(); };
 
                 bindButton = new Button();
                 bindButton.Text = "绑定到当前定额";
@@ -5193,6 +4984,16 @@ namespace RecoNet
                 status.Width = 580;
                 status.Height = 24;
                 status.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
+                status.Text = "";
+
+                statusHideTimer = new Timer();
+                statusHideTimer.Interval = StatusAutoHideMs;
+                statusHideTimer.Tick += delegate
+                {
+                    statusHideTimer.Stop();
+                    status.Text = "";
+                };
+                Disposed += delegate { statusHideTimer.Dispose(); };
 
                 Controls.Add(tip);
                 Controls.Add(currentQuotaLabel);
@@ -5269,6 +5070,15 @@ namespace RecoNet
                 else
                 {
                     refreshTimer.Stop();
+                    if (statusHideTimer != null)
+                    {
+                        statusHideTimer.Stop();
+                    }
+
+                    if (status != null)
+                    {
+                        status.Text = "";
+                    }
                 }
             }
 
@@ -5283,15 +5093,10 @@ namespace RecoNet
 
             private void EndMoveOrResize()
             {
-                bool shouldRefresh = movingOrSizing;
                 movingOrSizing = false;
                 if (refreshTimer != null && Visible && !editingExpression && !bindingQuota)
                 {
                     refreshTimer.Start();
-                    if (shouldRefresh)
-                    {
-                        RefreshCurrentContext();
-                    }
                 }
             }
 
@@ -5317,8 +5122,7 @@ namespace RecoNet
             {
                 if (bindingQuota)
                 {
-                    status.Text = "上一条绑定仍在保存，请稍候。";
-                    status.Refresh();
+                    ShowTransientStatus("上一条绑定仍在保存，请稍候。");
                     return false;
                 }
 
@@ -5334,8 +5138,7 @@ namespace RecoNet
                 }
 
                 UseWaitCursor = true;
-                status.Text = "正在绑定...";
-                status.Refresh();
+                ShowPersistentStatus("正在绑定...");
                 return true;
             }
 
@@ -5351,6 +5154,29 @@ namespace RecoNet
                 if (refreshTimer != null && Visible && !movingOrSizing && !editingExpression)
                 {
                     refreshTimer.Start();
+                }
+            }
+
+            private void ShowPersistentStatus(string message)
+            {
+                if (statusHideTimer != null)
+                {
+                    statusHideTimer.Stop();
+                }
+
+                if (status != null)
+                {
+                    status.Text = message ?? "";
+                    status.Refresh();
+                }
+            }
+
+            private void ShowTransientStatus(string message)
+            {
+                ShowPersistentStatus(message);
+                if (statusHideTimer != null && !String.IsNullOrWhiteSpace(message))
+                {
+                    statusHideTimer.Start();
                 }
             }
 
@@ -5414,9 +5240,28 @@ namespace RecoNet
 
             private void UpdateSimpleScaleSuggestion(DataGridViewRow row, ExcelCellAddress cell)
             {
-                bool suppressDisplay;
-                string suffix = SuggestSimpleScaleSuffix(row, cell, out suppressDisplay);
-                string suggestion = suppressDisplay ? "" : BuildSimpleBindingDisplay(cell, suffix);
+                string excelUnit;
+                string quotaUnit;
+                string suggestion;
+                if (IsExcelLinkSimpleBindingBlocked(row, cell, out excelUnit, out quotaUnit))
+                {
+                    if (simpleScaleText != null)
+                    {
+                        simpleScaleText.Text = "0";
+                        simpleScaleText.SelectionStart = 0;
+                        simpleScaleText.SelectionLength = 0;
+                        lastAutoSimpleScaleText = "0";
+                    }
+
+                    return;
+                }
+                else
+                {
+                    bool suppressDisplay;
+                    string suffix = SuggestSimpleScaleSuffix(row, cell, out suppressDisplay);
+                    suggestion = suppressDisplay ? "" : BuildSimpleBindingDisplay(cell, suffix);
+                }
+
                 string current = simpleScaleText == null ? "" : simpleScaleText.Text.Trim();
                 string lastAuto = lastAutoSimpleScaleText ?? "";
                 if (simpleScaleText != null &&
@@ -5615,18 +5460,7 @@ namespace RecoNet
 
             private static bool IsSimpleBindingUnitMismatch(DataGridViewRow row, ExcelCellAddress cell, out string excelUnit, out string quotaUnit)
             {
-                excelUnit = cell == null ? "" : (cell.UnitText ?? "").Trim();
-                quotaUnit = row == null ? "" : GetRowValue(row, "\u5355\u4f4d", "\u5b9a\u989d\u5355\u4f4d", "\u8ba1\u91cf\u5355\u4f4d").Trim();
-                if (String.IsNullOrWhiteSpace(excelUnit) ||
-                    String.IsNullOrWhiteSpace(quotaUnit) ||
-                    !LooksLikeExcelLinkUnit(excelUnit) ||
-                    !LooksLikeExcelLinkUnit(quotaUnit))
-                {
-                    return false;
-                }
-
-                string ignored;
-                return !TryBuildExcelLinkUnitScaleSuffix(excelUnit, quotaUnit, out ignored);
+                return IsExcelLinkSimpleBindingBlocked(row, cell, out excelUnit, out quotaUnit);
             }
 
             private ExcelCellAddress GetExcelCellForBinding(out string error)
@@ -5648,12 +5482,6 @@ namespace RecoNet
                     }
 
                     return null;
-                }
-
-                if (lastExcelCell != null)
-                {
-                    error = null;
-                    return lastExcelCell;
                 }
 
                 return null;
@@ -5849,7 +5677,6 @@ namespace RecoNet
 
                 expressionText.SelectionStart = expressionText.Text.Length;
                 lastExpressionExcelKey = excelKey;
-                status.Text = "已添加：" + token;
             }
 
             private bool TryReplaceAutoExpressionCell(string current, string newToken, out string updated)
@@ -5892,14 +5719,14 @@ namespace RecoNet
                 return ch == '+' || ch == '-' || ch == '*' || ch == '/';
             }
 
-            private void MatchSelectedQuotasWithAi()
+            private void ShowAutoMatchDialog()
             {
                 try
                 {
                     SqlConnection conn = GetProjectConnection(mainForm);
                     if (conn == null)
                     {
-                        status.Text = "没有找到当前项目数据库连接。";
+                        ShowPersistentStatus("\u6ca1\u6709\u627e\u5230\u5f53\u524d\u9879\u76ee\u6570\u636e\u5e93\u8fde\u63a5\u3002");
                         return;
                     }
 
@@ -5907,110 +5734,63 @@ namespace RecoNet
                     List<AiQuotaMatchRow> quotas = BuildAiQuotaRows(mainForm, conn, GetSelectedQuotaRows(grid));
                     if (quotas.Count == 0)
                     {
-                        status.Text = "请先在定额输入表中选择要匹配的定额。";
+                        ShowPersistentStatus("\u8bf7\u5148\u5728\u5b9a\u989d\u8f93\u5165\u8868\u4e2d\u9009\u62e9\u8981\u5339\u914d\u7684\u5b9a\u989d\u3002");
                         return;
                     }
 
-                    AiExcelSelectionContext selection;
-                    string error;
-                    if (!TryReadActiveExcelSelectionContext(out selection, out error))
-                    {
-                        status.Text = "AI匹配失败：" + error;
-                        return;
-                    }
+                    ExcelLinkStore store = LoadStore(conn);
+                    HashSet<long> alreadyBoundSequences = new HashSet<long>(
+                        (store.Links ?? new List<ExcelQuotaLink>())
+                            .Where(link => link != null && !String.IsNullOrWhiteSpace(link.Expression))
+                            .Select(link => link.QuotaSequence));
 
-                    DeepSeekExcelMatchSettings settings = LoadDeepSeekExcelMatchSettings();
-                    if (!settings.IsAvailable)
-                    {
-                        status.Text = "DeepSeek未启用或未配置API Key，请先在推荐定额窗口的AI设置中配置。";
-                        return;
-                    }
-
-                    status.Text = "正在先按工程数量快速匹配，剩余项再交给DeepSeek...";
-                    Application.DoEvents();
-
-                    List<AiMatchPreviewItem> preview = new List<AiMatchPreviewItem>();
-                    string fallbackMessage = null;
-                    try
-                    {
-                        List<AiMatchResult> results = RequestAiExcelMatches(settings, quotas, selection);
-                        preview = BuildAiMatchPreviewItems(quotas, selection, results);
-                    }
-                    catch (Exception aiEx)
-                    {
-                        Log("DeepSeek Excel match request failed, fallback to local quantity match: " + aiEx.Message);
-                        fallbackMessage = "DeepSeek超时或失败，已改用本地数量匹配。";
-                    }
-
-                    if (preview.Count == 0)
-                    {
-                        List<AiMatchPreviewItem> fallback = BuildLocalQuantityMatchPreviewItems(quotas, selection);
-                        if (fallback.Count > 0)
-                        {
-                            preview = fallback;
-                            if (String.IsNullOrEmpty(fallbackMessage))
-                            {
-                                fallbackMessage = "AI无可用结果，已改用本地数量匹配。";
-                            }
-                        }
-                    }
-
-                    if (preview.Count == 0)
-                    {
-                        AddUnmatchedAiPreviewItems(preview, quotas, selection);
-                    }
-
-                    if (preview.Count == 0)
-                    {
-                        status.Text = "AI没有返回可确认的绑定建议。";
-                        return;
-                    }
-
-                    if (!String.IsNullOrEmpty(fallbackMessage))
-                    {
-                        status.Text = fallbackMessage;
-                    }
-
-                    AiMatchPreviewDialog modelessDialog = new AiMatchPreviewDialog(preview);
+                    AutoMatchDialog modelessDialog = new AutoMatchDialog(quotas, alreadyBoundSequences);
                     modelessDialog.Accepted += delegate(List<AiMatchPreviewItem> accepted)
                     {
-                        SaveAiMatchPreviewAccepted(conn, selection, accepted);
+                        SaveAutoMatchPreviewAccepted(conn, accepted);
                     };
                     modelessDialog.Cancelled += delegate
                     {
-                        status.Text = "已取消AI匹配绑定。";
+                        ShowPersistentStatus("\u5df2\u53d6\u6d88\u81ea\u52a8\u5339\u914d\u7ed1\u5b9a\u3002");
                     };
                     modelessDialog.Show(this);
                     return;
                 }
                 catch (Exception ex)
                 {
-                    Log("AI Excel match failed: " + ex);
-                    status.Text = "AI匹配失败：" + ex.Message;
+                    Log("Auto Excel match failed: " + ex);
+                    ShowPersistentStatus("\u81ea\u52a8\u5339\u914d\u5931\u8d25\uff1a" + ex.Message);
                 }
             }
 
-            private void SaveAiMatchPreviewAccepted(SqlConnection conn, AiExcelSelectionContext selection, List<AiMatchPreviewItem> accepted)
+            private void SaveAutoMatchPreviewAccepted(SqlConnection conn, List<AiMatchPreviewItem> accepted)
             {
                 try
                 {
                     if (accepted == null || accepted.Count == 0)
                     {
-                        status.Text = "没有勾选任何AI匹配结果。";
+                        ShowPersistentStatus("\u6ca1\u6709\u52fe\u9009\u4efb\u4f55\u81ea\u52a8\u5339\u914d\u7ed3\u679c\u3002");
                         return;
                     }
 
                     ExcelLinkStore store = LoadStore(conn);
+                    int saved = 0;
                     foreach (AiMatchPreviewItem item in accepted)
                     {
-                        item.Link.ExcelPath = String.IsNullOrWhiteSpace(item.WorkbookPath) ? selection.WorkbookPath : item.WorkbookPath;
-                        item.Link.WorksheetName = String.IsNullOrWhiteSpace(item.WorksheetName) ? selection.WorksheetName : item.WorksheetName;
+                        if (item == null || item.Link == null)
+                        {
+                            continue;
+                        }
+
+                        item.Link.ExcelPath = item.WorkbookPath ?? "";
+                        item.Link.WorksheetName = item.WorksheetName ?? "";
                         item.Link.CellAddress = item.CellAddress;
                         item.Link.Expression = item.Expression;
                         item.Link.LastSyncValue = item.DisplayValue ?? "";
-                        item.Link.LastStatus = "AI智能匹配绑定，等待同步";
+                        item.Link.LastStatus = "\u81ea\u52a8\u5339\u914d\u7ed1\u5b9a\uff0c\u7b49\u5f85\u540c\u6b65";
                         item.Link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
                         store.Upsert(item.Link);
+                        saved++;
                     }
 
                     SaveStore(conn, store);
@@ -6021,12 +5801,12 @@ namespace RecoNet
                     }
 
                     RefreshExcelLinkPanel(mainForm);
-                    status.Text = "AI已绑定 " + accepted.Count.ToString(CultureInfo.InvariantCulture) + " 条选中定额。";
+                    ShowPersistentStatus("\u81ea\u52a8\u5339\u914d\u5df2\u7ed1\u5b9a " + saved.ToString(CultureInfo.InvariantCulture) + " \u6761\u9009\u4e2d\u5b9a\u989d\u3002");
                 }
                 catch (Exception ex)
                 {
-                    Log("Save AI Excel match preview failed: " + ex);
-                    status.Text = "AI匹配保存失败：" + ex.Message;
+                    Log("Save auto Excel match preview failed: " + ex);
+                    ShowPersistentStatus("\u4fdd\u5b58\u81ea\u52a8\u5339\u914d\u7ed1\u5b9a\u5931\u8d25\uff1a" + ex.Message);
                 }
             }
 
@@ -6042,7 +5822,7 @@ namespace RecoNet
                     SqlConnection conn = GetProjectConnection(mainForm);
                     if (conn == null)
                     {
-                        status.Text = "没有找到当前项目数据库连接。";
+                        ShowTransientStatus("没有找到当前项目数据库连接。");
                         return;
                     }
 
@@ -6050,7 +5830,7 @@ namespace RecoNet
                     DataGridViewRow row = GetCurrentQuotaRow(grid);
                     if (row == null)
                     {
-                        status.Text = "请先在软件里点击要绑定的定额行。";
+                        ShowTransientStatus("请先在软件里点击要绑定的定额行。");
                         return;
                     }
 
@@ -6059,7 +5839,7 @@ namespace RecoNet
                     cell = GetExcelCellForBinding(out error);
                     if (cell == null)
                     {
-                        status.Text = "请先在WPS/Excel里点击工程数量单元格。";
+                        ShowTransientStatus("请先在WPS/Excel里点击工程数量单元格。");
                         return;
                     }
 
@@ -6067,7 +5847,7 @@ namespace RecoNet
                     string quotaUnit;
                     if (simpleMode.Checked && IsSimpleBindingUnitMismatch(row, cell, out excelUnit, out quotaUnit))
                     {
-                        status.Text = "\u5355\u4f4d\u4e0d\u4e00\u81f4\uff1aExcel " + excelUnit + " \u2192 \u5b9a\u989d " + quotaUnit + "\uff0c\u7b80\u5355\u7ed1\u5b9a\u5df2\u7981\u6b62\u3002\u53ef\u5207\u6362\u5230\u8868\u8fbe\u5f0f\u7ed1\u5b9a\u624b\u52a8\u5904\u7406\u3002";
+                        ShowTransientStatus(BuildSimpleBindingUnitMismatchMessage(excelUnit, quotaUnit));
                         return;
                     }
 
@@ -6078,7 +5858,7 @@ namespace RecoNet
                     }
                     if (String.IsNullOrEmpty(expression))
                     {
-                        status.Text = "请填写表达式，或在表达式模式下点击WPS/Excel单元格自动加入。";
+                        ShowTransientStatus("请填写表达式，或在表达式模式下点击WPS/Excel单元格自动加入。");
                         expressionText.Focus();
                         return;
                     }
@@ -6086,14 +5866,14 @@ namespace RecoNet
                     string firstCell = ExtractFirstCellAddress(expression);
                     if (String.IsNullOrEmpty(firstCell))
                     {
-                        status.Text = "表达式里至少需要一个单元格地址。";
+                        ShowTransientStatus("表达式里至少需要一个单元格地址。");
                         return;
                     }
 
                     ExcelQuotaLink link;
                     if (!TryCreateQuotaLink(mainForm, conn, row, out link, out error))
                     {
-                        status.Text = error;
+                        ShowTransientStatus(error);
                         return;
                     }
 
@@ -6128,7 +5908,7 @@ namespace RecoNet
                     {
                         if (!IsValidWorkbookExpressionSyntax(expression, out readError))
                         {
-                            status.Text = "表达式无法读取或计算：" + readError;
+                            ShowTransientStatus("表达式无法读取或计算：" + readError);
                             return;
                         }
 
@@ -6148,8 +5928,7 @@ namespace RecoNet
                     SaveStore(conn, store);
 
                     string boundMessage = "已绑定：" + link.QuotaCode + " -> " + expression + (String.IsNullOrWhiteSpace(displayValue) ? "（当前为空，等待同步）" : "");
-                    status.Text = boundMessage;
-                    status.Refresh();
+                    ShowPersistentStatus(boundMessage);
 
                     EnsureExcelLinkRuntime(mainForm);
                     if (ExcelLinkRuntimes.ContainsKey(mainForm))
@@ -6158,205 +5937,17 @@ namespace RecoNet
                     }
 
                     RefreshExcelLinkPanel(mainForm);
-                    status.Text = boundMessage;
+                    ShowTransientStatus(boundMessage);
                 }
                 catch (Exception ex)
                 {
                     Log("ExcelSmartBindPanel bind failed: " + ex);
-                    status.Text = "绑定失败：" + ex.Message;
+                    ShowTransientStatus("绑定失败：" + ex.Message);
                 }
                 finally
                 {
                     EndBindOperation();
                 }
-            }
-        }
-
-        private sealed class AiMatchPreviewDialog : Form
-        {
-            private readonly DataGridView grid;
-            private readonly List<AiMatchPreviewItem> items;
-            private readonly Label status;
-            public event Action<List<AiMatchPreviewItem>> Accepted;
-            public event Action Cancelled;
-
-            public AiMatchPreviewDialog(List<AiMatchPreviewItem> previewItems)
-            {
-                items = previewItems ?? new List<AiMatchPreviewItem>();
-                Text = "AI智能匹配确认";
-                StartPosition = FormStartPosition.CenterParent;
-                Size = new System.Drawing.Size(860, 460);
-                MinimumSize = new System.Drawing.Size(760, 360);
-                MinimizeBox = false;
-
-                Label tip = new Label();
-                tip.Dock = DockStyle.Top;
-                tip.Height = 34;
-                tip.Padding = new Padding(8, 8, 8, 0);
-                tip.Text = "请确认AI匹配结果，勾选后写入Excel联动绑定。";
-
-                grid = new DataGridView();
-                grid.Dock = DockStyle.Fill;
-                grid.AllowUserToAddRows = false;
-                grid.AllowUserToDeleteRows = false;
-                grid.RowHeadersVisible = false;
-                grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-                grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
-                grid.CellDoubleClick += delegate { ApplyCurrentExcelCellToSelectedRow(); };
-
-                DataGridViewCheckBoxColumn checkedColumn = new DataGridViewCheckBoxColumn();
-                checkedColumn.Name = "Checked";
-                checkedColumn.HeaderText = "绑定";
-                checkedColumn.FillWeight = 45;
-                grid.Columns.Add(checkedColumn);
-                grid.Columns.Add("QuotaCode", "定额编号");
-                grid.Columns.Add("QuotaName", "定额名称");
-                grid.Columns.Add("QuotaUnit", "定额单位");
-                grid.Columns.Add("Expression", "Excel单元格/表达式");
-                grid.Columns.Add("Value", "拟链接工程数量");
-                grid.Columns["QuotaCode"].FillWeight = 80;
-                grid.Columns["QuotaName"].FillWeight = 230;
-                grid.Columns["QuotaUnit"].FillWeight = 65;
-                grid.Columns["Expression"].FillWeight = 130;
-                grid.Columns["Value"].FillWeight = 95;
-
-                foreach (AiMatchPreviewItem item in items)
-                {
-                    int index = grid.Rows.Add(
-                        item.Checked,
-                        item.Link == null ? "" : item.Link.QuotaCode,
-                        item.Link == null ? "" : item.Link.QuotaName,
-                        item.QuotaUnit,
-                        item.Expression,
-                        item.DisplayValue);
-                    grid.Rows[index].Tag = item;
-                }
-
-                Button applyCurrent = new Button();
-                applyCurrent.Text = "用当前Excel格匹配";
-                applyCurrent.Width = 130;
-                applyCurrent.Click += delegate { ApplyCurrentExcelCellToSelectedRow(); };
-
-                Button ok = new Button();
-                ok.Text = "确认绑定";
-                ok.Width = 90;
-                ok.Click += delegate
-                {
-                    grid.EndEdit();
-                    List<AiMatchPreviewItem> accepted = GetAcceptedItems();
-                    if (accepted.Count == 0)
-                    {
-                        status.Text = "请至少勾选一条已匹配Excel单元格的定额。";
-                        return;
-                    }
-
-                    if (Accepted != null)
-                    {
-                        Accepted(accepted);
-                    }
-
-                    DialogResult = DialogResult.OK;
-                    Close();
-                };
-
-                Button cancel = new Button();
-                cancel.Text = "取消";
-                cancel.Width = 75;
-                cancel.Click += delegate
-                {
-                    if (Cancelled != null)
-                    {
-                        Cancelled();
-                    }
-
-                    DialogResult = DialogResult.Cancel;
-                    Close();
-                };
-
-                FlowLayoutPanel buttons = new FlowLayoutPanel();
-                buttons.Dock = DockStyle.Bottom;
-                buttons.Height = 44;
-                buttons.FlowDirection = FlowDirection.RightToLeft;
-                buttons.Padding = new Padding(8);
-                buttons.Controls.Add(cancel);
-                buttons.Controls.Add(ok);
-                buttons.Controls.Add(applyCurrent);
-
-                status = new Label();
-                status.Dock = DockStyle.Bottom;
-                status.Height = 26;
-                status.Padding = new Padding(8, 2, 8, 2);
-                status.Text = "未匹配行可选中后，到WPS/Excel点单元格，再点“用当前Excel格匹配”。";
-
-                Controls.Add(grid);
-                Controls.Add(buttons);
-                Controls.Add(status);
-                Controls.Add(tip);
-            }
-
-            private void ApplyCurrentExcelCellToSelectedRow()
-            {
-                grid.EndEdit();
-                DataGridViewRow row = grid.CurrentRow;
-                if (row == null)
-                {
-                    status.Text = "请先选中预览表中的一条定额。";
-                    return;
-                }
-
-                AiMatchPreviewItem item = row.Tag as AiMatchPreviewItem;
-                if (item == null || item.Link == null)
-                {
-                    status.Text = "当前行无法匹配。";
-                    return;
-                }
-
-                ExcelCellAddress cell;
-                string error;
-                if (!TryGetActiveExcelCell(out cell, out error, true))
-                {
-                    status.Text = "请先在WPS/Excel里点选工程数量单元格。";
-                    return;
-                }
-
-                string expression = BuildDefaultExpression(cell);
-                string displayValue;
-                decimal quantity;
-                string readError;
-                if (!TryEvaluateWorkbookExpression(cell.WorkbookPath, cell.WorksheetName, expression, out displayValue, out quantity, out readError))
-                {
-                    status.Text = "当前Excel格无法计算：" + readError;
-                    return;
-                }
-
-                item.Checked = true;
-                item.WorkbookPath = cell.WorkbookPath;
-                item.WorksheetName = cell.WorksheetName;
-                item.Expression = expression;
-                item.CellAddress = ExtractFirstCellAddress(expression);
-                item.DisplayValue = displayValue ?? "";
-                item.QuantityName = "";
-
-                row.Cells["Checked"].Value = true;
-                row.Cells["Expression"].Value = item.Expression;
-                row.Cells["Value"].Value = item.DisplayValue;
-                status.Text = "已匹配：" + (item.Link.QuotaCode ?? "") + " -> " + Path.GetFileName(item.WorkbookPath) + "!" + item.WorksheetName + "!" + item.Expression;
-            }
-
-            public List<AiMatchPreviewItem> GetAcceptedItems()
-            {
-                List<AiMatchPreviewItem> accepted = new List<AiMatchPreviewItem>();
-                foreach (DataGridViewRow row in grid.Rows)
-                {
-                    bool isChecked = row.Cells["Checked"].Value is bool && (bool)row.Cells["Checked"].Value;
-                    AiMatchPreviewItem item = row.Tag as AiMatchPreviewItem;
-                    if (isChecked && item != null && !String.IsNullOrWhiteSpace(item.Expression) && !String.IsNullOrWhiteSpace(item.CellAddress))
-                    {
-                        accepted.Add(item);
-                    }
-                }
-
-                return accepted;
             }
         }
 
@@ -6703,7 +6294,7 @@ namespace RecoNet
                 sheetBox.Text = cell.WorksheetName;
                 previewStartText.Text = cell.CellAddress;
                 cellAddressText.Text = cell.CellAddress;
-                BindCurrentQuota(cell.CellAddress, cell.CellAddress);
+                BindCurrentQuota(cell.CellAddress, cell.CellAddress, cell);
             }
 
             private void BindExpression()
@@ -6726,6 +6317,11 @@ namespace RecoNet
             }
 
             private void BindCurrentQuota(string address, string expression)
+            {
+                BindCurrentQuota(address, expression, null);
+            }
+
+            private void BindCurrentQuota(string address, string expression, ExcelCellAddress activeCell)
             {
                 try
                 {
@@ -6752,6 +6348,16 @@ namespace RecoNet
                         return;
                     }
 
+                    string excelUnit;
+                    string quotaUnit;
+                    if (activeCell != null &&
+                        String.Equals(NormalizeCellAddress(address), NormalizeCellAddress(expression), StringComparison.OrdinalIgnoreCase) &&
+                        IsExcelLinkSimpleBindingBlocked(row, activeCell, out excelUnit, out quotaUnit))
+                    {
+                        status.Text = BuildSimpleBindingUnitMismatchMessage(excelUnit, quotaUnit);
+                        return;
+                    }
+
                     ExcelQuotaLink link;
                     string error;
                     if (!TryCreateQuotaLink(mainForm, conn, row, out link, out error))
@@ -6760,10 +6366,32 @@ namespace RecoNet
                         return;
                     }
 
-                    string displayValue;
-                    string readError;
-                    decimal quantity;
-                    if (!TryEvaluateWorkbookExpression(path, sheet, expression, out displayValue, out quantity, out readError))
+                    string displayValue = null;
+                    string readError = null;
+                    decimal quantity = 0m;
+                    bool evaluated = false;
+                    if (activeCell != null &&
+                        String.Equals(NormalizeCellAddress(expression), NormalizeCellAddress(activeCell.CellAddress), StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (String.IsNullOrWhiteSpace(activeCell.DisplayValue))
+                        {
+                            evaluated = true;
+                            displayValue = "";
+                            readError = null;
+                            quantity = 0m;
+                        }
+                        else
+                        {
+                            displayValue = FormatExcelInputNumber(activeCell.DisplayValue);
+                            evaluated = TryEvaluateDecimal(displayValue, out quantity, out readError);
+                            if (evaluated)
+                            {
+                                displayValue = FormatExcelInputNumber(quantity);
+                            }
+                        }
+                    }
+
+                    if (!evaluated && !TryEvaluateWorkbookExpression(path, sheet, expression, out displayValue, out quantity, out readError))
                     {
                         if (!IsValidWorkbookExpressionSyntax(expression, out readError))
                         {

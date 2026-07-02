@@ -11,6 +11,7 @@
 - 插件部署目标目录是 `铁路基本建设工程投资控制系统2020网络版V0503021201/`。
 - 本地定额与学习数据缓存放在软件目录下的 `RecoQuotaData/`。
 - 三个运行目录统一部署时，只允许以当前仓库 `main` 的 `RecoQuotaRecommend/bin/` 为插件 DLL 源头，使用 `tools/DeployUnifiedPlugins.ps1`；不要从 `自动预算专用线` 或 `徐总` 目录反向覆盖当前仓库输出。
+- Claude Code 可能在 `.claude/worktrees/` 下并行修改；除非用户明确要求，不要主动把当前主工作区改动合入 Claude worktree，也不要从 Claude worktree 部署覆盖当前软件目录。
 
 ## 构建与验证
 
@@ -48,6 +49,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 清理已迁移的 2020 概算/估算定额时，优先运行 `tools/Migrate2020EstimateTo2024/CleanupMigratedEstimate2024.ps1 -WhatIfOnly` 生成只读报告，再正式执行脚本；补充材料/机械必须按 `applied-manual-decisions.csv` 的真实写入代码删除，并加 `not exists(select 1 from 定额库消耗 where 电算代号=@code)` 保护，不能直接使用旧 `rollback.sql`。
 - Windows PowerShell 5 执行含中文表名/字段名的脚本时，脚本文件必须保存为带 BOM 的 UTF-8，否则可能把中文解析成乱码并导致语法错误。
 - PowerShell 反射验证脚本如果包含中文路径或中文测试文本，优先在当前 shell 直接执行，或保存为 UTF-8 脚本文件后用 `-File` 执行；不要把 here-string 管道给子 `powershell.exe -`，否则中文路径可能被管道编码破坏。
+- 读取 UTF-8 附件或中文文本时，如 PowerShell `Get-Content` 输出乱码，先设置 `[Console]::OutputEncoding`，并优先用 `[System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes(...))` 按字节解码验证内容。
 - PowerShell 部署/验证脚本需要格式化多段 `foreach` 输出时，优先先收集到数组或 `List[object]` 再统一 `Format-Table`；不要把脚本块闭合后直接接管道，容易触发 `An empty pipe element is not allowed` 解析错误。
 - 修改已含中文字符串的 C# 源码时，避免用 PowerShell `Set-Content` 默认编码整文件重写；优先用补丁方式，必要时用 `.NET UTF8Encoding(false)` 并把新增中文字符串写成 `\u` 转义，防止产生无关编码差异。
 - 用 Windows PowerShell 5 反射调用 WinForms 私有构造器做冒烟测试时，先设 `$ErrorActionPreference = 'Stop'`，并把 `New-Object` 返回控件的 `.PSObject.BaseObject` 传给反射 API；否则类型包装错误可能只产生非终止错误并让命令假通过。
