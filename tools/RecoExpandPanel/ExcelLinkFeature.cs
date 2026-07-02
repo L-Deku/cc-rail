@@ -1499,9 +1499,11 @@ namespace RecoNet
                 }
 
                 string currentQuantity = GetRowValue(row, "工程数量输入", "工程数量");
+                bool bindable = IsAutoMatchQuotaCode(link.QuotaCode);
+
                 decimal currentQuantityValue;
                 string currentQuantityError;
-                if (TryEvaluateDecimal(currentQuantity, out currentQuantityValue, out currentQuantityError) && currentQuantityValue == 0m)
+                if (bindable && TryEvaluateDecimal(currentQuantity, out currentQuantityValue, out currentQuantityError) && currentQuantityValue == 0m)
                 {
                     continue;
                 }
@@ -1510,11 +1512,23 @@ namespace RecoNet
                 {
                     Link = link,
                     QuotaUnit = GetRowValue(row, "单位", "定额单位"),
-                    CurrentQuantityText = currentQuantity
+                    CurrentQuantityText = currentQuantity,
+                    Bindable = bindable
                 });
             }
 
             return result;
+        }
+
+        private static bool IsAutoMatchQuotaCode(string quotaCode)
+        {
+            quotaCode = (quotaCode ?? "").Trim();
+            if (String.IsNullOrWhiteSpace(quotaCode) || quotaCode == "-" || quotaCode.StartsWith("***", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return true;
         }
 
         private static void AddAiExcelCell(AiExcelSelectionContext context, int row, int column, object rawValue)
@@ -1648,7 +1662,10 @@ namespace RecoNet
                     Expression = "",
                     CellAddress = "",
                     DisplayValue = "",
-                    QuantityName = ""
+                    QuantityName = "",
+                    CurrentQuantityText = quota.CurrentQuantityText,
+                    Bindable = quota.Bindable,
+                    MatchStatus = quota.Bindable ? "\u672a\u5339\u914d" : "\u4e0d\u53c2\u4e0e\u7ed1\u5b9a"
                 });
             }
         }
@@ -4473,6 +4490,7 @@ namespace RecoNet
             public ExcelQuotaLink Link;
             public string QuotaUnit;
             public string CurrentQuantityText;
+            public bool Bindable;
         }
 
         private sealed class AiExcelSelectionContext
@@ -4525,6 +4543,33 @@ namespace RecoNet
                 string value;
                 return quantityNameByRow.TryGetValue(row, out value) ? value : "";
             }
+
+            public string GetUnitNearCell(AiExcelCell target)
+            {
+                if (target == null)
+                {
+                    return "";
+                }
+
+                int checkedCount = 0;
+                foreach (AiExcelCell cell in Cells
+                    .Where(c => c.Row == target.Row && c.Column < target.Column)
+                    .OrderByDescending(c => c.Column))
+                {
+                    checkedCount++;
+                    if (LooksLikeExcelLinkUnit(cell.Text))
+                    {
+                        return (cell.Text ?? "").Trim();
+                    }
+
+                    if (checkedCount >= 6)
+                    {
+                        break;
+                    }
+                }
+
+                return "";
+            }
         }
 
         private sealed class AiExcelCell
@@ -4550,6 +4595,8 @@ namespace RecoNet
             public string QuantityName;
             public string MatchStatus;
             public string CurrentQuantityText;
+            public bool Bindable;
+            public List<AutoMatchCandidateOption> MatchOptions;
         }
 
         private sealed class DeepSeekExcelMatchSettings

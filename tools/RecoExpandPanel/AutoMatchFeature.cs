@@ -46,6 +46,20 @@ namespace RecoNet
             public int FirstColumn;
             public decimal Score;
             public readonly List<string> Addresses = new List<string>();
+            public List<AutoMatchCandidateOption> Options = new List<AutoMatchCandidateOption>();
+        }
+
+        private sealed class AutoMatchCandidateOption
+        {
+            public string Expression;
+            public string CellAddress;
+            public string DisplayValue;
+            public string ExcelQuantityText;
+            public string QuantityName;
+            public decimal Quantity;
+            public int FirstRow;
+            public int FirstColumn;
+            public string Label;
         }
 
         private sealed class AutoMatchNumberIndex
@@ -389,6 +403,12 @@ namespace RecoNet
                     continue;
                 }
 
+                if (!quota.Bindable)
+                {
+                    preview.Add(BuildAutoMatchPreviewItem(quota, context, null, "\u4e0d\u53c2\u4e0e\u7ed1\u5b9a"));
+                    continue;
+                }
+
                 if (alreadyBoundSequences != null && alreadyBoundSequences.Contains(quota.Link.QuotaSequence))
                 {
                     preview.Add(BuildAutoMatchPreviewItem(quota, context, null, "\u5df2\u7ed1\u5b9a"));
@@ -445,7 +465,9 @@ namespace RecoNet
             item.ExcelQuantityText = candidate == null ? "" : candidate.ExcelQuantityText;
             item.QuantityName = candidate == null ? "" : candidate.QuantityName;
             item.CurrentQuantityText = quota.CurrentQuantityText;
+            item.Bindable = quota.Bindable;
             item.MatchStatus = status;
+            item.MatchOptions = candidate == null ? new List<AutoMatchCandidateOption>() : (candidate.Options ?? new List<AutoMatchCandidateOption>());
             return item;
         }
 
@@ -468,6 +490,7 @@ namespace RecoNet
                 {
                     item.CurrentQuantityText = quota.CurrentQuantityText;
                 }
+                item.Bindable = quota.Bindable;
 
                 if (String.IsNullOrWhiteSpace(item.MatchStatus))
                 {
@@ -520,6 +543,7 @@ namespace RecoNet
         private static bool TryBuildOperandAutoMatch(AiQuotaMatchRow quota, decimal quotaQuantity, AiExcelSelectionContext context, AutoMatchNumberIndex numberIndex, HashSet<string> usedAddresses, int previousRow, int previousColumn, out AutoMatchExpressionCandidate candidate)
         {
             candidate = null;
+            List<AutoMatchExpressionCandidate> matches = new List<AutoMatchExpressionCandidate>();
             List<QuantityExpressionTerm> terms;
             if (!TryParseQuantityExpressionTerms(quota.CurrentQuantityText, out terms))
             {
@@ -559,10 +583,16 @@ namespace RecoNet
 
                 decimal diff = RelativeDifference(quotaQuantity, quantity);
                 AutoMatchExpressionCandidate current = BuildAutoMatchCandidate(quota, context, terms, cells, expression, displayValue, quantity, diff, combinationCount, usedAddresses, previousRow, previousColumn);
+                matches.Add(current);
                 if (candidate == null || current.Score > candidate.Score)
                 {
                     candidate = current;
                 }
+            }
+
+            if (candidate != null)
+            {
+                candidate.Options = BuildAutoMatchCandidateOptions(matches);
             }
 
             return candidate != null;
@@ -571,6 +601,7 @@ namespace RecoNet
         private static bool TryBuildWholeValueAutoMatch(AiQuotaMatchRow quota, decimal quotaQuantity, AiExcelSelectionContext context, List<AutoMatchCellValue> numberCells, HashSet<string> usedAddresses, int previousRow, int previousColumn, out AutoMatchExpressionCandidate candidate)
         {
             candidate = null;
+            List<AutoMatchExpressionCandidate> matches = new List<AutoMatchExpressionCandidate>();
             int matchCount = 0;
             foreach (AutoMatchCellValue cell in numberCells ?? new List<AutoMatchCellValue>())
             {
@@ -596,6 +627,7 @@ namespace RecoNet
                 };
                 List<AutoMatchCellValue> cells = new List<AutoMatchCellValue> { cell };
                 AutoMatchExpressionCandidate current = BuildAutoMatchCandidate(quota, context, terms, cells, expression, displayValue, quantity, RelativeDifference(quotaQuantity, quantity), matchCount, usedAddresses, previousRow, previousColumn);
+                matches.Add(current);
                 if (candidate == null || current.Score > candidate.Score)
                 {
                     candidate = current;
@@ -606,6 +638,10 @@ namespace RecoNet
             {
                 candidate.Checked = false;
                 candidate.Status = "\u591a\u5904\u5339\u914d(" + matchCount.ToString(CultureInfo.InvariantCulture) + "\u5904)";
+            }
+            if (candidate != null)
+            {
+                candidate.Options = BuildAutoMatchCandidateOptions(matches);
             }
 
             return candidate != null;
@@ -653,6 +689,44 @@ namespace RecoNet
 
             candidate.Score = ComputeAutoMatchCandidateScore(quota, terms, cells, quantityName, quantityDiff, usedAddresses, previousRow, previousColumn);
             return candidate;
+        }
+
+        private static List<AutoMatchCandidateOption> BuildAutoMatchCandidateOptions(List<AutoMatchExpressionCandidate> candidates)
+        {
+            List<AutoMatchCandidateOption> result = new List<AutoMatchCandidateOption>();
+            HashSet<string> keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (AutoMatchExpressionCandidate candidate in (candidates ?? new List<AutoMatchExpressionCandidate>())
+                .OrderByDescending(item => item.Score))
+            {
+                if (candidate == null || String.IsNullOrWhiteSpace(candidate.Expression))
+                {
+                    continue;
+                }
+
+                string key = (candidate.Expression ?? "") + "|" + (candidate.QuantityName ?? "");
+                if (!keys.Add(key))
+                {
+                    continue;
+                }
+
+                result.Add(new AutoMatchCandidateOption
+                {
+                    Expression = candidate.Expression,
+                    CellAddress = candidate.CellAddress,
+                    DisplayValue = candidate.DisplayValue,
+                    ExcelQuantityText = candidate.ExcelQuantityText,
+                    QuantityName = candidate.QuantityName,
+                    Quantity = candidate.Quantity,
+                    FirstRow = candidate.FirstRow,
+                    FirstColumn = candidate.FirstColumn
+                });
+                if (result.Count >= 30)
+                {
+                    break;
+                }
+            }
+
+            return result;
         }
 
         private static decimal ComputeAutoMatchCandidateScore(AiQuotaMatchRow quota, List<QuantityExpressionTerm> terms, List<AutoMatchCellValue> cells, string quantityName, decimal quantityDiff, HashSet<string> usedAddresses, int previousRow, int previousColumn)
@@ -1019,6 +1093,13 @@ namespace RecoNet
                 context = new AiExcelSelectionContext();
                 context.WorkbookPath = Convert.ToString(workbook.FullName, CultureInfo.InvariantCulture);
                 context.WorksheetName = Convert.ToString(sheet.Name, CultureInfo.InvariantCulture);
+                HashSet<int> visibleColumns = BuildAutoMatchVisibleColumns(sheet, context.WorkbookPath, context.WorksheetName, firstColumn, readLastColumn);
+                if (visibleColumns.Count == 0)
+                {
+                    error = "\u76ee\u6807\u5de5\u4f5c\u8868\u8303\u56f4\u5185\u6ca1\u6709\u53ef\u89c1\u5217\u3002";
+                    return false;
+                }
+
                 int readColCount = readLastColumn - firstColumn + 1;
                 bool ok;
                 if (rowCount * readColCount <= AutoMatchCellLimit)
@@ -1036,6 +1117,7 @@ namespace RecoNet
                     ok = TryReadWorksheetCellsOneByOne(sheet, context, firstRow, firstColumn, rowCount, readColCount, AutoMatchFallbackCellLimit);
                 }
 
+                context.Cells.RemoveAll(cell => cell == null || !visibleColumns.Contains(cell.Column));
                 if (!ok || context.Cells.Count == 0)
                 {
                     error = "\u76ee\u6807\u5de5\u4f5c\u8868\u6ca1\u6709\u53ef\u8bfb\u53d6\u7684\u5185\u5bb9\u3002";
@@ -1062,6 +1144,20 @@ namespace RecoNet
                 error = BuildExcelConnectError("\u8bfb\u53d6 Excel/WPS \u5de5\u4f5c\u8868\u5931\u8d25\uff1a" + ex.Message);
                 return false;
             }
+        }
+
+        private static HashSet<int> BuildAutoMatchVisibleColumns(dynamic sheet, string workbookPath, string worksheetName, int firstColumn, int lastColumn)
+        {
+            HashSet<int> columns = new HashSet<int>();
+            for (int column = firstColumn; column <= lastColumn; column++)
+            {
+                if (!IsExcelLinkColumnHidden(sheet, workbookPath, worksheetName, column))
+                {
+                    columns.Add(column);
+                }
+            }
+
+            return columns;
         }
 
         private static bool HasAutoMatchNumberCell(AiExcelSelectionContext context, List<int> targetColumns)
@@ -1191,8 +1287,13 @@ namespace RecoNet
             private readonly TextBox targetColumnText;
             private readonly DataGridView grid;
             private readonly Label status;
+            private readonly CheckBox manualMatchButton;
+            private readonly System.Windows.Forms.Timer manualMatchTimer;
             private AiExcelSelectionContext currentContext;
             private string currentContextKey;
+            private string lastManualCellKey;
+            private bool updatingQuantityNameCell;
+            private bool suppressManualClosedStatus;
             private List<AiMatchPreviewItem> items = new List<AiMatchPreviewItem>();
 
             public event Action<List<AiMatchPreviewItem>> Accepted;
@@ -1243,11 +1344,21 @@ namespace RecoNet
                 start.Width = 90;
                 start.Click += delegate { StartMatch(); };
 
+                manualMatchButton = new CheckBox();
+                manualMatchButton.Appearance = Appearance.Button;
+                manualMatchButton.Text = "\u624b\u52a8\u5339\u914d";
+                manualMatchButton.Left = 590;
+                manualMatchButton.Top = 8;
+                manualMatchButton.Width = 90;
+                manualMatchButton.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
+                manualMatchButton.CheckedChanged += delegate { ToggleManualMatch(); };
+
                 top.Controls.Add(sheetLabel);
                 top.Controls.Add(sheetBox);
                 top.Controls.Add(columnLabel);
                 top.Controls.Add(targetColumnText);
                 top.Controls.Add(start);
+                top.Controls.Add(manualMatchButton);
 
                 grid = new DataGridView();
                 grid.Dock = DockStyle.Fill;
@@ -1263,15 +1374,46 @@ namespace RecoNet
                         UpdateExpressionFromRow(grid.Rows[e.RowIndex]);
                     }
                 };
+                grid.CellClick += delegate(object sender, DataGridViewCellEventArgs e)
+                {
+                    if (e.RowIndex >= 0 && e.ColumnIndex >= 0 && String.Equals(grid.Columns[e.ColumnIndex].Name, "QuantityName", StringComparison.Ordinal))
+                    {
+                        grid.CurrentCell = grid.Rows[e.RowIndex].Cells[e.ColumnIndex];
+                        PrepareQuantityNameDropDown(grid.Rows[e.RowIndex]);
+                        grid.CurrentCell = grid.Rows[e.RowIndex].Cells[e.ColumnIndex];
+                        grid.BeginEdit(true);
+                        ComboBox combo = grid.EditingControl as ComboBox;
+                        if (combo != null)
+                        {
+                            combo.DroppedDown = true;
+                        }
+                    }
+                };
+                grid.CurrentCellDirtyStateChanged += delegate
+                {
+                    if (grid.IsCurrentCellDirty)
+                    {
+                        grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+                    }
+                };
+                grid.CellValueChanged += delegate(object sender, DataGridViewCellEventArgs e)
+                {
+                    if (e.RowIndex >= 0 && e.ColumnIndex >= 0 && String.Equals(grid.Columns[e.ColumnIndex].Name, "QuantityName", StringComparison.Ordinal))
+                    {
+                        ApplyQuantityNameOption(grid.Rows[e.RowIndex], Convert.ToString(grid.Rows[e.RowIndex].Cells[e.ColumnIndex].Value, CultureInfo.InvariantCulture));
+                    }
+                };
+                grid.DataError += delegate { };
+                grid.SelectionChanged += delegate { lastManualCellKey = ""; };
                 BuildGridColumns();
 
-                Button applyCurrent = new Button();
-                applyCurrent.Text = "\u7528\u5f53\u524dExcel\u683c\u5339\u914d";
-                applyCurrent.Width = 130;
-                applyCurrent.Click += delegate { ApplyCurrentExcelCellToSelectedRow(); };
+                Button singleBind = new Button();
+                singleBind.Text = "\u5355\u4e2a\u7ed1\u5b9a";
+                singleBind.Width = 90;
+                singleBind.Click += delegate { AcceptCurrentItem(); };
 
                 Button ok = new Button();
-                ok.Text = "\u786e\u8ba4\u7ed1\u5b9a";
+                ok.Text = "\u5168\u90e8\u7ed1\u5b9a";
                 ok.Width = 90;
                 ok.Click += delegate { AcceptCheckedItems(); };
 
@@ -1296,7 +1438,7 @@ namespace RecoNet
                 buttons.Padding = new Padding(8);
                 buttons.Controls.Add(cancel);
                 buttons.Controls.Add(ok);
-                buttons.Controls.Add(applyCurrent);
+                buttons.Controls.Add(singleBind);
 
                 status = new Label();
                 status.Dock = DockStyle.Bottom;
@@ -1307,6 +1449,15 @@ namespace RecoNet
                 Controls.Add(buttons);
                 Controls.Add(status);
                 Controls.Add(top);
+
+                manualMatchTimer = new System.Windows.Forms.Timer();
+                manualMatchTimer.Interval = 600;
+                manualMatchTimer.Tick += delegate { PollManualMatchCell(); };
+                FormClosed += delegate
+                {
+                    manualMatchTimer.Stop();
+                    manualMatchTimer.Dispose();
+                };
 
                 LoadSheets();
             }
@@ -1342,6 +1493,7 @@ namespace RecoNet
 
                 grid.Columns["Checked"].ReadOnly = false;
                 grid.Columns["Expression"].ReadOnly = false;
+                grid.Columns["QuantityName"].ReadOnly = false;
             }
 
             private void LoadSheets()
@@ -1378,48 +1530,30 @@ namespace RecoNet
                 grid.EndEdit();
                 List<int> targetColumns;
                 string error;
-                if (!TryParseTargetColumns(targetColumnText.Text, out targetColumns, out error))
-                {
-                    status.Text = error;
-                    return;
-                }
-
-                if (sheetBox.SelectedItem == null)
-                {
-                    status.Text = "\u8bf7\u5148\u9009\u62e9\u5de5\u4f5c\u8868\u3002";
-                    return;
-                }
 
                 List<AiQuotaMatchRow> quotas = LoadCurrentSelectedQuotas();
                 if (quotas.Count == 0)
                 {
-                    status.Text = "\u8bf7\u5148\u5728\u5b9a\u989d\u8f93\u5165\u8868\u4e2d\u9009\u62e9\u8981\u5339\u914d\u7684\u5b9a\u989d\u3002";
+                    status.Text = "\u8bf7\u5148\u5728\u5b9a\u989d\u8f93\u5165\u8868\u4e2d\u6846\u9009\u5b9a\u989d\uff0c\u6216\u5728\u5de6\u4fa7\u70b9\u9009\u8981\u5339\u914d\u7684\u7ae0\u8282\u6761\u76ee\u3002";
                     return;
                 }
 
-                string sheetName = Convert.ToString(sheetBox.SelectedItem, CultureInfo.InvariantCulture);
-                string contextKey = BuildAutoMatchSnapshotKey(sheetName, targetColumns);
-                bool reuseContext = currentContext != null && String.Equals(currentContextKey, contextKey, StringComparison.OrdinalIgnoreCase);
-                status.Text = reuseContext ? "\u6b63\u5728\u4f7f\u7528\u5df2\u8bfb\u53d6\u7684Excel\u5feb\u7167\u5339\u914d..." : "\u6b63\u5728\u8bfb\u53d6Excel\u5e76\u672c\u5730\u5339\u914d...";
+                bool reuseContext;
+                status.Text = "\u6b63\u5728\u51c6\u5907Excel\u5feb\u7167...";
                 UseWaitCursor = true;
                 Application.DoEvents();
                 try
                 {
-                    AiExcelSelectionContext context = currentContext;
-                    if (!reuseContext)
+                    if (!EnsureCurrentAutoMatchSnapshot(out targetColumns, out reuseContext, out error))
                     {
-                        if (!TryReadWorksheetCellsForAutoMatch(sheetName, targetColumns, out context, out error))
-                        {
-                            status.Text = error;
-                            return;
-                        }
-
-                        currentContext = context;
-                        currentContextKey = contextKey;
+                        status.Text = error;
+                        return;
                     }
 
+                    status.Text = reuseContext ? "\u6b63\u5728\u4f7f\u7528\u5df2\u8bfb\u53d6\u7684Excel\u5feb\u7167\u5339\u914d..." : "\u6b63\u5728\u8bfb\u53d6Excel\u5e76\u672c\u5730\u5339\u914d...";
+                    Application.DoEvents();
                     HashSet<long> alreadyBoundSequences = LoadAlreadyBoundSequences();
-                    items = BuildAutoMatchPreviewItems(quotas, context, targetColumns, alreadyBoundSequences);
+                    items = BuildAutoMatchPreviewItems(quotas, currentContext, targetColumns, alreadyBoundSequences);
                     FillGrid();
                     int checkedCount = items.Count(item => item.Checked);
                     status.Text = "\u5339\u914d\u5b8c\u6210\uff1a\u5171 " + items.Count.ToString(CultureInfo.InvariantCulture) + " \u6761\uff0c\u9ed8\u8ba4\u52fe\u9009 " + checkedCount.ToString(CultureInfo.InvariantCulture) + " \u6761\u3002" + (reuseContext ? "\u5df2\u590d\u7528Excel\u5feb\u7167\u3002" : "");
@@ -1428,6 +1562,41 @@ namespace RecoNet
                 {
                     UseWaitCursor = false;
                 }
+            }
+
+            private bool EnsureCurrentAutoMatchSnapshot(out List<int> targetColumns, out bool reuseContext, out string error)
+            {
+                targetColumns = null;
+                reuseContext = false;
+                error = null;
+                if (!TryParseTargetColumns(targetColumnText.Text, out targetColumns, out error))
+                {
+                    return false;
+                }
+
+                if (sheetBox.SelectedItem == null)
+                {
+                    error = "\u8bf7\u5148\u9009\u62e9\u5de5\u4f5c\u8868\u3002";
+                    return false;
+                }
+
+                string sheetName = Convert.ToString(sheetBox.SelectedItem, CultureInfo.InvariantCulture);
+                string contextKey = BuildAutoMatchSnapshotKey(sheetName, targetColumns);
+                reuseContext = currentContext != null && String.Equals(currentContextKey, contextKey, StringComparison.OrdinalIgnoreCase);
+                if (reuseContext)
+                {
+                    return true;
+                }
+
+                AiExcelSelectionContext context;
+                if (!TryReadWorksheetCellsForAutoMatch(sheetName, targetColumns, out context, out error))
+                {
+                    return false;
+                }
+
+                currentContext = context;
+                currentContextKey = contextKey;
+                return true;
             }
 
             private static string BuildAutoMatchSnapshotKey(string sheetName, List<int> targetColumns)
@@ -1441,7 +1610,210 @@ namespace RecoNet
             private List<AiQuotaMatchRow> LoadCurrentSelectedQuotas()
             {
                 DataGridView quotaGrid = GetField<DataGridView>(mainForm, "dataGridViewDE");
-                return BuildAiQuotaRows(mainForm, conn, GetSelectedQuotaRows(quotaGrid));
+                List<DataGridViewRow> explicitRows = GetExplicitSelectedQuotaRows(quotaGrid);
+                if (explicitRows.Count > 1)
+                {
+                    return BuildAiQuotaRows(mainForm, conn, explicitRows);
+                }
+
+                List<AiQuotaMatchRow> chapterRows = LoadCurrentChapterQuotaRows();
+                if (chapterRows.Count > 0)
+                {
+                    return chapterRows;
+                }
+
+                return explicitRows.Count > 0
+                    ? BuildAiQuotaRows(mainForm, conn, explicitRows)
+                    : BuildAiQuotaRows(mainForm, conn, GetSelectedQuotaRows(quotaGrid));
+            }
+
+            private List<DataGridViewRow> GetExplicitSelectedQuotaRows(DataGridView quotaGrid)
+            {
+                Dictionary<int, DataGridViewRow> rows = new Dictionary<int, DataGridViewRow>();
+                if (quotaGrid == null)
+                {
+                    return new List<DataGridViewRow>();
+                }
+
+                foreach (DataGridViewRow row in quotaGrid.SelectedRows)
+                {
+                    if (row != null && !row.IsNewRow && row.Index >= 0)
+                    {
+                        rows[row.Index] = row;
+                    }
+                }
+
+                foreach (DataGridViewCell cell in quotaGrid.SelectedCells)
+                {
+                    if (cell.RowIndex >= 0 && cell.RowIndex < quotaGrid.Rows.Count)
+                    {
+                        DataGridViewRow row = quotaGrid.Rows[cell.RowIndex];
+                        if (row != null && !row.IsNewRow)
+                        {
+                            rows[row.Index] = row;
+                        }
+                    }
+                }
+
+                return rows.OrderBy(pair => pair.Key).Select(pair => pair.Value).ToList();
+            }
+
+            private List<AiQuotaMatchRow> LoadCurrentChapterQuotaRows()
+            {
+                List<AiQuotaMatchRow> result = new List<AiQuotaMatchRow>();
+                TreeView tree = GetField<TreeView>(mainForm, "Tv_tree");
+                TreeNode node = tree != null ? tree.SelectedNode : GetField<TreeNode>(mainForm, "CurrNode");
+                if (node == null)
+                {
+                    return result;
+                }
+
+                List<string> chapterSeqs = CollectAutoMatchChapterSeqs(node);
+                if (chapterSeqs.Count == 0)
+                {
+                    return result;
+                }
+
+                try
+                {
+                    EnsureOpen(conn);
+                    string projectId = GetProjectId(conn);
+                    string totalNo = ResolveAutoMatchTotalNo(node);
+                    using (SqlCommand cmd = conn.CreateCommand())
+                    {
+                        List<string> parameterNames = new List<string>();
+                        for (int i = 0; i < chapterSeqs.Count; i++)
+                        {
+                            string parameterName = "@seq" + i.ToString(CultureInfo.InvariantCulture);
+                            parameterNames.Add(parameterName);
+                            cmd.Parameters.AddWithValue(parameterName, chapterSeqs[i]);
+                        }
+
+                        string totalFilter = "";
+                        if (!String.IsNullOrWhiteSpace(totalNo))
+                        {
+                            cmd.Parameters.AddWithValue("@zgs", totalNo);
+                            totalFilter = " and DE.\u603b\u6982\u7b97\u5e8f\u53f7=@zgs";
+                        }
+
+                        cmd.CommandText = "select DE.\u5b9a\u989d\u5e8f\u53f7, DE.\u603b\u6982\u7b97\u5e8f\u53f7, DE.\u6761\u76ee\u5e8f\u53f7, DE.\u987a\u53f7, DE.\u5b9a\u989d\u7f16\u53f7, DE.\u5de5\u7a0b\u6216\u8d39\u7528\u9879\u76ee\u540d\u79f0, DE.\u5355\u4f4d, DE.\u5de5\u7a0b\u6570\u91cf\u8f93\u5165 from \u5b9a\u989d\u8f93\u5165 DE where DE.\u6761\u76ee\u5e8f\u53f7 in (" + String.Join(",", parameterNames.ToArray()) + ")" + totalFilter + " order by DE.\u6761\u76ee\u5e8f\u53f7, DE.\u987a\u53f7, DE.\u5b9a\u989d\u5e8f\u53f7";
+                        using (SqlDataReader reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                string currentQuantity = ReadAutoMatchReaderText(reader, 7);
+                                string quotaCode = ReadAutoMatchReaderText(reader, 4);
+                                bool bindable = IsAutoMatchQuotaCode(quotaCode);
+                                decimal currentQuantityValue;
+                                string currentQuantityError;
+                                if (bindable && TryEvaluateDecimal(currentQuantity, out currentQuantityValue, out currentQuantityError) && currentQuantityValue == 0m)
+                                {
+                                    continue;
+                                }
+
+                                long quotaSequence = 0;
+                                object sequenceValue = reader.GetValue(0);
+                                if (sequenceValue != null && sequenceValue != DBNull.Value)
+                                {
+                                    quotaSequence = Convert.ToInt64(sequenceValue, CultureInfo.InvariantCulture);
+                                }
+
+                                if (quotaSequence <= 0)
+                                {
+                                    continue;
+                                }
+
+                                ExcelQuotaLink link = new ExcelQuotaLink();
+                                link.ProjectId = projectId;
+                                link.QuotaSequence = quotaSequence;
+                                link.TotalNo = ReadAutoMatchReaderText(reader, 1);
+                                link.ChapterSeq = ReadAutoMatchReaderText(reader, 2);
+                                link.OrderNo = ReadAutoMatchReaderText(reader, 3);
+                                link.QuotaCode = quotaCode;
+                                link.QuotaName = ReadAutoMatchReaderText(reader, 5);
+
+                                result.Add(new AiQuotaMatchRow
+                                {
+                                    Link = link,
+                                    QuotaUnit = ReadAutoMatchReaderText(reader, 6),
+                                    CurrentQuantityText = currentQuantity,
+                                    Bindable = bindable
+                                });
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log("Load auto match chapter quota rows failed: " + ex.Message);
+                    return new List<AiQuotaMatchRow>();
+                }
+
+                return result;
+            }
+
+            private static List<string> CollectAutoMatchChapterSeqs(TreeNode root)
+            {
+                List<string> result = new List<string>();
+                HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                CollectAutoMatchChapterSeqs(root, result, seen);
+                return result;
+            }
+
+            private static void CollectAutoMatchChapterSeqs(TreeNode node, List<string> result, HashSet<string> seen)
+            {
+                if (node == null)
+                {
+                    return;
+                }
+
+                string seq = TryGetValue(node.Tag, "\u6761\u76ee\u5e8f\u53f7");
+                if (String.IsNullOrWhiteSpace(seq) && IsNumeric(node.Name))
+                {
+                    seq = node.Name;
+                }
+
+                if (!String.IsNullOrWhiteSpace(seq) && seen.Add(seq))
+                {
+                    result.Add(seq);
+                }
+
+                foreach (TreeNode child in node.Nodes)
+                {
+                    CollectAutoMatchChapterSeqs(child, result, seen);
+                }
+            }
+
+            private string ResolveAutoMatchTotalNo(TreeNode node)
+            {
+                for (TreeNode current = node; current != null; current = current.Parent)
+                {
+                    string fromTag = TryGetValue(current.Tag, "\u603b\u6982\u7b97\u5e8f\u53f7");
+                    if (!String.IsNullOrWhiteSpace(fromTag))
+                    {
+                        return fromTag;
+                    }
+                }
+
+                DataGridView quotaGrid = GetField<DataGridView>(mainForm, "dataGridViewDE");
+                DataGridViewRow row = GetCurrentQuotaRow(quotaGrid);
+                QuotaKey key;
+                if (TryGetQuotaKey(row, out key))
+                {
+                    return key.TotalNo;
+                }
+
+                return "";
+            }
+
+            private static string ReadAutoMatchReaderText(SqlDataReader reader, int ordinal)
+            {
+                if (reader == null || reader.IsDBNull(ordinal))
+                {
+                    return "";
+                }
+
+                return Convert.ToString(reader.GetValue(ordinal), CultureInfo.InvariantCulture).Trim();
             }
 
             private HashSet<long> LoadAlreadyBoundSequences()
@@ -1469,6 +1841,17 @@ namespace RecoNet
                         item.QuantityName,
                         item.MatchStatus);
                     grid.Rows[index].Tag = item;
+                    if (!item.Bindable)
+                    {
+                        grid.Rows[index].Cells["Checked"].ReadOnly = true;
+                        grid.Rows[index].Cells["Expression"].ReadOnly = true;
+                        grid.Rows[index].Cells["QuantityName"].ReadOnly = true;
+                        grid.Rows[index].Cells["Checked"].ToolTipText = "\u6807\u9898\u6216\u5206\u7ec4\u884c\u4e0d\u53c2\u4e0e\u7ed1\u5b9a";
+                    }
+                    if (item.MatchOptions != null && item.MatchOptions.Count > 1)
+                    {
+                        grid.Rows[index].Cells["QuantityName"].ToolTipText = "\u70b9\u51fb\u9009\u62e9\u591a\u5904\u5339\u914d\u7684\u5de5\u7a0b\u91cf\u540d\u79f0";
+                    }
                 }
             }
 
@@ -1487,8 +1870,20 @@ namespace RecoNet
 
                 string expression = Convert.ToString(row.Cells["Expression"].Value, CultureInfo.InvariantCulture);
                 expression = NormalizeExpressionOperators(expression);
+                bool expressionChanged = !String.Equals(item.Expression ?? "", expression ?? "", StringComparison.OrdinalIgnoreCase);
                 item.Expression = expression;
                 item.CellAddress = ExtractFirstCellAddress(expression);
+                if (expressionChanged && item.MatchOptions != null && item.MatchOptions.Count > 0)
+                {
+                    item.MatchOptions = new List<AutoMatchCandidateOption>();
+                    if (row.Cells["QuantityName"] is DataGridViewComboBoxCell)
+                    {
+                        DataGridViewTextBoxCell textCell = new DataGridViewTextBoxCell();
+                        textCell.Value = item.QuantityName ?? "";
+                        row.Cells[grid.Columns["QuantityName"].Index] = textCell;
+                    }
+                }
+
                 if (String.IsNullOrWhiteSpace(expression) || String.IsNullOrWhiteSpace(item.CellAddress))
                 {
                     item.Checked = false;
@@ -1551,7 +1946,7 @@ namespace RecoNet
 
                 row.Cells["Expression"].Value = item.Expression;
                 row.Cells["Value"].Value = item.ExcelQuantityText;
-                row.Cells["QuantityName"].Value = item.QuantityName;
+                SetQuantityNameCellValue(row, item);
                 row.Cells["Status"].Value = item.MatchStatus;
             }
 
@@ -1568,57 +1963,355 @@ namespace RecoNet
                 }
             }
 
-            private void ApplyCurrentExcelCellToSelectedRow()
+            private void PrepareQuantityNameDropDown(DataGridViewRow row)
+            {
+                if (row == null)
+                {
+                    return;
+                }
+
+                AiMatchPreviewItem item = row.Tag as AiMatchPreviewItem;
+                if (item == null || item.MatchOptions == null || item.MatchOptions.Count <= 1)
+                {
+                    return;
+                }
+
+                if (row.Cells["QuantityName"] is DataGridViewComboBoxCell)
+                {
+                    return;
+                }
+
+                Dictionary<string, int> nameCounts = item.MatchOptions
+                    .Select(option => String.IsNullOrWhiteSpace(option.QuantityName) ? option.CellAddress ?? "" : option.QuantityName)
+                    .GroupBy(name => name)
+                    .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+                DataGridViewComboBoxCell combo = new DataGridViewComboBoxCell();
+                foreach (AutoMatchCandidateOption option in item.MatchOptions)
+                {
+                    option.Label = BuildQuantityNameOptionLabel(option, nameCounts);
+                    if (!combo.Items.Contains(option.Label))
+                    {
+                        combo.Items.Add(option.Label);
+                    }
+                }
+
+                AutoMatchCandidateOption current = FindCurrentOption(item);
+                string value = current == null ? BuildQuantityNameOptionLabel(item.MatchOptions[0], nameCounts) : current.Label;
+                combo.Value = value;
+                row.Cells[grid.Columns["QuantityName"].Index] = combo;
+            }
+
+            private static string BuildQuantityNameOptionLabel(AutoMatchCandidateOption option, Dictionary<string, int> nameCounts)
+            {
+                if (option == null)
+                {
+                    return "";
+                }
+
+                string name = String.IsNullOrWhiteSpace(option.QuantityName) ? option.CellAddress ?? "" : option.QuantityName.Trim();
+                int count = 0;
+                if (nameCounts != null)
+                {
+                    nameCounts.TryGetValue(name, out count);
+                }
+
+                if (count > 1 && !String.IsNullOrWhiteSpace(option.CellAddress))
+                {
+                    return name + " (" + option.CellAddress + ")";
+                }
+
+                return name;
+            }
+
+            private static AutoMatchCandidateOption FindCurrentOption(AiMatchPreviewItem item)
+            {
+                if (item == null || item.MatchOptions == null)
+                {
+                    return null;
+                }
+
+                foreach (AutoMatchCandidateOption option in item.MatchOptions)
+                {
+                    if (String.Equals(option.Expression ?? "", item.Expression ?? "", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return option;
+                    }
+                }
+
+                return item.MatchOptions.Count > 0 ? item.MatchOptions[0] : null;
+            }
+
+            private void SetQuantityNameCellValue(DataGridViewRow row, AiMatchPreviewItem item)
+            {
+                if (row == null || item == null)
+                {
+                    return;
+                }
+
+                object value = item.QuantityName ?? "";
+                DataGridViewComboBoxCell combo = row.Cells["QuantityName"] as DataGridViewComboBoxCell;
+                if (combo != null)
+                {
+                    AutoMatchCandidateOption option = FindCurrentOption(item);
+                    if (option != null)
+                    {
+                        if (String.IsNullOrWhiteSpace(option.Label))
+                        {
+                            option.Label = String.IsNullOrWhiteSpace(option.QuantityName) ? option.CellAddress ?? "" : option.QuantityName;
+                        }
+
+                        value = option.Label;
+                        if (!combo.Items.Contains(value))
+                        {
+                            combo.Items.Add(value);
+                        }
+                    }
+                }
+
+                row.Cells["QuantityName"].Value = value;
+            }
+
+            private void ApplyQuantityNameOption(DataGridViewRow row, string selectedLabel)
+            {
+                if (updatingQuantityNameCell || row == null || String.IsNullOrWhiteSpace(selectedLabel))
+                {
+                    return;
+                }
+
+                AiMatchPreviewItem item = row.Tag as AiMatchPreviewItem;
+                if (item == null || item.MatchOptions == null || item.MatchOptions.Count <= 1)
+                {
+                    return;
+                }
+
+                AutoMatchCandidateOption selected = item.MatchOptions
+                    .FirstOrDefault(option => String.Equals(option.Label ?? "", selectedLabel, StringComparison.OrdinalIgnoreCase))
+                    ?? item.MatchOptions.FirstOrDefault(option => String.Equals(option.QuantityName ?? "", selectedLabel, StringComparison.OrdinalIgnoreCase));
+                if (selected == null || String.Equals(selected.Expression ?? "", item.Expression ?? "", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                updatingQuantityNameCell = true;
+                try
+                {
+                    item.Checked = true;
+                    item.Expression = selected.Expression;
+                    item.CellAddress = selected.CellAddress;
+                    item.DisplayValue = selected.DisplayValue ?? "";
+                    item.ExcelQuantityText = selected.ExcelQuantityText ?? "";
+                    item.QuantityName = selected.QuantityName ?? "";
+                    item.MatchStatus = "\u624b\u52a8\u9009\u62e9";
+
+                    row.Cells["Checked"].Value = true;
+                    row.Cells["Expression"].Value = item.Expression;
+                    row.Cells["Value"].Value = item.ExcelQuantityText;
+                    row.Cells["QuantityName"].Value = selected.Label ?? selected.QuantityName ?? "";
+                    row.Cells["Status"].Value = item.MatchStatus;
+                    status.Text = "\u5df2\u9009\u62e9\u591a\u5904\u5339\u914d\u5019\u9009\uff1a" + (item.Link == null ? "" : item.Link.QuotaCode) + " -> " + item.Expression;
+                }
+                finally
+                {
+                    updatingQuantityNameCell = false;
+                }
+            }
+
+            private void ToggleManualMatch()
+            {
+                if (!manualMatchButton.Checked)
+                {
+                    manualMatchTimer.Stop();
+                    if (!suppressManualClosedStatus)
+                    {
+                        status.Text = "\u624b\u52a8\u5339\u914d\u5df2\u5173\u95ed\u3002";
+                    }
+                    return;
+                }
+
+                List<int> targetColumns;
+                bool reused;
+                string error;
+                status.Text = "\u6b63\u5728\u51c6\u5907Excel\u5feb\u7167...";
+                Application.DoEvents();
+                if (!EnsureCurrentAutoMatchSnapshot(out targetColumns, out reused, out error))
+                {
+                    status.Text = error;
+                    suppressManualClosedStatus = true;
+                    manualMatchButton.Checked = false;
+                    suppressManualClosedStatus = false;
+                    return;
+                }
+
+                if (items.Count == 0)
+                {
+                    List<AiQuotaMatchRow> quotas = LoadCurrentSelectedQuotas();
+                    if (quotas.Count == 0)
+                    {
+                        status.Text = "\u8bf7\u5148\u5728\u5b9a\u989d\u8f93\u5165\u8868\u4e2d\u6846\u9009\u5b9a\u989d\uff0c\u6216\u5728\u5de6\u4fa7\u70b9\u9009\u8981\u5339\u914d\u7684\u7ae0\u8282\u6761\u76ee\u3002";
+                        suppressManualClosedStatus = true;
+                        manualMatchButton.Checked = false;
+                        suppressManualClosedStatus = false;
+                        return;
+                    }
+
+                    items = quotas
+                        .Select(quota => BuildAutoMatchPreviewItem(quota, currentContext, null, "\u672a\u5339\u914d"))
+                        .ToList();
+                    FillGrid();
+                }
+
+                lastManualCellKey = "";
+                manualMatchTimer.Start();
+                status.Text = "\u624b\u52a8\u5339\u914d\u5df2\u5f00\u542f\uff1a\u9009\u4e2d\u9884\u89c8\u8868\u5b9a\u989d\u884c\uff0c\u518d\u70b9\u51fbExcel\u5355\u5143\u683c\uff0c\u5c06\u4f7f\u7528\u5f53\u524d\u5feb\u7167\u751f\u6210\u5730\u5740\u8868\u8fbe\u5f0f\u3002";
+            }
+
+            private void PollManualMatchCell()
+            {
+                if (!manualMatchButton.Checked || currentContext == null || grid.IsCurrentCellInEditMode)
+                {
+                    return;
+                }
+
+                DataGridViewRow row = grid.CurrentRow;
+                if (row == null)
+                {
+                    return;
+                }
+
+                ExcelCellAddress activeCell;
+                string error;
+                if (!TryGetActiveExcelCell(out activeCell, out error, false, false))
+                {
+                    return;
+                }
+
+                string address = NormalizeCellAddress(activeCell.CellAddress);
+                string key = (activeCell.WorkbookPath ?? "") + "|" + (activeCell.WorksheetName ?? "") + "|" + address + "|" + row.Index.ToString(CultureInfo.InvariantCulture);
+                if (String.Equals(lastManualCellKey, key, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                lastManualCellKey = key;
+                if (!String.Equals(activeCell.WorkbookPath ?? "", currentContext.WorkbookPath ?? "", StringComparison.OrdinalIgnoreCase) ||
+                    !String.Equals(activeCell.WorksheetName ?? "", currentContext.WorksheetName ?? "", StringComparison.OrdinalIgnoreCase))
+                {
+                    status.Text = "\u5f53\u524dExcel\u5355\u5143\u683c\u4e0d\u5728\u5df2\u8bfb\u53d6\u5feb\u7167\u7684\u5de5\u4f5c\u8868\u4e2d\u3002";
+                    return;
+                }
+
+                AiExcelCell snapshotCell;
+                if (!currentContext.CellByAddress.TryGetValue(address, out snapshotCell))
+                {
+                    status.Text = "\u5f53\u524dExcel\u683c " + address + " \u4e0d\u5728\u5df2\u8bfb\u53d6\u5feb\u7167\u8303\u56f4\u5185\uff0c\u8bf7\u8c03\u6574\u76ee\u6807\u5217\u540e\u91cd\u65b0\u5f00\u59cb\u5339\u914d\u3002";
+                    return;
+                }
+
+                ApplySnapshotCellToSelectedRow(row, snapshotCell);
+            }
+
+            private void ApplySnapshotCellToSelectedRow(DataGridViewRow row, AiExcelCell snapshotCell)
+            {
+                AiMatchPreviewItem item = row == null ? null : row.Tag as AiMatchPreviewItem;
+                if (item == null || item.Link == null || snapshotCell == null)
+                {
+                    status.Text = "\u5f53\u524d\u884c\u65e0\u6cd5\u624b\u52a8\u5339\u914d\u3002";
+                    return;
+                }
+                if (!item.Bindable)
+                {
+                    status.Text = "\u6807\u9898\u6216\u5206\u7ec4\u884c\u4e0d\u53c2\u4e0e\u7ed1\u5b9a\u3002";
+                    return;
+                }
+
+                string unitText = currentContext.GetUnitNearCell(snapshotCell);
+                string suffix;
+                if (!TryBuildManualSnapshotSuffix(unitText, item.QuotaUnit, out suffix))
+                {
+                    status.Text = BuildSimpleBindingUnitMismatchMessage(unitText, item.QuotaUnit);
+                    return;
+                }
+
+                string expression = snapshotCell.Address + suffix;
+                string displayValue;
+                decimal quantity;
+                string readError;
+                if (!TryEvaluateAutoMatchExpression(currentContext, expression, out displayValue, out quantity, out readError))
+                {
+                    status.Text = "\u5feb\u7167\u4e2d\u7684Excel\u683c\u65e0\u6cd5\u8ba1\u7b97\uff1a" + readError;
+                    return;
+                }
+
+                item.Checked = true;
+                item.WorkbookPath = currentContext.WorkbookPath;
+                item.WorksheetName = currentContext.WorksheetName;
+                item.Expression = expression;
+                item.CellAddress = snapshotCell.Address;
+                item.DisplayValue = displayValue ?? "";
+                item.ExcelQuantityText = snapshotCell.Text ?? "";
+                item.QuantityName = BuildQuantityNameFromExcelRow(currentContext, snapshotCell.Address);
+                item.MatchStatus = "\u624b\u52a8\u5339\u914d";
+                item.MatchOptions = new List<AutoMatchCandidateOption>();
+                if (row.Cells["QuantityName"] is DataGridViewComboBoxCell)
+                {
+                    DataGridViewTextBoxCell textCell = new DataGridViewTextBoxCell();
+                    textCell.Value = item.QuantityName ?? "";
+                    row.Cells[grid.Columns["QuantityName"].Index] = textCell;
+                }
+
+                row.Cells["Checked"].Value = true;
+                row.Cells["Expression"].Value = item.Expression;
+                row.Cells["Value"].Value = item.ExcelQuantityText;
+                SetQuantityNameCellValue(row, item);
+                row.Cells["Status"].Value = item.MatchStatus;
+                status.Text = "\u5df2\u624b\u52a8\u5339\u914d\uff1a" + (item.Link.QuotaCode ?? "") + " -> " + item.WorksheetName + "!" + item.Expression;
+            }
+
+            private static bool TryBuildManualSnapshotSuffix(string excelUnit, string quotaUnit, out string suffix)
+            {
+                suffix = "";
+                if (String.IsNullOrWhiteSpace(excelUnit) ||
+                    String.IsNullOrWhiteSpace(quotaUnit) ||
+                    !LooksLikeExcelLinkUnit(excelUnit) ||
+                    !LooksLikeExcelLinkUnit(quotaUnit))
+                {
+                    return false;
+                }
+
+                return TryBuildExcelLinkUnitScaleSuffix(excelUnit, quotaUnit, out suffix);
+            }
+
+            private void AcceptCurrentItem()
             {
                 grid.EndEdit();
                 DataGridViewRow row = grid.CurrentRow;
                 if (row == null)
                 {
-                    status.Text = "\u8bf7\u5148\u9009\u4e2d\u9884\u89c8\u8868\u4e2d\u7684\u4e00\u6761\u5b9a\u989d\u3002";
+                    status.Text = "\u8bf7\u5148\u9009\u4e2d\u8981\u7ed1\u5b9a\u7684\u4e00\u884c\u3002";
                     return;
                 }
 
+                UpdateExpressionFromRow(row);
                 AiMatchPreviewItem item = row.Tag as AiMatchPreviewItem;
-                if (item == null || item.Link == null)
+                if (item != null && !item.Bindable)
                 {
-                    status.Text = "\u5f53\u524d\u884c\u65e0\u6cd5\u5339\u914d\u3002";
+                    status.Text = "\u6807\u9898\u6216\u5206\u7ec4\u884c\u4e0d\u53c2\u4e0e\u7ed1\u5b9a\u3002";
                     return;
                 }
-
-                ExcelCellAddress cell;
-                string error;
-                if (!TryGetActiveExcelCell(out cell, out error, true))
+                if (item == null || item.Link == null || String.IsNullOrWhiteSpace(item.Expression) || String.IsNullOrWhiteSpace(item.CellAddress))
                 {
-                    status.Text = "\u8bf7\u5148\u5728WPS/Excel\u91cc\u70b9\u9009\u5de5\u7a0b\u6570\u91cf\u5355\u5143\u683c\u3002";
-                    return;
-                }
-
-                string expression = BuildDefaultExpression(cell);
-                string displayValue;
-                decimal quantity;
-                string readError;
-                if (!TryEvaluateWorkbookExpression(cell.WorkbookPath, cell.WorksheetName, expression, out displayValue, out quantity, out readError))
-                {
-                    status.Text = "\u5f53\u524dExcel\u683c\u65e0\u6cd5\u8ba1\u7b97\uff1a" + readError;
+                    status.Text = "\u5f53\u524d\u884c\u8fd8\u6ca1\u6709\u53ef\u7ed1\u5b9a\u7684\u5339\u914d\u8868\u8fbe\u5f0f\u3002";
                     return;
                 }
 
                 item.Checked = true;
-                item.WorkbookPath = cell.WorkbookPath;
-                item.WorksheetName = cell.WorksheetName;
-                item.Expression = expression;
-                item.CellAddress = ExtractFirstCellAddress(expression);
-                item.DisplayValue = displayValue ?? "";
-                item.ExcelQuantityText = cell.DisplayValue ?? "";
-                item.QuantityName = BuildQuantityNameNearActiveExcelCell(cell);
-                item.MatchStatus = "\u624b\u52a8\u5339\u914d";
-
                 row.Cells["Checked"].Value = true;
-                row.Cells["Expression"].Value = item.Expression;
-                row.Cells["Value"].Value = item.ExcelQuantityText;
-                row.Cells["QuantityName"].Value = item.QuantityName;
-                row.Cells["Status"].Value = item.MatchStatus;
-                status.Text = "\u5df2\u5339\u914d\uff1a" + (item.Link.QuotaCode ?? "") + " -> " + System.IO.Path.GetFileName(item.WorkbookPath) + "!" + item.WorksheetName + "!" + item.Expression;
+                if (Accepted != null)
+                {
+                    Accepted(new List<AiMatchPreviewItem> { item });
+                }
+
+                status.Text = "\u5df2\u5355\u4e2a\u7ed1\u5b9a\uff1a" + (item.Link.QuotaCode ?? "") + " -> " + item.Expression;
             }
 
             private void AcceptCheckedItems()
@@ -1648,7 +2341,7 @@ namespace RecoNet
                 {
                     bool isChecked = row.Cells["Checked"].Value is bool && (bool)row.Cells["Checked"].Value;
                     AiMatchPreviewItem item = row.Tag as AiMatchPreviewItem;
-                    if (isChecked && item != null && !String.IsNullOrWhiteSpace(item.Expression) && !String.IsNullOrWhiteSpace(item.CellAddress))
+                    if (isChecked && item != null && item.Bindable && !String.IsNullOrWhiteSpace(item.Expression) && !String.IsNullOrWhiteSpace(item.CellAddress))
                     {
                         accepted.Add(item);
                     }
