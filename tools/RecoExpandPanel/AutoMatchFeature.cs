@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Data.SqlClient;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -36,6 +37,7 @@ namespace RecoNet
             public string Expression;
             public string CellAddress;
             public string DisplayValue;
+            public string ExcelQuantityText;
             public decimal Quantity;
             public string QuantityName;
             public string Status;
@@ -440,6 +442,7 @@ namespace RecoNet
             item.Expression = candidate == null ? "" : candidate.Expression;
             item.CellAddress = candidate == null ? "" : candidate.CellAddress;
             item.DisplayValue = candidate == null ? "" : candidate.DisplayValue;
+            item.ExcelQuantityText = candidate == null ? "" : candidate.ExcelQuantityText;
             item.QuantityName = candidate == null ? "" : candidate.QuantityName;
             item.CurrentQuantityText = quota.CurrentQuantityText;
             item.MatchStatus = status;
@@ -469,6 +472,11 @@ namespace RecoNet
                 if (String.IsNullOrWhiteSpace(item.MatchStatus))
                 {
                     item.MatchStatus = String.IsNullOrWhiteSpace(item.Expression) ? "\u672a\u5339\u914d" : "\u5df2\u5339\u914d";
+                }
+
+                if (String.IsNullOrWhiteSpace(item.ExcelQuantityText) && !String.IsNullOrWhiteSpace(item.Expression) && context != null)
+                {
+                    item.ExcelQuantityText = BuildExcelQuantityTextForExpression(context, item.Expression);
                 }
 
                 if (String.IsNullOrWhiteSpace(item.WorkbookPath) && context != null)
@@ -629,6 +637,7 @@ namespace RecoNet
             candidate.Expression = expression;
             candidate.CellAddress = first.Cell.Address;
             candidate.DisplayValue = displayValue;
+            candidate.ExcelQuantityText = BuildExcelQuantityTextForExpression(context, expression);
             candidate.Quantity = quantity;
             candidate.QuantityName = quantityName;
             candidate.FirstRow = first.Cell.Row;
@@ -789,7 +798,7 @@ namespace RecoNet
             error = null;
             Dictionary<string, AiExcelCell> cells = context == null
                 ? new Dictionary<string, AiExcelCell>(StringComparer.OrdinalIgnoreCase)
-                : context.Cells.GroupBy(cell => cell.Address, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+                : context.CellByAddress;
 
             string resolved = NormalizeExpressionOperators(expression);
             bool allResolved = true;
@@ -820,6 +829,90 @@ namespace RecoNet
             }
 
             return false;
+        }
+
+        private static string BuildExcelQuantityTextForExpression(AiExcelSelectionContext context, string expression)
+        {
+            if (context == null || String.IsNullOrWhiteSpace(expression))
+            {
+                return "";
+            }
+
+            Dictionary<string, AiExcelCell> cells = context.CellByAddress;
+            string normalized = NormalizeExpressionOperators(expression);
+            MatchCollection matches = Regex.Matches(normalized, @"[A-Z]+\d+");
+            if (matches.Count == 0)
+            {
+                return "";
+            }
+
+            StringBuilder builder = new StringBuilder();
+            int previousEnd = 0;
+            for (int i = 0; i < matches.Count; i++)
+            {
+                Match match = matches[i];
+                string address = NormalizeCellAddress(match.Value);
+                CellRef parsed;
+                if (!TryParseCellAddress(address, out parsed))
+                {
+                    previousEnd = match.Index + match.Length;
+                    continue;
+                }
+
+                string text = "";
+                AiExcelCell cell;
+                if (cells.TryGetValue(address, out cell))
+                {
+                    text = cell.Text ?? "";
+                }
+                else
+                {
+                    string readError;
+                    TryReadWorkbookCellValue(context.WorkbookPath, context.WorksheetName, address, out text, out readError);
+                }
+
+                string between = normalized.Substring(previousEnd, match.Index - previousEnd);
+                string sign = FindLastExpressionSign(between);
+                if (builder.Length == 0)
+                {
+                    if (String.Equals(sign, "-", StringComparison.Ordinal))
+                    {
+                        builder.Append("-");
+                    }
+                }
+                else
+                {
+                    builder.Append(String.Equals(sign, "-", StringComparison.Ordinal) ? "-" : "+");
+                }
+
+                builder.Append(String.IsNullOrWhiteSpace(text) ? address : text.Trim());
+                previousEnd = match.Index + match.Length;
+            }
+
+            return builder.ToString();
+        }
+
+        private static string FindLastExpressionSign(string text)
+        {
+            if (String.IsNullOrEmpty(text))
+            {
+                return "+";
+            }
+
+            for (int i = text.Length - 1; i >= 0; i--)
+            {
+                if (text[i] == '+')
+                {
+                    return "+";
+                }
+
+                if (text[i] == '-')
+                {
+                    return "-";
+                }
+            }
+
+            return "+";
         }
 
         private static bool TryListActiveWorkbookSheets(out List<string> sheetNames, out string activeSheetName, out string error)
@@ -1092,21 +1185,23 @@ namespace RecoNet
 
         private sealed class AutoMatchDialog : Form
         {
-            private readonly List<AiQuotaMatchRow> quotas;
-            private readonly HashSet<long> alreadyBoundSequences;
+            private readonly Form mainForm;
+            private readonly SqlConnection conn;
             private readonly ComboBox sheetBox;
             private readonly TextBox targetColumnText;
             private readonly DataGridView grid;
             private readonly Label status;
+            private AiExcelSelectionContext currentContext;
+            private string currentContextKey;
             private List<AiMatchPreviewItem> items = new List<AiMatchPreviewItem>();
 
             public event Action<List<AiMatchPreviewItem>> Accepted;
             public event Action Cancelled;
 
-            public AutoMatchDialog(List<AiQuotaMatchRow> quotaRows, HashSet<long> alreadyBound)
+            public AutoMatchDialog(Form ownerForm, SqlConnection projectConnection)
             {
-                quotas = quotaRows ?? new List<AiQuotaMatchRow>();
-                alreadyBoundSequences = alreadyBound ?? new HashSet<long>();
+                mainForm = ownerForm;
+                conn = projectConnection;
                 Text = "\u81ea\u52a8\u5339\u914dExcel\u5de5\u7a0b\u91cf";
                 StartPosition = FormStartPosition.CenterParent;
                 Size = new System.Drawing.Size(980, 560);
@@ -1161,7 +1256,13 @@ namespace RecoNet
                 grid.RowHeadersVisible = false;
                 grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
                 grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
-                grid.CellDoubleClick += delegate { ApplyCurrentExcelCellToSelectedRow(); };
+                grid.CellEndEdit += delegate(object sender, DataGridViewCellEventArgs e)
+                {
+                    if (e.RowIndex >= 0 && e.ColumnIndex >= 0 && String.Equals(grid.Columns[e.ColumnIndex].Name, "Expression", StringComparison.Ordinal))
+                    {
+                        UpdateExpressionFromRow(grid.Rows[e.RowIndex]);
+                    }
+                };
                 BuildGridColumns();
 
                 Button applyCurrent = new Button();
@@ -1222,7 +1323,7 @@ namespace RecoNet
                 grid.Columns.Add("QuotaUnit", "\u5355\u4f4d");
                 grid.Columns.Add("CurrentQuantity", "\u5f53\u524d\u5de5\u7a0b\u91cf");
                 grid.Columns.Add("Expression", "\u5339\u914d\u8868\u8fbe\u5f0f");
-                grid.Columns.Add("Value", "Excel\u53d6\u503c");
+                grid.Columns.Add("Value", "Excel\u5de5\u7a0b\u91cf");
                 grid.Columns.Add("QuantityName", "\u5de5\u7a0b\u91cf\u540d\u79f0");
                 grid.Columns.Add("Status", "\u72b6\u6001");
                 grid.Columns["QuotaCode"].FillWeight = 70;
@@ -1233,6 +1334,14 @@ namespace RecoNet
                 grid.Columns["Value"].FillWeight = 70;
                 grid.Columns["QuantityName"].FillWeight = 160;
                 grid.Columns["Status"].FillWeight = 90;
+
+                foreach (DataGridViewColumn column in grid.Columns)
+                {
+                    column.ReadOnly = true;
+                }
+
+                grid.Columns["Checked"].ReadOnly = false;
+                grid.Columns["Expression"].ReadOnly = false;
             }
 
             private void LoadSheets()
@@ -1281,27 +1390,67 @@ namespace RecoNet
                     return;
                 }
 
-                status.Text = "\u6b63\u5728\u8bfb\u53d6Excel\u5e76\u672c\u5730\u5339\u914d...";
+                List<AiQuotaMatchRow> quotas = LoadCurrentSelectedQuotas();
+                if (quotas.Count == 0)
+                {
+                    status.Text = "\u8bf7\u5148\u5728\u5b9a\u989d\u8f93\u5165\u8868\u4e2d\u9009\u62e9\u8981\u5339\u914d\u7684\u5b9a\u989d\u3002";
+                    return;
+                }
+
+                string sheetName = Convert.ToString(sheetBox.SelectedItem, CultureInfo.InvariantCulture);
+                string contextKey = BuildAutoMatchSnapshotKey(sheetName, targetColumns);
+                bool reuseContext = currentContext != null && String.Equals(currentContextKey, contextKey, StringComparison.OrdinalIgnoreCase);
+                status.Text = reuseContext ? "\u6b63\u5728\u4f7f\u7528\u5df2\u8bfb\u53d6\u7684Excel\u5feb\u7167\u5339\u914d..." : "\u6b63\u5728\u8bfb\u53d6Excel\u5e76\u672c\u5730\u5339\u914d...";
                 UseWaitCursor = true;
                 Application.DoEvents();
                 try
                 {
-                    AiExcelSelectionContext context;
-                    if (!TryReadWorksheetCellsForAutoMatch(Convert.ToString(sheetBox.SelectedItem, CultureInfo.InvariantCulture), targetColumns, out context, out error))
+                    AiExcelSelectionContext context = currentContext;
+                    if (!reuseContext)
                     {
-                        status.Text = error;
-                        return;
+                        if (!TryReadWorksheetCellsForAutoMatch(sheetName, targetColumns, out context, out error))
+                        {
+                            status.Text = error;
+                            return;
+                        }
+
+                        currentContext = context;
+                        currentContextKey = contextKey;
                     }
 
+                    HashSet<long> alreadyBoundSequences = LoadAlreadyBoundSequences();
                     items = BuildAutoMatchPreviewItems(quotas, context, targetColumns, alreadyBoundSequences);
                     FillGrid();
                     int checkedCount = items.Count(item => item.Checked);
-                    status.Text = "\u5339\u914d\u5b8c\u6210\uff1a\u5171 " + items.Count.ToString(CultureInfo.InvariantCulture) + " \u6761\uff0c\u9ed8\u8ba4\u52fe\u9009 " + checkedCount.ToString(CultureInfo.InvariantCulture) + " \u6761\u3002";
+                    status.Text = "\u5339\u914d\u5b8c\u6210\uff1a\u5171 " + items.Count.ToString(CultureInfo.InvariantCulture) + " \u6761\uff0c\u9ed8\u8ba4\u52fe\u9009 " + checkedCount.ToString(CultureInfo.InvariantCulture) + " \u6761\u3002" + (reuseContext ? "\u5df2\u590d\u7528Excel\u5feb\u7167\u3002" : "");
                 }
                 finally
                 {
                     UseWaitCursor = false;
                 }
+            }
+
+            private static string BuildAutoMatchSnapshotKey(string sheetName, List<int> targetColumns)
+            {
+                string columnKey = targetColumns == null || targetColumns.Count == 0
+                    ? "*"
+                    : String.Join(",", targetColumns.OrderBy(column => column).Select(column => column.ToString(CultureInfo.InvariantCulture)).ToArray());
+                return (sheetName ?? "").Trim().ToUpperInvariant() + "|" + columnKey;
+            }
+
+            private List<AiQuotaMatchRow> LoadCurrentSelectedQuotas()
+            {
+                DataGridView quotaGrid = GetField<DataGridView>(mainForm, "dataGridViewDE");
+                return BuildAiQuotaRows(mainForm, conn, GetSelectedQuotaRows(quotaGrid));
+            }
+
+            private HashSet<long> LoadAlreadyBoundSequences()
+            {
+                ExcelLinkStore store = LoadStore(conn);
+                return new HashSet<long>(
+                    (store.Links ?? new List<ExcelQuotaLink>())
+                        .Where(link => link != null && !String.IsNullOrWhiteSpace(link.Expression))
+                        .Select(link => link.QuotaSequence));
             }
 
             private void FillGrid()
@@ -1316,10 +1465,106 @@ namespace RecoNet
                         item.QuotaUnit,
                         item.CurrentQuantityText,
                         item.Expression,
-                        item.DisplayValue,
+                        item.ExcelQuantityText,
                         item.QuantityName,
                         item.MatchStatus);
                     grid.Rows[index].Tag = item;
+                }
+            }
+
+            private void UpdateExpressionFromRow(DataGridViewRow row)
+            {
+                if (row == null)
+                {
+                    return;
+                }
+
+                AiMatchPreviewItem item = row.Tag as AiMatchPreviewItem;
+                if (item == null || item.Link == null)
+                {
+                    return;
+                }
+
+                string expression = Convert.ToString(row.Cells["Expression"].Value, CultureInfo.InvariantCulture);
+                expression = NormalizeExpressionOperators(expression);
+                item.Expression = expression;
+                item.CellAddress = ExtractFirstCellAddress(expression);
+                if (String.IsNullOrWhiteSpace(expression) || String.IsNullOrWhiteSpace(item.CellAddress))
+                {
+                    item.Checked = false;
+                    item.DisplayValue = "";
+                    item.ExcelQuantityText = "";
+                    item.QuantityName = "";
+                    item.MatchStatus = "\u672a\u5339\u914d";
+                    row.Cells["Checked"].Value = false;
+                    row.Cells["Value"].Value = "";
+                    row.Cells["QuantityName"].Value = "";
+                    row.Cells["Status"].Value = item.MatchStatus;
+                    return;
+                }
+
+                if (currentContext != null)
+                {
+                    item.WorkbookPath = currentContext.WorkbookPath;
+                    item.WorksheetName = currentContext.WorksheetName;
+                }
+
+                string displayValue;
+                decimal quantity;
+                string readError = "";
+                if (currentContext == null || !TryEvaluateAutoMatchExpression(currentContext, expression, out displayValue, out quantity, out readError))
+                {
+                    item.Checked = false;
+                    item.DisplayValue = "";
+                    item.ExcelQuantityText = "";
+                    item.QuantityName = "";
+                    item.MatchStatus = "\u8868\u8fbe\u5f0f\u65e0\u6cd5\u8ba1\u7b97";
+                    row.Cells["Checked"].Value = false;
+                    row.Cells["Value"].Value = "";
+                    row.Cells["QuantityName"].Value = "";
+                    row.Cells["Status"].Value = item.MatchStatus;
+                    status.Text = item.MatchStatus + "\uff1a" + readError;
+                    return;
+                }
+
+                item.DisplayValue = displayValue ?? "";
+                item.ExcelQuantityText = BuildExcelQuantityTextForExpression(currentContext, expression);
+                if (String.IsNullOrWhiteSpace(item.ExcelQuantityText))
+                {
+                    item.ExcelQuantityText = item.DisplayValue;
+                }
+
+                item.QuantityName = BuildQuantityNameFromExcelRow(currentContext, item.CellAddress);
+                decimal quotaQuantity;
+                string quotaError;
+                if (TryEvaluateDecimal(item.CurrentQuantityText, out quotaQuantity, out quotaError) &&
+                    RelativeDifference(quotaQuantity, quantity) > 0.03m)
+                {
+                    item.Checked = false;
+                    item.MatchStatus = "\u9a8c\u7b97\u4e0d\u7b26";
+                    row.Cells["Checked"].Value = false;
+                }
+                else
+                {
+                    item.MatchStatus = "\u624b\u52a8\u4fee\u6539";
+                }
+
+                row.Cells["Expression"].Value = item.Expression;
+                row.Cells["Value"].Value = item.ExcelQuantityText;
+                row.Cells["QuantityName"].Value = item.QuantityName;
+                row.Cells["Status"].Value = item.MatchStatus;
+            }
+
+            private void RefreshEditedExpressions()
+            {
+                foreach (DataGridViewRow row in grid.Rows)
+                {
+                    AiMatchPreviewItem item = row.Tag as AiMatchPreviewItem;
+                    string expression = Convert.ToString(row.Cells["Expression"].Value, CultureInfo.InvariantCulture);
+                    if (item != null && !String.Equals((item.Expression ?? ""), (expression ?? ""), StringComparison.OrdinalIgnoreCase))
+                    {
+                        UpdateExpressionFromRow(row);
+                    }
                 }
             }
 
@@ -1364,12 +1609,13 @@ namespace RecoNet
                 item.Expression = expression;
                 item.CellAddress = ExtractFirstCellAddress(expression);
                 item.DisplayValue = displayValue ?? "";
+                item.ExcelQuantityText = cell.DisplayValue ?? "";
                 item.QuantityName = BuildQuantityNameNearActiveExcelCell(cell);
                 item.MatchStatus = "\u624b\u52a8\u5339\u914d";
 
                 row.Cells["Checked"].Value = true;
                 row.Cells["Expression"].Value = item.Expression;
-                row.Cells["Value"].Value = item.DisplayValue;
+                row.Cells["Value"].Value = item.ExcelQuantityText;
                 row.Cells["QuantityName"].Value = item.QuantityName;
                 row.Cells["Status"].Value = item.MatchStatus;
                 status.Text = "\u5df2\u5339\u914d\uff1a" + (item.Link.QuotaCode ?? "") + " -> " + System.IO.Path.GetFileName(item.WorkbookPath) + "!" + item.WorksheetName + "!" + item.Expression;
@@ -1378,6 +1624,7 @@ namespace RecoNet
             private void AcceptCheckedItems()
             {
                 grid.EndEdit();
+                RefreshEditedExpressions();
                 List<AiMatchPreviewItem> accepted = GetAcceptedItems();
                 if (accepted.Count == 0)
                 {

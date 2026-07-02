@@ -632,6 +632,52 @@ namespace RecoNet
             return unit;
         }
 
+        private static string StripExcelLinkMetricUnitModifier(string unit)
+        {
+            unit = StripExcelLinkCubicUnitQualifier(unit);
+            if (String.IsNullOrEmpty(unit))
+            {
+                return "";
+            }
+
+            string[] units = new string[] { "m3", "m2", "km", "hm", "kg", "m", "t" };
+            for (int i = 0; i < units.Length; i++)
+            {
+                string suffix = units[i];
+                if (String.Equals(unit, suffix, StringComparison.Ordinal))
+                {
+                    return unit;
+                }
+
+                if (unit.EndsWith(suffix, StringComparison.Ordinal) &&
+                    IsExcelLinkPlainUnitModifier(unit.Substring(0, unit.Length - suffix.Length)))
+                {
+                    return suffix;
+                }
+            }
+
+            return unit;
+        }
+
+        private static bool IsExcelLinkPlainUnitModifier(string text)
+        {
+            if (String.IsNullOrEmpty(text))
+            {
+                return false;
+            }
+
+            for (int i = 0; i < text.Length; i++)
+            {
+                char ch = text[i];
+                if (Char.IsDigit(ch) || ch == '.' || ch == '\u4e07')
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         private static bool StartsWithExcelLinkScaleOrMetricUnit(string text)
         {
             if (String.IsNullOrEmpty(text))
@@ -731,29 +777,48 @@ namespace RecoNet
             return unit;
         }
 
-        private static string NormalizeExcelLinkBaseUnit(string unit, out decimal unitScale)
+        private static bool TryNormalizeExcelLinkMetricBaseUnit(string unit, out string baseUnit, out decimal unitScale)
         {
+            baseUnit = "";
             unitScale = 1m;
-            unit = NormalizeExcelLinkUnit(unit);
+            unit = StripExcelLinkMetricUnitModifier(NormalizeExcelLinkUnit(unit));
             if (unit == "km")
             {
                 unitScale = 1000m;
-                return "m";
+                baseUnit = "m";
+                return true;
             }
             if (unit == "hm")
             {
                 unitScale = 100m;
-                return "m";
+                baseUnit = "m";
+                return true;
             }
             if (unit == "t")
             {
                 unitScale = 1000m;
-                return "kg";
+                baseUnit = "kg";
+                return true;
             }
             if (unit == "m" || unit == "m2" || unit == "m3" || unit == "kg")
             {
-                return unit;
+                baseUnit = unit;
+                return true;
             }
+
+            return false;
+        }
+
+        private static string NormalizeExcelLinkBaseUnit(string unit, out decimal unitScale)
+        {
+            string baseUnit;
+            if (TryNormalizeExcelLinkMetricBaseUnit(unit, out baseUnit, out unitScale))
+            {
+                return baseUnit;
+            }
+
+            unitScale = 1m;
+            unit = NormalizeExcelLinkUnit(unit);
             if (IsExcelLinkCountUnit(unit))
             {
                 return unit;
@@ -897,6 +962,13 @@ namespace RecoNet
             }
 
             string normalized = NormalizeExcelLinkUnit(baseUnit);
+            decimal unitScale;
+            string metricBase;
+            if (TryNormalizeExcelLinkMetricBaseUnit(normalized, out metricBase, out unitScale))
+            {
+                return;
+            }
+
             if (!String.IsNullOrWhiteSpace(normalized) &&
                 normalized != "m" &&
                 normalized != "m2" &&
@@ -1717,18 +1789,12 @@ namespace RecoNet
         private static string BuildQuantityNameFromExcelRow(AiExcelSelectionContext selection, string cellAddress)
         {
             CellRef target;
-            if (!TryParseCellAddress(cellAddress, out target))
+            if (selection == null || !TryParseCellAddress(cellAddress, out target))
             {
                 return "";
             }
 
-            return String.Join(" ", selection.Cells
-                .Where(c => c.Row == target.Row && !c.IsNumber)
-                .OrderBy(c => c.Column)
-                .Select(c => c.Text)
-                .Where(text => !String.IsNullOrWhiteSpace(text))
-                .Take(6)
-                .ToArray()).Trim();
+            return selection.GetQuantityNameForRow(target.Row);
         }
 
         private static string BuildQuantityNameNearActiveExcelCell(ExcelCellAddress cell)
@@ -4411,16 +4477,53 @@ namespace RecoNet
 
         private sealed class AiExcelSelectionContext
         {
+            private Dictionary<string, AiExcelCell> cellByAddress;
+            private Dictionary<int, string> quantityNameByRow;
             public string WorkbookPath;
             public string WorksheetName;
             public readonly List<AiExcelCell> Cells = new List<AiExcelCell>();
+
+            public Dictionary<string, AiExcelCell> CellByAddress
+            {
+                get
+                {
+                    if (cellByAddress == null)
+                    {
+                        cellByAddress = Cells
+                            .GroupBy(cell => cell.Address, StringComparer.OrdinalIgnoreCase)
+                            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+                    }
+
+                    return cellByAddress;
+                }
+            }
 
             public HashSet<string> AddressSet
             {
                 get
                 {
-                    return new HashSet<string>(Cells.Select(c => c.Address), StringComparer.OrdinalIgnoreCase);
+                    return new HashSet<string>(CellByAddress.Keys, StringComparer.OrdinalIgnoreCase);
                 }
+            }
+
+            public string GetQuantityNameForRow(int row)
+            {
+                if (quantityNameByRow == null)
+                {
+                    quantityNameByRow = new Dictionary<int, string>();
+                    foreach (IGrouping<int, AiExcelCell> group in Cells.Where(c => !c.IsNumber).GroupBy(c => c.Row))
+                    {
+                        quantityNameByRow[group.Key] = String.Join(" ", group
+                            .OrderBy(c => c.Column)
+                            .Select(c => c.Text)
+                            .Where(text => !String.IsNullOrWhiteSpace(text))
+                            .Take(6)
+                            .ToArray()).Trim();
+                    }
+                }
+
+                string value;
+                return quantityNameByRow.TryGetValue(row, out value) ? value : "";
             }
         }
 
@@ -4443,6 +4546,7 @@ namespace RecoNet
             public string Expression;
             public string CellAddress;
             public string DisplayValue;
+            public string ExcelQuantityText;
             public string QuantityName;
             public string MatchStatus;
             public string CurrentQuantityText;
@@ -5730,21 +5834,7 @@ namespace RecoNet
                         return;
                     }
 
-                    DataGridView grid = GetField<DataGridView>(mainForm, "dataGridViewDE");
-                    List<AiQuotaMatchRow> quotas = BuildAiQuotaRows(mainForm, conn, GetSelectedQuotaRows(grid));
-                    if (quotas.Count == 0)
-                    {
-                        ShowPersistentStatus("\u8bf7\u5148\u5728\u5b9a\u989d\u8f93\u5165\u8868\u4e2d\u9009\u62e9\u8981\u5339\u914d\u7684\u5b9a\u989d\u3002");
-                        return;
-                    }
-
-                    ExcelLinkStore store = LoadStore(conn);
-                    HashSet<long> alreadyBoundSequences = new HashSet<long>(
-                        (store.Links ?? new List<ExcelQuotaLink>())
-                            .Where(link => link != null && !String.IsNullOrWhiteSpace(link.Expression))
-                            .Select(link => link.QuotaSequence));
-
-                    AutoMatchDialog modelessDialog = new AutoMatchDialog(quotas, alreadyBoundSequences);
+                    AutoMatchDialog modelessDialog = new AutoMatchDialog(mainForm, conn);
                     modelessDialog.Accepted += delegate(List<AiMatchPreviewItem> accepted)
                     {
                         SaveAutoMatchPreviewAccepted(conn, accepted);
@@ -5753,7 +5843,17 @@ namespace RecoNet
                     {
                         ShowPersistentStatus("\u5df2\u53d6\u6d88\u81ea\u52a8\u5339\u914d\u7ed1\u5b9a\u3002");
                     };
-                    modelessDialog.Show(this);
+                    modelessDialog.FormClosed += delegate
+                    {
+                        if (!IsDisposed)
+                        {
+                            Show();
+                            Activate();
+                            RefreshCurrentContext();
+                        }
+                    };
+                    modelessDialog.Show(mainForm);
+                    Hide();
                     return;
                 }
                 catch (Exception ex)
