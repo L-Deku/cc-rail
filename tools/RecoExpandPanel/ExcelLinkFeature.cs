@@ -510,6 +510,14 @@ namespace RecoNet
         private static bool TryBuildExcelLinkUnitScaleSuffix(string excelUnitText, string quotaUnitText, out string suffix)
         {
             suffix = "";
+            // 两侧单位文本一致（如 亩=亩）时按 1:1 绑定，不要求进公制/计数单位白名单。
+            string normalizedExcelUnit = NormalizeExcelLinkUnit(excelUnitText);
+            if (!String.IsNullOrEmpty(normalizedExcelUnit) &&
+                String.Equals(normalizedExcelUnit, NormalizeExcelLinkUnit(quotaUnitText), StringComparison.Ordinal))
+            {
+                return true;
+            }
+
             ExcelLinkUnitScale excelUnit = ParseExcelLinkUnitScale(excelUnitText);
             ExcelLinkUnitScale quotaUnit = ParseExcelLinkUnitScale(quotaUnitText);
             if (String.IsNullOrEmpty(excelUnit.BaseUnit) ||
@@ -988,7 +996,7 @@ namespace RecoNet
             {
                 "\u5904", "\u5ea7", "\u7ec4", "\u6839", "\u9879", "\u53f0", "\u5b54", "\u5957",
                 "\u4e2a", "\u5757", "\u7247", "\u6bb5", "\u773c", "\u53e3", "\u69c0", "\u6a18", "\u95f4",
-                "\u68f5", "\u682a"
+                "\u68f5", "\u682a", "\u4ea9", "\u516c\u9877"
             };
         }
 
@@ -1501,13 +1509,6 @@ namespace RecoNet
                 string currentQuantity = GetRowValue(row, "工程数量输入", "工程数量");
                 bool bindable = IsAutoMatchQuotaCode(link.QuotaCode);
 
-                decimal currentQuantityValue;
-                string currentQuantityError;
-                if (bindable && TryEvaluateDecimal(currentQuantity, out currentQuantityValue, out currentQuantityError) && currentQuantityValue == 0m)
-                {
-                    continue;
-                }
-
                 result.Add(new AiQuotaMatchRow
                 {
                     Link = link,
@@ -1536,6 +1537,15 @@ namespace RecoNet
             string text = ExcelValueToText(rawValue);
             if (String.IsNullOrWhiteSpace(text))
             {
+                // 空值单元格也进快照（Text 置空），供数量为0的定额手动绑定后等待 Excel 回填同步。
+                context.Cells.Add(new AiExcelCell
+                {
+                    Address = ColumnNumberToName(column) + row.ToString(CultureInfo.InvariantCulture),
+                    Text = "",
+                    Row = row,
+                    Column = column,
+                    IsNumber = false
+                });
                 return;
             }
 
@@ -1668,40 +1678,6 @@ namespace RecoNet
                     MatchStatus = quota.Bindable ? "\u672a\u5339\u914d" : "\u4e0d\u53c2\u4e0e\u7ed1\u5b9a"
                 });
             }
-        }
-
-        private static bool TryBuildLocalQuantityExpression(string quotaText, decimal quotaQuantity, AiExcelCell cell, out string expression, out decimal score)
-        {
-            expression = null;
-            score = Decimal.MaxValue;
-
-            decimal cellQuantity;
-            string error;
-            if (cell == null || !TryEvaluateDecimal(cell.Text, out cellQuantity, out error))
-            {
-                return false;
-            }
-
-            decimal directScore = RelativeDifference(quotaQuantity, cellQuantity);
-            if (directScore <= 0.03m)
-            {
-                expression = cell.Address;
-                score = directScore;
-                return true;
-            }
-
-            string op;
-            decimal factor;
-            decimal leftValue;
-            if (TryParseSimpleScaleExpression(quotaText, out leftValue, out op, out factor) &&
-                RelativeDifference(leftValue, cellQuantity) <= 0.03m)
-            {
-                expression = cell.Address + op + factor.ToString(CultureInfo.InvariantCulture);
-                score = RelativeDifference(leftValue, cellQuantity);
-                return true;
-            }
-
-            return false;
         }
 
         private static bool TryParseSimpleScaleExpression(string text, out decimal leftValue, out string op, out decimal factor)
@@ -2218,10 +2194,30 @@ namespace RecoNet
 
         private static object GetActiveSpreadsheetApplication()
         {
-            if (CachedSpreadsheetApplication != null &&
-                (DateTime.UtcNow - CachedSpreadsheetApplicationUtc).TotalMilliseconds <= SpreadsheetApplicationCacheMs)
+            if (CachedSpreadsheetApplication != null)
             {
-                return CachedSpreadsheetApplication;
+                if ((DateTime.UtcNow - CachedSpreadsheetApplicationUtc).TotalMilliseconds <= SpreadsheetApplicationCacheMs)
+                {
+                    return CachedSpreadsheetApplication;
+                }
+
+                // 缓存过期先轻量探测旧对象，仍可用就续期；
+                // 避免每 5 秒 EnumWindows 全量重连（WPS 走不通 ProgID，每次重连还要先抛几个异常），轮询时会卡顿。
+                try
+                {
+                    dynamic cached = CachedSpreadsheetApplication;
+                    string probe = Convert.ToString(cached.Name, CultureInfo.InvariantCulture);
+                    if (!String.IsNullOrEmpty(probe))
+                    {
+                        CachedSpreadsheetApplicationUtc = DateTime.UtcNow;
+                        return CachedSpreadsheetApplication;
+                    }
+                }
+                catch
+                {
+                }
+
+                ClearCachedSpreadsheetApplication(CachedSpreadsheetApplication);
             }
 
             List<string> diagnostics = new List<string>();
@@ -2742,8 +2738,10 @@ namespace RecoNet
                     valueText = FormatExcelInputNumber(ExcelValueToText(rawValue));
                     if (String.IsNullOrWhiteSpace(valueText))
                     {
-                        error = "Excel \u5355\u5143\u683c\u4e3a\u7a7a";
-                        return ExcelSyncReadResult.Failed;
+                        // \u7a7a\u5355\u5143\u683c\u6309 0 \u540c\u6b65\uff1aExcel \u91cc\u5220\u6389\u6570\u503c\u540e\uff0c\u540c\u6b65\u5e94\u628a\u8f6f\u4ef6\u6570\u91cf\u6e05\u96f6\u800c\u4e0d\u662f\u62a5\u9519\u8df3\u8fc7\u3002
+                        valueText = "0";
+                        quantity = 0m;
+                        return ExcelSyncReadResult.Success;
                     }
 
                     if (!TryEvaluateDecimal(valueText, out quantity, out error))
@@ -3057,7 +3055,7 @@ namespace RecoNet
             string expression = String.IsNullOrWhiteSpace(link.Expression) ? link.CellAddress : link.Expression;
             bool evaluated = context == null
                 ? TryEvaluateWorkbookExpression(link.ExcelPath, link.WorksheetName, expression, out valueText, out quantity, out error)
-                : TryEvaluateWorkbookExpression(context, link.ExcelPath, link.WorksheetName, expression, out valueText, out quantity, out error);
+                : TryEvaluateWorkbookExpression(context, link.ExcelPath, link.WorksheetName, expression, out valueText, out quantity, out error, true);
             if (!evaluated)
             {
                 return false;
@@ -3065,8 +3063,9 @@ namespace RecoNet
 
             if (String.IsNullOrWhiteSpace(valueText))
             {
-                error = "Excel \u5355\u5143\u683c\u4e3a\u7a7a";
-                return false;
+                // \u7a7a\u5355\u5143\u683c\u6309 0 \u540c\u6b65\uff1aExcel \u91cc\u5220\u6389\u6570\u503c\u540e\u540c\u6b65\u5e94\u628a\u8f6f\u4ef6\u6570\u91cf\u6e05\u96f6\u3002
+                valueText = "0";
+                quantity = 0m;
             }
 
             return true;
@@ -3260,12 +3259,16 @@ namespace RecoNet
                         return null;
                     }
 
-                    decimal parsed;
-                    string parseError;
-                    if (!TryEvaluateDecimal(cellValue, out parsed, out parseError))
+                    // 空单元格按 0 参与计算：Excel 里删掉数值后同步应清零，而不是报“无法计算”。
+                    decimal parsed = 0m;
+                    if (!String.IsNullOrWhiteSpace(cellValue))
                     {
-                        error = token + " 单元格值无法计算：" + parseError;
-                        return null;
+                        string parseError;
+                        if (!TryEvaluateDecimal(cellValue, out parsed, out parseError))
+                        {
+                            error = token + " 单元格值无法计算：" + parseError;
+                            return null;
+                        }
                     }
 
                     builder.Append(FormatExcelInputNumber(parsed));
@@ -4202,6 +4205,20 @@ namespace RecoNet
                         continue;
                     }
 
+                    // 自动同步只负责绑定后的首次同步；此后 Excel 数值变化必须在联动面板手动点“同步”，
+                    // 防止 Excel 误触改动未经确认直接写进软件。
+                    if (!manual && !IsExcelLinkFirstSyncPending(link))
+                    {
+                        if (!String.Equals(valueText ?? "", link.LastSyncValue ?? "", StringComparison.Ordinal))
+                        {
+                            link.LastStatus = "Excel已变化，待手动同步";
+                            link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+                            summary.Skipped++;
+                        }
+
+                        continue;
+                    }
+
                     PendingSync item = new PendingSync();
                     item.Link = link;
                     item.ValueText = valueText;
@@ -4217,7 +4234,10 @@ namespace RecoNet
             if (pending.Count == 0)
             {
                 SaveStore(conn, store);
-                summary.Message = "没有可同步的有效绑定。";
+                RefreshExcelLinkPanel(mainForm);
+                summary.Message = summary.Skipped > 0
+                    ? "检测到 Excel 变化 " + summary.Skipped.ToString(CultureInfo.InvariantCulture) + " 条，请在联动面板确认后手动同步。"
+                    : "没有可同步的有效绑定。";
                 return summary;
             }
 
@@ -4297,6 +4317,12 @@ namespace RecoNet
                 + ", totalMs=" + totalTimer.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture));
             summary.Message = "已同步 " + summary.Changed.ToString(CultureInfo.InvariantCulture) + " 条，跳过 " + summary.Skipped.ToString(CultureInfo.InvariantCulture) + " 条。";
             return summary;
+        }
+
+        // 绑定后还没做过首次同步的链接（各绑定入口都会置"…等待同步"状态）。
+        private static bool IsExcelLinkFirstSyncPending(ExcelQuotaLink link)
+        {
+            return link != null && (link.LastStatus ?? "").IndexOf("等待同步", StringComparison.Ordinal) >= 0;
         }
 
         // 绑定的"数量表名"：优先用户设的 TableName，否则用 Excel 文件名（去扩展名）兜底。
@@ -4546,18 +4572,32 @@ namespace RecoNet
 
             public string GetUnitNearCell(AiExcelCell target)
             {
+                return GetUnitNearCell(target, null);
+            }
+
+            public string GetUnitNearCell(AiExcelCell target, string quotaUnit)
+            {
                 if (target == null)
                 {
                     return "";
                 }
 
+                string normalizedQuotaUnit = NormalizeExcelLinkUnit(quotaUnit);
                 int checkedCount = 0;
                 foreach (AiExcelCell cell in Cells
                     .Where(c => c.Row == target.Row && c.Column < target.Column)
                     .OrderByDescending(c => c.Column))
                 {
+                    if (String.IsNullOrWhiteSpace(cell.Text))
+                    {
+                        continue;
+                    }
+
                     checkedCount++;
-                    if (LooksLikeExcelLinkUnit(cell.Text))
+                    // 白名单认不出的单位（如自定义单位），只要与定额单位同名也算识别成功。
+                    if (LooksLikeExcelLinkUnit(cell.Text) ||
+                        (!String.IsNullOrEmpty(normalizedQuotaUnit) &&
+                         String.Equals(NormalizeExcelLinkUnit(cell.Text), normalizedQuotaUnit, StringComparison.Ordinal)))
                     {
                         return (cell.Text ?? "").Trim();
                     }

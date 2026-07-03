@@ -109,8 +109,19 @@ namespace RecoNet
             return "";
         }
 
+        private static List<string> templateFillDirsCache;
+        private static DateTime templateFillDirsCacheUtc = DateTime.MinValue;
+        private const int TemplateFillDirsCacheMs = 300000;
+
         private static List<string> TemplateFillDirs()
         {
+            // 递归扫描 RecoQuotaData 目录较慢（尤其网络盘），结果缓存约 5 分钟。
+            if (templateFillDirsCache != null &&
+                (DateTime.UtcNow - templateFillDirsCacheUtc).TotalMilliseconds <= TemplateFillDirsCacheMs)
+            {
+                return templateFillDirsCache;
+            }
+
             List<string> dirs = new List<string>();
             AddTemplateFillDir(dirs, TemplateFillDir(), true);
             AddTemplateFillDir(dirs, Path.Combine(FindRecoQuotaDataDir(), "fill-templates"), false);
@@ -142,6 +153,8 @@ namespace RecoNet
                 }
             }
 
+            templateFillDirsCache = dirs;
+            templateFillDirsCacheUtc = DateTime.UtcNow;
             return dirs;
         }
 
