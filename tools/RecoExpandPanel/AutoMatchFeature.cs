@@ -3,10 +3,13 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Data.SqlClient;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
+using NPOI.SS.UserModel;
+using NPOI.SS.Util;
 
 namespace RecoNet
 {
@@ -1187,6 +1190,7 @@ namespace RecoNet
                 }
 
                 int readColCount = readLastColumn - firstColumn + 1;
+                LoadAutoMatchMergedRanges(context, firstRow, firstColumn, rowCount, readColCount);
                 bool ok;
                 if (rowCount * readColCount <= AutoMatchCellLimit)
                 {
@@ -1228,6 +1232,74 @@ namespace RecoNet
             {
                 ClearCachedSpreadsheetApplication(excel);
                 error = BuildExcelConnectError("\u8bfb\u53d6 Excel/WPS \u5de5\u4f5c\u8868\u5931\u8d25\uff1a" + ex.Message);
+                return false;
+            }
+        }
+
+        private static void LoadAutoMatchMergedRanges(AiExcelSelectionContext context, int firstRow, int firstColumn, int rowCount, int colCount)
+        {
+            if (context == null || String.IsNullOrWhiteSpace(context.WorkbookPath) || !File.Exists(context.WorkbookPath))
+            {
+                return;
+            }
+
+            string error;
+            if (!TryLoadAutoMatchMergedRangesByNpoi(context, firstRow, firstColumn, rowCount, colCount, out error))
+            {
+                Log("Auto match merged region snapshot failed: " + error);
+            }
+        }
+
+        private static bool TryLoadAutoMatchMergedRangesByNpoi(AiExcelSelectionContext context, int firstRow, int firstColumn, int rowCount, int colCount, out string error)
+        {
+            error = null;
+            try
+            {
+                using (Stream stream = OpenWorkbookStreamShared(context.WorkbookPath))
+                {
+                    IWorkbook workbook = WorkbookFactory.Create(stream);
+                    ISheet sheet = workbook.GetSheet(context.WorksheetName);
+                    if (sheet == null)
+                    {
+                        error = "\u627e\u4e0d\u5230\u5de5\u4f5c\u8868: " + context.WorksheetName;
+                        return false;
+                    }
+
+                    int lastRow = firstRow + rowCount - 1;
+                    int lastColumn = firstColumn + colCount - 1;
+                    for (int i = 0; i < sheet.NumMergedRegions; i++)
+                    {
+                        CellRangeAddress region = sheet.GetMergedRegion(i);
+                        if (region == null)
+                        {
+                            continue;
+                        }
+
+                        int regionFirstRow = region.FirstRow + 1;
+                        int regionLastRow = region.LastRow + 1;
+                        int regionFirstColumn = region.FirstColumn + 1;
+                        int regionLastColumn = region.LastColumn + 1;
+                        if (regionLastRow < firstRow || regionFirstRow > lastRow ||
+                            regionLastColumn < firstColumn || regionFirstColumn > lastColumn)
+                        {
+                            continue;
+                        }
+
+                        context.AddMergedRange(
+                            Math.Max(regionFirstRow, firstRow),
+                            Math.Min(regionLastRow, lastRow),
+                            Math.Max(regionFirstColumn, firstColumn),
+                            Math.Min(regionLastColumn, lastColumn),
+                            regionFirstRow,
+                            regionFirstColumn);
+                    }
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
                 return false;
             }
         }
