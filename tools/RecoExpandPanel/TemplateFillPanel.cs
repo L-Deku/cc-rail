@@ -246,7 +246,7 @@ namespace RecoNet
                 {
                     itemTree.Nodes.Clear();
                     currentTreeScope = "";
-                    LoadChapterNames();
+                    chapterNames = LoadChapterNameMap(mainForm);
 
                     TreeNode root = new TreeNode("全部条目");
                     root.Tag = "";
@@ -260,12 +260,12 @@ namespace RecoNet
                         .OrderBy(no => no, StringComparer.OrdinalIgnoreCase))
                     {
                         TreeNode parent = root;
-                        foreach (string code in BuildChapterChain(itemNo))
+                        foreach (string code in BuildChapterChain(chapterNames, itemNo))
                         {
                             TreeNode node;
                             if (!nodesByCode.TryGetValue(code, out node))
                             {
-                                node = new TreeNode(GetChapterDisplayName(code));
+                                node = new TreeNode(ChapterTreeDisplayName(chapterNames, code));
                                 node.Tag = code;
                                 node.ToolTipText = code;
                                 parent.Nodes.Add(node);
@@ -284,142 +284,6 @@ namespace RecoNet
                     itemTree.EndUpdate();
                     rebuildingTree = false;
                 }
-            }
-
-            private void LoadChapterNames()
-            {
-                chapterNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                try
-                {
-                    using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
-                    {
-                        EnsureOpen(conn);
-                        using (SqlCommand cmd = conn.CreateCommand())
-                        {
-                            cmd.CommandText = "select 条目编号, 工程或费用项目名称 from 章节表";
-                            using (SqlDataReader reader = cmd.ExecuteReader())
-                            {
-                                while (reader.Read())
-                                {
-                                    if (reader.IsDBNull(0))
-                                    {
-                                        continue;
-                                    }
-
-                                    string code = Convert.ToString(reader.GetValue(0)).Trim();
-                                    if (code.Length == 0 || chapterNames.ContainsKey(code))
-                                    {
-                                        continue;
-                                    }
-
-                                    chapterNames[code] = reader.IsDBNull(1) ? "" : Convert.ToString(reader.GetValue(1)).Trim();
-                                }
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log("Template fill load chapter names failed: " + ex.Message);
-                }
-            }
-
-            // 条目编号的祖先链：章节表里存在、是 itemNo 前缀、且编号以两位数字开头的编号，按长度升序。
-            private List<string> BuildChapterChain(string itemNo)
-            {
-                List<string> chain = chapterNames.Keys
-                    .Where(code => IsChapterTreeCode(code) && IsItemNoUnderChapter(itemNo, code))
-                    .OrderBy(code => code.Length)
-                    .ThenBy(code => code, StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-                if (!chain.Any(code => String.Equals(code, itemNo, StringComparison.OrdinalIgnoreCase)))
-                {
-                    chain.Add(itemNo);
-                }
-
-                return chain;
-            }
-
-            private static bool IsChapterTreeCode(string code)
-            {
-                return !String.IsNullOrEmpty(code) && code.Length >= 2 && Char.IsDigit(code[0]) && Char.IsDigit(code[1]);
-            }
-
-            // itemNo 是否属于编号 code 的条目（本身或下级）。
-            // 下级判定：带横杠段（0101 -> 0101-04），或纯数字编号续位（01 -> 0101）。
-            private static bool IsItemNoUnderChapter(string itemNo, string code)
-            {
-                itemNo = (itemNo ?? "").Trim();
-                code = (code ?? "").Trim();
-                if (itemNo.Length == 0 || code.Length == 0)
-                {
-                    return false;
-                }
-
-                if (String.Equals(itemNo, code, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-
-                if (!itemNo.StartsWith(code, StringComparison.OrdinalIgnoreCase) || itemNo.Length <= code.Length)
-                {
-                    return false;
-                }
-
-                char next = itemNo[code.Length];
-                if (next == '-')
-                {
-                    return true;
-                }
-
-                return Char.IsDigit(next) && code.All(Char.IsDigit);
-            }
-
-            private string GetChapterDisplayName(string code)
-            {
-                string name;
-                if (!chapterNames.TryGetValue(code, out name) || String.IsNullOrEmpty(name))
-                {
-                    return code;
-                }
-
-                // 与软件左侧章节树一致：两位纯数字章（01）显示"一、"，四位及以上（0101）显示"01."；
-                // 带横杠的下级条目名称自带"一、/(一)/1."等序号，不再重复。
-                if (code.All(Char.IsDigit))
-                {
-                    if (code.Length == 2)
-                    {
-                        int value;
-                        if (Int32.TryParse(code, out value))
-                        {
-                            return ToChineseOrdinal(value) + "、" + name;
-                        }
-                    }
-                    else if (code.Length >= 4)
-                    {
-                        return code.Substring(code.Length - 2) + "." + name;
-                    }
-                }
-
-                return name;
-            }
-
-            private static string ToChineseOrdinal(int value)
-            {
-                string[] digits = { "零", "一", "二", "三", "四", "五", "六", "七", "八", "九" };
-                if (value <= 0 || value > 99)
-                {
-                    return value.ToString();
-                }
-
-                if (value < 10)
-                {
-                    return digits[value];
-                }
-
-                int tens = value / 10;
-                int ones = value % 10;
-                return (tens == 1 ? "" : digits[tens]) + "十" + (ones == 0 ? "" : digits[ones]);
             }
 
             private void OnTreeScopeChanged()
@@ -463,15 +327,6 @@ namespace RecoNet
                 finally
                 {
                     updatingTreeChecks = false;
-                }
-            }
-
-            private static void SetTreeChildrenChecked(TreeNode node, bool value)
-            {
-                foreach (TreeNode child in node.Nodes)
-                {
-                    child.Checked = value;
-                    SetTreeChildrenChecked(child, value);
                 }
             }
 

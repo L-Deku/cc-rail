@@ -8,8 +8,6 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
-using NPOI.SS.UserModel;
-using NPOI.SS.Util;
 
 namespace RecoNet
 {
@@ -163,6 +161,62 @@ namespace RecoNet
             }
 
             return terms.Count > 0;
+        }
+
+        // 支持“(内部和式)*系数”/“(内部和式)/除数”形式（如 (49521.626+494012.33+13500)*1.04）：
+        // 内部按普通项解析参与匹配，外层系数原样附加到生成的表达式上。outerScale 为空表示普通表达式。
+        private static bool TryParseQuantityExpressionTermsWithScale(string expression, out List<QuantityExpressionTerm> terms, out string outerScale)
+        {
+            outerScale = "";
+            if (TryParseQuantityExpressionTerms(expression, out terms))
+            {
+                return true;
+            }
+
+            string normalized = NormalizeAutoMatchExpression(expression);
+            if (String.IsNullOrEmpty(normalized) || normalized[0] != '(')
+            {
+                return false;
+            }
+
+            int depth = 0;
+            int close = -1;
+            for (int i = 0; i < normalized.Length; i++)
+            {
+                if (normalized[i] == '(')
+                {
+                    depth++;
+                }
+                else if (normalized[i] == ')')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        close = i;
+                        break;
+                    }
+                }
+            }
+
+            if (close <= 1)
+            {
+                return false;
+            }
+
+            string inner = normalized.Substring(1, close - 1);
+            string tail = normalized.Substring(close + 1);
+            if (tail.Length == 0 || !Regex.IsMatch(tail, @"^([*/]\d+(?:\.\d+)?)+$"))
+            {
+                return false;
+            }
+
+            if (!TryParseQuantityExpressionTerms(inner, out terms))
+            {
+                return false;
+            }
+
+            outerScale = tail;
+            return true;
         }
 
         private static bool TryBuildQuantityExpressionTerm(bool negative, string token, out QuantityExpressionTerm term)
@@ -481,6 +535,7 @@ namespace RecoNet
             item.QuantityName = candidate == null ? "" : candidate.QuantityName;
             item.CurrentQuantityText = quota.CurrentQuantityText;
             item.Bindable = quota.Bindable;
+            item.ItemNo = quota.ItemNo ?? "";
             item.MatchStatus = status;
             item.MatchOptions = candidate == null ? new List<AutoMatchCandidateOption>() : (candidate.Options ?? new List<AutoMatchCandidateOption>());
             return item;
@@ -554,6 +609,10 @@ namespace RecoNet
                     item.CurrentQuantityText = quota.CurrentQuantityText;
                 }
                 item.Bindable = quota.Bindable;
+                if (String.IsNullOrWhiteSpace(item.ItemNo))
+                {
+                    item.ItemNo = quota.ItemNo ?? "";
+                }
 
                 if (String.IsNullOrWhiteSpace(item.MatchStatus))
                 {
@@ -608,7 +667,8 @@ namespace RecoNet
             candidate = null;
             List<AutoMatchExpressionCandidate> matches = new List<AutoMatchExpressionCandidate>();
             List<QuantityExpressionTerm> terms;
-            if (!TryParseQuantityExpressionTerms(quota.CurrentQuantityText, out terms))
+            string outerScale;
+            if (!TryParseQuantityExpressionTermsWithScale(quota.CurrentQuantityText, out terms, out outerScale))
             {
                 return false;
             }
@@ -636,6 +696,11 @@ namespace RecoNet
                 }
 
                 string expression = BuildAutoMatchExpression(terms, cells);
+                if (outerScale.Length > 0)
+                {
+                    expression = "(" + expression + ")" + outerScale;
+                }
+
                 string displayValue;
                 decimal quantity;
                 string error;
@@ -1243,64 +1308,23 @@ namespace RecoNet
                 return;
             }
 
-            string error;
-            if (!TryLoadAutoMatchMergedRangesByNpoi(context, firstRow, firstColumn, rowCount, colCount, out error))
+            int lastRow = firstRow + rowCount - 1;
+            int lastColumn = firstColumn + colCount - 1;
+            foreach (ExcelMergedRegion region in ReadExcelMergedRegions(context.WorkbookPath, context.WorksheetName))
             {
-                Log("Auto match merged region snapshot failed: " + error);
-            }
-        }
-
-        private static bool TryLoadAutoMatchMergedRangesByNpoi(AiExcelSelectionContext context, int firstRow, int firstColumn, int rowCount, int colCount, out string error)
-        {
-            error = null;
-            try
-            {
-                using (Stream stream = OpenWorkbookStreamShared(context.WorkbookPath))
+                if (region.LastRow < firstRow || region.FirstRow > lastRow ||
+                    region.LastColumn < firstColumn || region.FirstColumn > lastColumn)
                 {
-                    IWorkbook workbook = WorkbookFactory.Create(stream);
-                    ISheet sheet = workbook.GetSheet(context.WorksheetName);
-                    if (sheet == null)
-                    {
-                        error = "\u627e\u4e0d\u5230\u5de5\u4f5c\u8868: " + context.WorksheetName;
-                        return false;
-                    }
-
-                    int lastRow = firstRow + rowCount - 1;
-                    int lastColumn = firstColumn + colCount - 1;
-                    for (int i = 0; i < sheet.NumMergedRegions; i++)
-                    {
-                        CellRangeAddress region = sheet.GetMergedRegion(i);
-                        if (region == null)
-                        {
-                            continue;
-                        }
-
-                        int regionFirstRow = region.FirstRow + 1;
-                        int regionLastRow = region.LastRow + 1;
-                        int regionFirstColumn = region.FirstColumn + 1;
-                        int regionLastColumn = region.LastColumn + 1;
-                        if (regionLastRow < firstRow || regionFirstRow > lastRow ||
-                            regionLastColumn < firstColumn || regionFirstColumn > lastColumn)
-                        {
-                            continue;
-                        }
-
-                        context.AddMergedRange(
-                            Math.Max(regionFirstRow, firstRow),
-                            Math.Min(regionLastRow, lastRow),
-                            Math.Max(regionFirstColumn, firstColumn),
-                            Math.Min(regionLastColumn, lastColumn),
-                            regionFirstRow,
-                            regionFirstColumn);
-                    }
+                    continue;
                 }
 
-                return true;
-            }
-            catch (Exception ex)
-            {
-                error = ex.Message;
-                return false;
+                context.AddMergedRange(
+                    Math.Max(region.FirstRow, firstRow),
+                    Math.Min(region.LastRow, lastRow),
+                    Math.Max(region.FirstColumn, firstColumn),
+                    Math.Min(region.LastColumn, lastColumn),
+                    region.FirstRow,
+                    region.FirstColumn);
             }
         }
 
@@ -1448,6 +1472,12 @@ namespace RecoNet
             private readonly CheckBox manualMatchButton;
             private readonly Button startButton;
             private readonly System.Windows.Forms.Timer manualMatchTimer;
+            private readonly SplitContainer split;
+            private readonly TreeView itemTree;
+            private Dictionary<string, string> chapterNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            private string currentTreeScope = "";
+            private bool rebuildingTree;
+            private bool updatingTreeChecks;
             private AiExcelSelectionContext currentContext;
             private string currentContextKey;
             private string lastManualCellKey;
@@ -1468,8 +1498,8 @@ namespace RecoNet
                 conn = projectConnection;
                 Text = "\u81ea\u52a8\u5339\u914dExcel\u5de5\u7a0b\u91cf";
                 StartPosition = FormStartPosition.CenterParent;
-                Size = new System.Drawing.Size(980, 560);
-                MinimumSize = new System.Drawing.Size(860, 420);
+                Size = new System.Drawing.Size(1180, 560);
+                MinimumSize = new System.Drawing.Size(1000, 420);
                 MinimizeBox = false;
 
                 Panel top = new Panel();
@@ -1639,7 +1669,24 @@ namespace RecoNet
                 status.Height = 26;
                 status.Padding = new Padding(8, 2, 8, 2);
 
-                Controls.Add(grid);
+                // —— 左侧条目树：点节点过滤右侧预览，勾选节点整枝勾选/取消，可拖动分栏 ——
+                itemTree = new TreeView();
+                itemTree.Dock = DockStyle.Fill;
+                itemTree.CheckBoxes = true;
+                itemTree.HideSelection = false;
+                itemTree.AfterSelect += delegate { OnItemTreeScopeChanged(); };
+                itemTree.AfterCheck += delegate(object sender, TreeViewEventArgs e) { OnItemTreeChecked(e.Node); };
+
+                split = new SplitContainer();
+                split.Dock = DockStyle.Fill;
+                split.Orientation = Orientation.Vertical;
+                split.Panel1MinSize = 80;
+                split.Panel2MinSize = 400;
+                split.SplitterDistance = 220;
+                split.Panel1.Controls.Add(itemTree);
+                split.Panel2.Controls.Add(grid);
+
+                Controls.Add(split);
                 Controls.Add(buttons);
                 Controls.Add(status);
                 Controls.Add(top);
@@ -1800,6 +1847,7 @@ namespace RecoNet
                             }
 
                             items = matched ?? new List<AiMatchPreviewItem>();
+                            RebuildItemTree();
                             FillGrid();
                             int checkedCount = items.Count(item => item.Checked);
                             status.Text = "\u5339\u914d\u5b8c\u6210\uff1a\u5171 " + items.Count.ToString(CultureInfo.InvariantCulture) + " \u6761\uff0c\u9ed8\u8ba4\u52fe\u9009 " + checkedCount.ToString(CultureInfo.InvariantCulture) + " \u6761\u3002" + (reusedSnapshot ? "\u5df2\u590d\u7528Excel\u5feb\u7167\u3002" : "");
@@ -2153,8 +2201,14 @@ namespace RecoNet
             private void FillGrid()
             {
                 grid.Rows.Clear();
+                string scope = currentTreeScope ?? "";
                 foreach (AiMatchPreviewItem item in items)
                 {
+                    if (!String.IsNullOrEmpty(scope) && !IsItemNoUnderChapter(item.ItemNo ?? "", scope))
+                    {
+                        continue;
+                    }
+
                     int index = grid.Rows.Add(
                         item.Checked,
                         item.Link == null ? "" : item.Link.QuotaCode,
@@ -2547,6 +2601,7 @@ namespace RecoNet
                     items = quotas
                         .Select(quota => BuildAutoMatchPreviewItem(quota, currentContext, null, "\u672a\u5339\u914d"))
                         .ToList();
+                    RebuildItemTree();
                     FillGrid();
                 }
 
@@ -2785,18 +2840,144 @@ namespace RecoNet
 
             public List<AiMatchPreviewItem> GetAcceptedItems()
             {
+                // 从 items 收集而不是表格行：树过滤后未显示的已勾选行也要参与全部绑定。
+                grid.EndEdit();
+                FlushGridCheckedToItems();
                 List<AiMatchPreviewItem> accepted = new List<AiMatchPreviewItem>();
-                foreach (DataGridViewRow row in grid.Rows)
+                foreach (AiMatchPreviewItem item in items)
                 {
-                    bool isChecked = row.Cells["Checked"].Value is bool && (bool)row.Cells["Checked"].Value;
-                    AiMatchPreviewItem item = row.Tag as AiMatchPreviewItem;
-                    if (isChecked && item != null && item.Bindable && !String.IsNullOrWhiteSpace(item.Expression) && !String.IsNullOrWhiteSpace(item.CellAddress))
+                    if (item != null && item.Checked && item.Bindable && !String.IsNullOrWhiteSpace(item.Expression) && !String.IsNullOrWhiteSpace(item.CellAddress))
                     {
                         accepted.Add(item);
                     }
                 }
 
                 return accepted;
+            }
+
+            // 把当前可见表格行的勾选状态回写到 items（单个勾选不会经过 ApplyBatchCheck 同步）。
+            private void FlushGridCheckedToItems()
+            {
+                foreach (DataGridViewRow row in grid.Rows)
+                {
+                    AiMatchPreviewItem item = row.Tag as AiMatchPreviewItem;
+                    if (item == null)
+                    {
+                        continue;
+                    }
+
+                    object value = row.Cells["Checked"].Value;
+                    item.Checked = value is bool && (bool)value;
+                }
+            }
+
+            private void RebuildItemTree()
+            {
+                rebuildingTree = true;
+                itemTree.BeginUpdate();
+                try
+                {
+                    itemTree.Nodes.Clear();
+                    currentTreeScope = "";
+                    chapterNames = LoadChapterNameMap(mainForm);
+
+                    TreeNode root = new TreeNode("全部条目");
+                    root.Tag = "";
+                    itemTree.Nodes.Add(root);
+
+                    Dictionary<string, TreeNode> nodesByCode = new Dictionary<string, TreeNode>(StringComparer.OrdinalIgnoreCase);
+                    foreach (string itemNo in items
+                        .Select(it => (it.ItemNo ?? "").Trim())
+                        .Where(no => no.Length > 0)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(no => no, StringComparer.OrdinalIgnoreCase))
+                    {
+                        TreeNode parent = root;
+                        foreach (string code in BuildChapterChain(chapterNames, itemNo))
+                        {
+                            TreeNode node;
+                            if (!nodesByCode.TryGetValue(code, out node))
+                            {
+                                node = new TreeNode(ChapterTreeDisplayName(chapterNames, code));
+                                node.Tag = code;
+                                node.ToolTipText = code;
+                                parent.Nodes.Add(node);
+                                nodesByCode[code] = node;
+                            }
+
+                            parent = node;
+                        }
+                    }
+
+                    root.Expand();
+                    itemTree.SelectedNode = root;
+                }
+                finally
+                {
+                    itemTree.EndUpdate();
+                    rebuildingTree = false;
+                }
+            }
+
+            private void OnItemTreeScopeChanged()
+            {
+                if (rebuildingTree || matchingInProgress)
+                {
+                    return;
+                }
+
+                grid.EndEdit();
+                FlushGridCheckedToItems();
+                TreeNode node = itemTree.SelectedNode;
+                currentTreeScope = node == null ? "" : Convert.ToString(node.Tag);
+                FillGrid();
+            }
+
+            // 勾选树节点＝整枝勾选/取消该条目（含下级）下已有匹配表达式的定额。
+            private void OnItemTreeChecked(TreeNode node)
+            {
+                if (rebuildingTree || updatingTreeChecks || matchingInProgress || node == null)
+                {
+                    return;
+                }
+
+                updatingTreeChecks = true;
+                try
+                {
+                    bool value = node.Checked;
+                    SetTreeChildrenChecked(node, value);
+                    grid.EndEdit();
+                    FlushGridCheckedToItems();
+                    string scope = Convert.ToString(node.Tag);
+                    int applied = 0;
+                    foreach (AiMatchPreviewItem item in items)
+                    {
+                        if (item == null || !item.Bindable)
+                        {
+                            continue;
+                        }
+
+                        if (!String.IsNullOrEmpty(scope) && !IsItemNoUnderChapter(item.ItemNo ?? "", scope))
+                        {
+                            continue;
+                        }
+
+                        bool newValue = value && !String.IsNullOrWhiteSpace(item.Expression);
+                        if (item.Checked != newValue)
+                        {
+                            applied++;
+                        }
+
+                        item.Checked = newValue;
+                    }
+
+                    FillGrid();
+                    status.Text = "已按条目树批量" + (value ? "勾选" : "取消勾选") + " " + applied.ToString(CultureInfo.InvariantCulture) + " 行。";
+                }
+                finally
+                {
+                    updatingTreeChecks = false;
+                }
             }
         }
     }

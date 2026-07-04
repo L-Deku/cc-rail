@@ -424,6 +424,7 @@ namespace RecoNet
             List<PreparedFillPreviewItem> prepared = new List<PreparedFillPreviewItem>();
             List<ExcelQuotaLink> readLinks = new List<ExcelQuotaLink>();
             Dictionary<string, HashSet<int>> hiddenColumnCache = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache = new Dictionary<string, List<ExcelMergedRegion>>(StringComparer.OrdinalIgnoreCase);
             foreach (FillTemplateRow row in template.Rows)
             {
                 FillPreviewItem item = new FillPreviewItem
@@ -459,6 +460,7 @@ namespace RecoNet
                     readLinks.Add(new ExcelQuotaLink { ExcelPath = workbook, WorksheetName = sheet, CellAddress = first, Expression = expr });
 
                     HashSet<int> hiddenColumns = GetSavedHiddenColumns(workbook, sheet, hiddenColumnCache);
+                    List<ExcelMergedRegion> rowMergedRegions = GetSavedMergedRegionsCached(workbook, sheet, mergedRegionCache);
                     for (int col = 1; col < firstCell.Column; col++)
                     {
                         if (hiddenColumns.Contains(col))
@@ -469,11 +471,12 @@ namespace RecoNet
                         string address = ColumnNumberToName(col) + firstCell.Row.ToString(CultureInfo.InvariantCulture);
                         readLinks.Add(new ExcelQuotaLink { ExcelPath = workbook, WorksheetName = sheet, CellAddress = address, Expression = address });
 
-                        // 竖向合并单元格只有首行有值：把上方最多10行也加入批量读取，供名称向上回填。
-                        for (int up = 1; up <= RowNameFillUpMaxRows && firstCell.Row - up >= 1; up++)
+                        // 合并单元格只有锚点格有值：把所在区域的锚点也加入批量读取，供名称回填。
+                        ExcelMergedRegion region = FindExcelMergedRegionAt(rowMergedRegions, col, firstCell.Row);
+                        if (region != null)
                         {
-                            string upAddress = ColumnNumberToName(col) + (firstCell.Row - up).ToString(CultureInfo.InvariantCulture);
-                            readLinks.Add(new ExcelQuotaLink { ExcelPath = workbook, WorksheetName = sheet, CellAddress = upAddress, Expression = upAddress });
+                            string anchorAddress = ColumnNumberToName(region.FirstColumn) + region.FirstRow.ToString(CultureInfo.InvariantCulture);
+                            readLinks.Add(new ExcelQuotaLink { ExcelPath = workbook, WorksheetName = sheet, CellAddress = anchorAddress, Expression = anchorAddress });
                         }
                     }
                 }
@@ -497,20 +500,19 @@ namespace RecoNet
                 }
 
                 item.QuantityText = display;
-                item.TargetName = ReadRowNameAt(preparedItem.WorkbookPath, preparedItem.SheetName, preparedItem.Expression, hiddenColumnCache, readContext);
+                item.TargetName = ReadRowNameAt(preparedItem.WorkbookPath, preparedItem.SheetName, preparedItem.Expression, hiddenColumnCache, mergedRegionCache, readContext);
                 if (qty == 0m) { item.Status = "数量为0"; item.Selected = false; }
             }
 
             return items;
         }
 
-        private const int RowNameFillUpMaxRows = 10;
         private const int RowNameMaxLength = 10;
         private const int RowNameMaxFragments = 3;
 
         // 读某表达式首个单元格所在行的名称（该格列前的非数字文本拼接），仅供人工核对。
-        // 空格向上回填最近文字（竖向合并单元格只有首行有值）；就近优先，约30字/6段封顶。
-        private static string ReadRowNameAt(string workbook, string sheet, string expr, Dictionary<string, HashSet<int>> hiddenColumnCache, ExcelSyncReadContext readContext)
+        // 空格只从包含它的真实合并区域锚点回填；就近优先，10字/3段封顶，同一合并区域只拼一次。
+        private static string ReadRowNameAt(string workbook, string sheet, string expr, Dictionary<string, HashSet<int>> hiddenColumnCache, Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache, ExcelSyncReadContext readContext)
         {
             try
             {
@@ -518,7 +520,9 @@ namespace RecoNet
                 CellRef cr;
                 if (String.IsNullOrEmpty(first) || !TryParseCellAddress(first, out cr)) return "";
                 HashSet<int> hiddenColumns = GetSavedHiddenColumns(workbook, sheet, hiddenColumnCache);
+                List<ExcelMergedRegion> mergedRegions = GetSavedMergedRegionsCached(workbook, sheet, mergedRegionCache);
                 List<KeyValuePair<int, string>> fragments = new List<KeyValuePair<int, string>>();
+                HashSet<string> sourceKeys = new HashSet<string>(StringComparer.Ordinal);
                 for (int col = 1; col < cr.Column; col++)
                 {
                     if (hiddenColumns.Contains(col))
@@ -526,10 +530,17 @@ namespace RecoNet
                         continue;
                     }
 
-                    string text = ReadRowNameCellText(workbook, sheet, col, cr.Row, readContext);
-                    if (!String.IsNullOrWhiteSpace(text))
+                    string sourceKey;
+                    int fragmentColumn;
+                    string text = ReadRowNameCellText(workbook, sheet, col, cr.Row, readContext, mergedRegions, out sourceKey, out fragmentColumn);
+                    if (String.IsNullOrWhiteSpace(text))
                     {
-                        fragments.Add(new KeyValuePair<int, string>(col, text.Trim()));
+                        continue;
+                    }
+
+                    if (sourceKeys.Add(sourceKey))
+                    {
+                        fragments.Add(new KeyValuePair<int, string>(fragmentColumn, text.Trim()));
                     }
                 }
 
@@ -558,8 +569,12 @@ namespace RecoNet
             catch { return ""; }
         }
 
-        private static string ReadRowNameCellText(string workbook, string sheet, int col, int row, ExcelSyncReadContext readContext)
+        // 本格文字；空格时只从包含它的真实合并区域锚点回填，数字不算名称。
+        // fragmentColumn 统一取合并区域锚点列，保证名称取舍顺序稳定。
+        private static string ReadRowNameCellText(string workbook, string sheet, int col, int row, ExcelSyncReadContext readContext, List<ExcelMergedRegion> mergedRegions, out string sourceKey, out int fragmentColumn)
         {
+            sourceKey = col.ToString(CultureInfo.InvariantCulture) + "|" + row.ToString(CultureInfo.InvariantCulture);
+            fragmentColumn = col;
             if (readContext == null)
             {
                 return "";
@@ -568,28 +583,212 @@ namespace RecoNet
             string val;
             string readError;
             string addr = ColumnNumberToName(col) + row.ToString(CultureInfo.InvariantCulture);
+            ExcelMergedRegion region = FindExcelMergedRegionAt(mergedRegions, col, row);
             if (readContext.TryReadWorkbookCellValue(workbook, sheet, addr, out val, out readError) && !String.IsNullOrWhiteSpace(val))
             {
                 decimal parsed;
                 string parseError;
-                return TryEvaluateDecimal(val, out parsed, out parseError) ? "" : val;
-            }
-
-            // 空格向上回填：找最近的非空内容，是文字则用、是数字则不回填，最多回看10行。
-            for (int up = 1; up <= RowNameFillUpMaxRows && row - up >= 1; up++)
-            {
-                string upAddr = ColumnNumberToName(col) + (row - up).ToString(CultureInfo.InvariantCulture);
-                if (!readContext.TryReadWorkbookCellValue(workbook, sheet, upAddr, out val, out readError) || String.IsNullOrWhiteSpace(val))
+                if (TryEvaluateDecimal(val, out parsed, out parseError))
                 {
-                    continue;
+                    return "";
                 }
 
-                decimal parsed;
-                string parseError;
-                return TryEvaluateDecimal(val, out parsed, out parseError) ? "" : val;
+                if (region != null)
+                {
+                    sourceKey = BuildExcelMergedRegionKey(region);
+                    fragmentColumn = region.FirstColumn;
+                }
+
+                return val;
             }
 
-            return "";
+            if (region == null)
+            {
+                return "";
+            }
+
+            string anchorAddr = ColumnNumberToName(region.FirstColumn) + region.FirstRow.ToString(CultureInfo.InvariantCulture);
+            if (!readContext.TryReadWorkbookCellValue(workbook, sheet, anchorAddr, out val, out readError) || String.IsNullOrWhiteSpace(val))
+            {
+                return "";
+            }
+
+            decimal anchorParsed;
+            string anchorParseError;
+            if (TryEvaluateDecimal(val, out anchorParsed, out anchorParseError))
+            {
+                return "";
+            }
+
+            sourceKey = BuildExcelMergedRegionKey(region);
+            fragmentColumn = region.FirstColumn;
+            return val;
+        }
+
+        private static List<ExcelMergedRegion> GetSavedMergedRegionsCached(string workbook, string sheet, Dictionary<string, List<ExcelMergedRegion>> cache)
+        {
+            string key = (workbook ?? "") + "|" + (sheet ?? "");
+            List<ExcelMergedRegion> regions;
+            if (cache != null && cache.TryGetValue(key, out regions))
+            {
+                return regions;
+            }
+
+            regions = ReadExcelMergedRegions(workbook, sheet);
+            if (cache != null)
+            {
+                cache[key] = regions;
+            }
+
+            return regions;
+        }
+
+        // —— 条目树共用助手（模板铺量 / 自动匹配窗口）——
+        private static Dictionary<string, string> LoadChapterNameMap(Form mainForm)
+        {
+            Dictionary<string, string> names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
+                {
+                    EnsureOpen(conn);
+                    using (SqlCommand cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "select 条目编号, 工程或费用项目名称 from 章节表";
+                        using (SqlDataReader reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                if (reader.IsDBNull(0))
+                                {
+                                    continue;
+                                }
+
+                                string code = Convert.ToString(reader.GetValue(0)).Trim();
+                                if (code.Length == 0 || names.ContainsKey(code))
+                                {
+                                    continue;
+                                }
+
+                                names[code] = reader.IsDBNull(1) ? "" : Convert.ToString(reader.GetValue(1)).Trim();
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Load chapter names failed: " + ex.Message);
+            }
+
+            return names;
+        }
+
+        // 与软件左侧章节树一致：两位纯数字章（01）显示"一、"，四位及以上（0101）显示"01."；
+        // 带横杠的下级条目名称自带序号，不再重复。
+        private static string ChapterTreeDisplayName(Dictionary<string, string> chapterNames, string code)
+        {
+            string name;
+            if (chapterNames == null || !chapterNames.TryGetValue(code, out name) || String.IsNullOrEmpty(name))
+            {
+                return code;
+            }
+
+            if (code.All(Char.IsDigit))
+            {
+                if (code.Length == 2)
+                {
+                    int value;
+                    if (Int32.TryParse(code, out value))
+                    {
+                        return ToChineseOrdinal(value) + "、" + name;
+                    }
+                }
+                else if (code.Length >= 4)
+                {
+                    return code.Substring(code.Length - 2) + "." + name;
+                }
+            }
+
+            return name;
+        }
+
+        private static string ToChineseOrdinal(int value)
+        {
+            string[] digits = { "零", "一", "二", "三", "四", "五", "六", "七", "八", "九" };
+            if (value <= 0 || value > 99)
+            {
+                return value.ToString();
+            }
+
+            if (value < 10)
+            {
+                return digits[value];
+            }
+
+            int tens = value / 10;
+            int ones = value % 10;
+            return (tens == 1 ? "" : digits[tens]) + "十" + (ones == 0 ? "" : digits[ones]);
+        }
+
+        private static bool IsChapterTreeCode(string code)
+        {
+            return !String.IsNullOrEmpty(code) && code.Length >= 2 && Char.IsDigit(code[0]) && Char.IsDigit(code[1]);
+        }
+
+        // itemNo 是否属于编号 code 的条目（本身或下级）。
+        // 下级判定：带横杠段（0101 -> 0101-04），或纯数字编号续位（01 -> 0101）。
+        private static bool IsItemNoUnderChapter(string itemNo, string code)
+        {
+            itemNo = (itemNo ?? "").Trim();
+            code = (code ?? "").Trim();
+            if (itemNo.Length == 0 || code.Length == 0)
+            {
+                return false;
+            }
+
+            if (String.Equals(itemNo, code, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (!itemNo.StartsWith(code, StringComparison.OrdinalIgnoreCase) || itemNo.Length <= code.Length)
+            {
+                return false;
+            }
+
+            char next = itemNo[code.Length];
+            if (next == '-')
+            {
+                return true;
+            }
+
+            return Char.IsDigit(next) && code.All(Char.IsDigit);
+        }
+
+        // 条目编号的祖先链：章节表里存在、是 itemNo 前缀、且编号以两位数字开头的编号，按长度升序。
+        private static List<string> BuildChapterChain(Dictionary<string, string> chapterNames, string itemNo)
+        {
+            List<string> chain = (chapterNames == null ? new List<string>() : chapterNames.Keys
+                .Where(code => IsChapterTreeCode(code) && IsItemNoUnderChapter(itemNo, code))
+                .OrderBy(code => code.Length)
+                .ThenBy(code => code, StringComparer.OrdinalIgnoreCase)
+                .ToList());
+            if (!chain.Any(code => String.Equals(code, itemNo, StringComparison.OrdinalIgnoreCase)))
+            {
+                chain.Add(itemNo);
+            }
+
+            return chain;
+        }
+
+        private static void SetTreeChildrenChecked(TreeNode node, bool value)
+        {
+            foreach (TreeNode child in node.Nodes)
+            {
+                child.Checked = value;
+                SetTreeChildrenChecked(child, value);
+            }
         }
 
         private static HashSet<int> GetSavedHiddenColumns(string workbook, string sheet, Dictionary<string, HashSet<int>> cache)

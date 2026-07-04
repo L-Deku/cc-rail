@@ -1497,6 +1497,7 @@ namespace RecoNet
         private static List<AiQuotaMatchRow> BuildAiQuotaRows(Form mainForm, SqlConnection conn, List<DataGridViewRow> rows)
         {
             List<AiQuotaMatchRow> result = new List<AiQuotaMatchRow>();
+            Dictionary<string, string> itemNoCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (DataGridViewRow row in rows ?? new List<DataGridViewRow>())
             {
                 ExcelQuotaLink link;
@@ -1514,11 +1515,54 @@ namespace RecoNet
                     Link = link,
                     QuotaUnit = GetRowValue(row, "单位", "定额单位"),
                     CurrentQuantityText = currentQuantity,
-                    Bindable = bindable
+                    Bindable = bindable,
+                    ItemNo = ResolveChapterItemNo(conn, link.ChapterSeq, itemNoCache)
                 });
             }
 
             return FilterAutoMatchPushedRows(result);
+        }
+
+        private static string ResolveChapterItemNo(SqlConnection conn, string chapterSeq, Dictionary<string, string> cache)
+        {
+            chapterSeq = (chapterSeq ?? "").Trim();
+            if (String.IsNullOrEmpty(chapterSeq))
+            {
+                return "";
+            }
+
+            string cached;
+            if (cache != null && cache.TryGetValue(chapterSeq, out cached))
+            {
+                return cached;
+            }
+
+            string itemNo = "";
+            try
+            {
+                EnsureOpen(conn);
+                using (SqlCommand cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "select 条目编号 from 章节表 where 条目序号=@seq";
+                    cmd.Parameters.AddWithValue("@seq", chapterSeq);
+                    object value = cmd.ExecuteScalar();
+                    if (value != null && value != DBNull.Value)
+                    {
+                        itemNo = Convert.ToString(value, CultureInfo.InvariantCulture).Trim();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Resolve chapter item no failed: " + ex.Message);
+            }
+
+            if (cache != null)
+            {
+                cache[chapterSeq] = itemNo;
+            }
+
+            return itemNo;
         }
 
         private static bool IsAutoMatchQuotaCode(string quotaCode)
@@ -1675,6 +1719,7 @@ namespace RecoNet
                     QuantityName = "",
                     CurrentQuantityText = quota.CurrentQuantityText,
                     Bindable = quota.Bindable,
+                    ItemNo = quota.ItemNo ?? "",
                     MatchStatus = quota.Bindable ? "\u672a\u5339\u914d" : "\u4e0d\u53c2\u4e0e\u7ed1\u5b9a"
                 });
             }
@@ -3456,6 +3501,160 @@ namespace RecoNet
             }
         }
 
+        private sealed class ExcelMergedRegion
+        {
+            public int FirstRow;
+            public int LastRow;
+            public int FirstColumn;
+            public int LastColumn;
+        }
+
+        // 读取工作表的合并区域：优先流式读 sheet XML 的 mergeCells（几十毫秒级，不整簿加载），
+        // 非 zip 格式（.xls）回退 NPOI。返回 1 基行列。
+        private static List<ExcelMergedRegion> ReadExcelMergedRegions(string workbookPath, string sheetName)
+        {
+            List<ExcelMergedRegion> regions = ReadSavedMergedRegions(workbookPath, sheetName);
+            if (regions != null)
+            {
+                return regions;
+            }
+
+            try
+            {
+                using (Stream stream = OpenWorkbookStreamShared(workbookPath))
+                {
+                    IWorkbook workbook = WorkbookFactory.Create(stream);
+                    ISheet sheet = workbook.GetSheet(sheetName);
+                    List<ExcelMergedRegion> result = new List<ExcelMergedRegion>();
+                    if (sheet == null)
+                    {
+                        return result;
+                    }
+
+                    for (int i = 0; i < sheet.NumMergedRegions; i++)
+                    {
+                        NPOI.SS.Util.CellRangeAddress region = sheet.GetMergedRegion(i);
+                        if (region == null)
+                        {
+                            continue;
+                        }
+
+                        result.Add(new ExcelMergedRegion
+                        {
+                            FirstRow = region.FirstRow + 1,
+                            LastRow = region.LastRow + 1,
+                            FirstColumn = region.FirstColumn + 1,
+                            LastColumn = region.LastColumn + 1
+                        });
+                    }
+
+                    return result;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Read merged regions by NPOI failed: " + ex.Message);
+                return new List<ExcelMergedRegion>();
+            }
+        }
+
+        // 流式读取失败（如非 zip 的 .xls）返回 null，由调用方走 NPOI 兜底。
+        private static List<ExcelMergedRegion> ReadSavedMergedRegions(string workbookPath, string sheetName)
+        {
+            List<ExcelMergedRegion> result = new List<ExcelMergedRegion>();
+            try
+            {
+                using (ZipArchive archive = OpenZipArchiveShared(workbookPath))
+                {
+                    string sheetPath = ResolveSheetPath(archive, sheetName);
+                    if (String.IsNullOrEmpty(sheetPath))
+                    {
+                        return result;
+                    }
+
+                    ZipArchiveEntry sheetEntry = archive.GetEntry(sheetPath);
+                    if (sheetEntry == null)
+                    {
+                        return result;
+                    }
+
+                    using (Stream stream = sheetEntry.Open())
+                    using (XmlReader reader = XmlReader.Create(stream))
+                    {
+                        while (reader.Read())
+                        {
+                            if (reader.NodeType != XmlNodeType.Element || reader.LocalName != "mergeCell")
+                            {
+                                continue;
+                            }
+
+                            ExcelMergedRegion region;
+                            if (TryParseMergedRegionRef(reader.GetAttribute("ref"), out region))
+                            {
+                                result.Add(region);
+                            }
+                        }
+                    }
+                }
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                Log("Read saved merged regions failed: " + ex.Message);
+                return null;
+            }
+        }
+
+        private static bool TryParseMergedRegionRef(string refText, out ExcelMergedRegion region)
+        {
+            region = null;
+            string[] parts = (refText ?? "").Split(':');
+            if (parts.Length != 2)
+            {
+                return false;
+            }
+
+            CellRef start;
+            CellRef end;
+            if (!TryParseCellAddress(NormalizeCellAddress(parts[0]), out start) ||
+                !TryParseCellAddress(NormalizeCellAddress(parts[1]), out end))
+            {
+                return false;
+            }
+
+            region = new ExcelMergedRegion
+            {
+                FirstRow = Math.Min(start.Row, end.Row),
+                LastRow = Math.Max(start.Row, end.Row),
+                FirstColumn = Math.Min(start.Column, end.Column),
+                LastColumn = Math.Max(start.Column, end.Column)
+            };
+            return true;
+        }
+
+        private static ExcelMergedRegion FindExcelMergedRegionAt(List<ExcelMergedRegion> regions, int column, int row)
+        {
+            foreach (ExcelMergedRegion region in regions ?? new List<ExcelMergedRegion>())
+            {
+                if (row >= region.FirstRow && row <= region.LastRow &&
+                    column >= region.FirstColumn && column <= region.LastColumn)
+                {
+                    return region;
+                }
+            }
+
+            return null;
+        }
+
+        private static string BuildExcelMergedRegionKey(ExcelMergedRegion region)
+        {
+            return region.FirstRow.ToString(CultureInfo.InvariantCulture) + "|" +
+                region.LastRow.ToString(CultureInfo.InvariantCulture) + "|" +
+                region.FirstColumn.ToString(CultureInfo.InvariantCulture) + "|" +
+                region.LastColumn.ToString(CultureInfo.InvariantCulture);
+        }
+
         private static Dictionary<string, string> ReadXlsxSheetCells(string path, string sheetName, int maxRows, int maxCols)
         {
             Dictionary<string, string> values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -4577,7 +4776,8 @@ namespace RecoNet
                     }
 
                     string sourceKey;
-                    string text = ResolveQuantityNameText(pair.Key, row, out sourceKey);
+                    int fragmentColumn;
+                    string text = ResolveQuantityNameText(pair.Key, row, out sourceKey, out fragmentColumn);
                     if (!String.IsNullOrWhiteSpace(text))
                     {
                         if (String.IsNullOrEmpty(sourceKey))
@@ -4587,7 +4787,8 @@ namespace RecoNet
 
                         if (sourceKeys.Add(sourceKey))
                         {
-                            fragments.Add(new KeyValuePair<int, string>(pair.Key, text.Trim()));
+                            // 合并区域统一按锚点列参与就近排序，避免随字典枚举顺序漂移。
+                            fragments.Add(new KeyValuePair<int, string>(fragmentColumn, text.Trim()));
                         }
                     }
                 }
@@ -4649,9 +4850,11 @@ namespace RecoNet
             }
 
             // 本行该列的文字；为空时只从包含当前格的真实合并区域左上角回填，避免跨工程块串名。
-            private string ResolveQuantityNameText(int column, int row, out string sourceKey)
+            // fragmentColumn 统一取合并区域锚点列，保证名称取舍顺序稳定。
+            private string ResolveQuantityNameText(int column, int row, out string sourceKey, out int fragmentColumn)
             {
                 sourceKey = "";
+                fragmentColumn = column;
                 Dictionary<int, string> byRow;
                 if (!nameTextByColumnRow.TryGetValue(column, out byRow))
                 {
@@ -4662,7 +4865,16 @@ namespace RecoNet
                 if (byRow.TryGetValue(row, out direct))
                 {
                     AiMergedRange directRange = FindMergedRange(column, row);
-                    sourceKey = directRange == null ? BuildQuantityNameSourceKey(column, row) : directRange.Key;
+                    if (directRange != null)
+                    {
+                        sourceKey = directRange.Key;
+                        fragmentColumn = directRange.ValueColumn;
+                    }
+                    else
+                    {
+                        sourceKey = BuildQuantityNameSourceKey(column, row);
+                    }
+
                     return direct;
                 }
 
@@ -4685,6 +4897,7 @@ namespace RecoNet
                 }
 
                 sourceKey = range.Key;
+                fragmentColumn = range.ValueColumn;
                 return mergedText;
             }
 
@@ -4848,6 +5061,7 @@ namespace RecoNet
             public string MatchStatus;
             public string CurrentQuantityText;
             public bool Bindable;
+            public string ItemNo;
             public List<AutoMatchCandidateOption> MatchOptions;
         }
 
