@@ -4479,6 +4479,7 @@ namespace RecoNet
             public string LastStatus { get; set; }
             public string UpdatedAt { get; set; }
             public string TableName { get; set; }   // 数量表名（分类，可编辑；空则按Excel文件名兜底）
+            public string QuantityName { get; set; }   // 绑定时 Excel 行上的工程量名称（供联动面板显示）
         }
 
         public sealed class ExcelLinkStore
@@ -6100,6 +6101,7 @@ namespace RecoNet
                         item.Link.CellAddress = item.CellAddress;
                         item.Link.Expression = item.Expression;
                         item.Link.LastSyncValue = item.DisplayValue ?? "";
+                        item.Link.QuantityName = item.QuantityName ?? "";
                         item.Link.LastStatus = "\u81ea\u52a8\u5339\u914d\u7ed1\u5b9a\uff0c\u7b49\u5f85\u540c\u6b65";
                         item.Link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
                         store.Upsert(item.Link);
@@ -6233,6 +6235,7 @@ namespace RecoNet
                     link.CellAddress = firstCell;
                     link.Expression = expression;
                     link.LastSyncValue = displayValue ?? "";
+                    link.QuantityName = BuildQuantityNameNearActiveExcelCell(cell);
                     link.LastStatus = simpleMode.Checked ? "简单绑定，等待同步" : "表达式绑定，等待同步";
                     link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
@@ -6720,6 +6723,7 @@ namespace RecoNet
                     link.CellAddress = address;
                     link.Expression = expression;
                     link.LastSyncValue = displayValue ?? "";
+                    link.QuantityName = activeCell == null ? "" : BuildQuantityNameNearActiveExcelCell(activeCell);
                     link.LastStatus = "快速绑定，等待同步";
                     link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
@@ -6776,17 +6780,20 @@ namespace RecoNet
                 grid.Columns.Add("TableName", "数量表名");
                 grid.Columns.Add("QuotaSequence", "定额序号");
                 grid.Columns.Add("QuotaCode", "定额编号");
-                grid.Columns.Add("QuotaName", "名称");
-                grid.Columns.Add("Excel", "Excel单元格");
+                grid.Columns.Add("QuotaName", "定额名称");
+                grid.Columns.Add("QuantityName", "工程名称");
                 grid.Columns.Add("LastValue", "最近值");
+                grid.Columns.Add("Excel", "Excel单元格");
                 grid.Columns.Add("Status", "状态");
                 grid.Columns.Add("UpdatedAt", "更新时间");
-                grid.Columns["TableName"].FillWeight = 110;
-                grid.Columns["QuotaSequence"].FillWeight = 60;
+                // 数量表名/定额序号不显示（定额序号仍供删除选中绑定取值）。
+                grid.Columns["TableName"].Visible = false;
+                grid.Columns["QuotaSequence"].Visible = false;
                 grid.Columns["QuotaCode"].FillWeight = 80;
                 grid.Columns["QuotaName"].FillWeight = 160;
-                grid.Columns["Excel"].FillWeight = 200;
+                grid.Columns["QuantityName"].FillWeight = 140;
                 grid.Columns["LastValue"].FillWeight = 70;
+                grid.Columns["Excel"].FillWeight = 200;
                 grid.Columns["Status"].FillWeight = 90;
                 grid.Columns["UpdatedAt"].FillWeight = 100;
 
@@ -6847,7 +6854,8 @@ namespace RecoNet
                 tableLabel.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
 
                 cmbTable = new ComboBox();
-                cmbTable.Width = 170;
+                cmbTable.Width = 320;
+                cmbTable.DropDownWidth = 420;
                 cmbTable.DropDownStyle = ComboBoxStyle.DropDownList;
                 cmbTable.SelectedIndexChanged += delegate { if (!loading) Reload(); };
 
@@ -6954,8 +6962,9 @@ namespace RecoNet
                         link.QuotaSequence.ToString(CultureInfo.InvariantCulture),
                         link.QuotaCode,
                         link.QuotaName,
-                        excel,
+                        link.QuantityName ?? "",
                         link.LastSyncValue,
+                        excel,
                         link.LastStatus,
                         link.UpdatedAt);
                     shown++;
