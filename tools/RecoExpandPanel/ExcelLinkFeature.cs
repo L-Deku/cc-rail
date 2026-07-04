@@ -4787,8 +4787,8 @@ namespace RecoNet
 
         private sealed class AiExcelSelectionContext
         {
-            private const int QuantityNameMaxLength = 20;
-            private const int QuantityNameMaxFragments = 3;
+            private const int QuantityNameMinLength = 15;
+            private const int QuantityNameMinFragments = 3;
 
             private Dictionary<string, AiExcelCell> cellByAddress;
             private Dictionary<long, string> quantityNameByCell;
@@ -4865,12 +4865,7 @@ namespace RecoNet
                     .OrderBy(f => Math.Abs(f.Key - column))
                     .ThenBy(f => f.Key))
                 {
-                    if (kept.Count >= QuantityNameMaxFragments)
-                    {
-                        break;
-                    }
-
-                    if (kept.Count > 0 && totalLength + fragment.Value.Length > QuantityNameMaxLength)
+                    if (kept.Count >= QuantityNameMinFragments && totalLength >= QuantityNameMinLength)
                     {
                         break;
                     }

@@ -2263,7 +2263,32 @@ namespace RecoNet
                     {
                         grid.Rows[index].Cells["QuantityName"].ToolTipText = "\u70b9\u51fb\u9009\u62e9\u591a\u5904\u5339\u914d\u7684\u5de5\u7a0b\u91cf\u540d\u79f0";
                     }
+
+                    ApplyAutoMatchRowStyle(grid.Rows[index]);
                 }
+            }
+
+            private static bool IsAutoMatchWarningStatus(string matchStatus)
+            {
+                if (String.IsNullOrWhiteSpace(matchStatus))
+                {
+                    return false;
+                }
+
+                return matchStatus.IndexOf("\u6570\u91cf\u4e3a0", StringComparison.Ordinal) >= 0 ||
+                    matchStatus.IndexOf("\u591a\u5904\u5339\u914d", StringComparison.Ordinal) >= 0;
+            }
+
+            private void ApplyAutoMatchRowStyle(DataGridViewRow row)
+            {
+                if (row == null)
+                {
+                    return;
+                }
+
+                AiMatchPreviewItem item = row.Tag as AiMatchPreviewItem;
+                bool highlight = item != null && item.Bindable && !item.Checked && IsAutoMatchWarningStatus(item.MatchStatus);
+                row.DefaultCellStyle.BackColor = highlight ? System.Drawing.Color.MistyRose : System.Drawing.Color.Empty;
             }
 
             private void UpdateExpressionFromRow(DataGridViewRow row)
@@ -2306,6 +2331,7 @@ namespace RecoNet
                     row.Cells["Value"].Value = "";
                     row.Cells["QuantityName"].Value = "";
                     row.Cells["Status"].Value = item.MatchStatus;
+                    ApplyAutoMatchRowStyle(row);
                     return;
                 }
 
@@ -2330,6 +2356,7 @@ namespace RecoNet
                     row.Cells["QuantityName"].Value = "";
                     row.Cells["Status"].Value = item.MatchStatus;
                     status.Text = item.MatchStatus + "\uff1a" + readError;
+                    ApplyAutoMatchRowStyle(row);
                     return;
                 }
 
@@ -2359,6 +2386,7 @@ namespace RecoNet
                 row.Cells["Value"].Value = item.ExcelQuantityText;
                 SetQuantityNameCellValue(row, item);
                 row.Cells["Status"].Value = item.MatchStatus;
+                ApplyAutoMatchRowStyle(row);
             }
 
             private void RefreshEditedExpressions()
@@ -2484,14 +2512,7 @@ namespace RecoNet
 
             private void ApplyBatchCheck(int rowIndex)
             {
-                if (applyingBatchCheck || pendingBatchCheckRows == null)
-                {
-                    return;
-                }
-
-                List<int> targets = pendingBatchCheckRows;
-                pendingBatchCheckRows = null;
-                if (!targets.Contains(rowIndex) || rowIndex < 0 || rowIndex >= grid.Rows.Count)
+                if (applyingBatchCheck || rowIndex < 0 || rowIndex >= grid.Rows.Count)
                 {
                     return;
                 }
@@ -2502,6 +2523,19 @@ namespace RecoNet
                 if (currentItem != null)
                 {
                     currentItem.Checked = value;
+                    ApplyAutoMatchRowStyle(grid.Rows[rowIndex]);
+                }
+
+                if (pendingBatchCheckRows == null)
+                {
+                    return;
+                }
+
+                List<int> targets = pendingBatchCheckRows;
+                pendingBatchCheckRows = null;
+                if (!targets.Contains(rowIndex))
+                {
+                    return;
                 }
 
                 applyingBatchCheck = true;
@@ -2524,6 +2558,7 @@ namespace RecoNet
 
                         item.Checked = value;
                         row.Cells["Checked"].Value = value;
+                        ApplyAutoMatchRowStyle(row);
                         applied++;
                     }
 
@@ -2575,6 +2610,7 @@ namespace RecoNet
                     row.Cells["Value"].Value = item.ExcelQuantityText;
                     row.Cells["QuantityName"].Value = selected.Label ?? selected.QuantityName ?? "";
                     row.Cells["Status"].Value = item.MatchStatus;
+                    ApplyAutoMatchRowStyle(row);
                     status.Text = "\u5df2\u9009\u62e9\u591a\u5904\u5339\u914d\u5019\u9009\uff1a" + (item.Link == null ? "" : item.Link.QuotaCode) + " -> " + item.Expression;
                 }
                 finally
@@ -2792,6 +2828,7 @@ namespace RecoNet
                 row.Cells["Value"].Value = item.ExcelQuantityText;
                 SetQuantityNameCellValue(row, item);
                 row.Cells["Status"].Value = item.MatchStatus;
+                ApplyAutoMatchRowStyle(row);
                 status.Text = "\u5df2\u624b\u52a8\u5339\u914d\uff1a" + (item.Link.QuotaCode ?? "") + " -> " + item.WorksheetName + "!" + item.Expression;
             }
 
@@ -2842,6 +2879,7 @@ namespace RecoNet
 
                 item.Checked = true;
                 row.Cells["Checked"].Value = true;
+                ApplyAutoMatchRowStyle(row);
                 if (Accepted != null)
                 {
                     Accepted(new List<AiMatchPreviewItem> { item });
@@ -2900,6 +2938,7 @@ namespace RecoNet
 
                     object value = row.Cells["Checked"].Value;
                     item.Checked = value is bool && (bool)value;
+                    ApplyAutoMatchRowStyle(row);
                 }
             }
 

@@ -509,8 +509,8 @@ namespace RecoNet
             return items;
         }
 
-        private const int RowNameMaxLength = 20;
-        private const int RowNameMaxFragments = 3;
+        private const int RowNameMinLength = 15;
+        private const int RowNameMinFragments = 3;
 
         // 读某表达式首个单元格所在行的名称（该格列前的非数字文本拼接），仅供人工核对。
         // 空格只从包含它的真实合并区域锚点回填；就近优先，10字/3段封顶，同一合并区域只拼一次。
@@ -553,12 +553,7 @@ namespace RecoNet
                     .OrderBy(f => Math.Abs(f.Key - cr.Column))
                     .ThenBy(f => f.Key))
                 {
-                    if (kept.Count >= RowNameMaxFragments)
-                    {
-                        break;
-                    }
-
-                    if (kept.Count > 0 && totalLength + fragment.Value.Length > RowNameMaxLength)
+                    if (kept.Count >= RowNameMinFragments && totalLength >= RowNameMinLength)
                     {
                         break;
                     }
