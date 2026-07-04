@@ -116,7 +116,9 @@ namespace RecoNet
                 }
             }
 
-            return null;
+            // 返回空串而不是 null：调用方多为 .Trim()/IsNullOrWhiteSpace，
+            // 行里单位等列为空时（标题行、0值行）返回 null 会在绑定面板触发空引用崩溃。
+            return "";
         }
     }
 }

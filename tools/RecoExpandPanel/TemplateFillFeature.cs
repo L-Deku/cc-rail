@@ -468,6 +468,13 @@ namespace RecoNet
 
                         string address = ColumnNumberToName(col) + firstCell.Row.ToString(CultureInfo.InvariantCulture);
                         readLinks.Add(new ExcelQuotaLink { ExcelPath = workbook, WorksheetName = sheet, CellAddress = address, Expression = address });
+
+                        // 竖向合并单元格只有首行有值：把上方最多10行也加入批量读取，供名称向上回填。
+                        for (int up = 1; up <= RowNameFillUpMaxRows && firstCell.Row - up >= 1; up++)
+                        {
+                            string upAddress = ColumnNumberToName(col) + (firstCell.Row - up).ToString(CultureInfo.InvariantCulture);
+                            readLinks.Add(new ExcelQuotaLink { ExcelPath = workbook, WorksheetName = sheet, CellAddress = upAddress, Expression = upAddress });
+                        }
                     }
                 }
                 else
@@ -497,7 +504,12 @@ namespace RecoNet
             return items;
         }
 
-        // 读某表达式首个单元格所在行的名称（A 到该格列前的非数字文本拼接），仅供人工核对。
+        private const int RowNameFillUpMaxRows = 10;
+        private const int RowNameMaxLength = 10;
+        private const int RowNameMaxFragments = 3;
+
+        // 读某表达式首个单元格所在行的名称（该格列前的非数字文本拼接），仅供人工核对。
+        // 空格向上回填最近文字（竖向合并单元格只有首行有值）；就近优先，约30字/6段封顶。
         private static string ReadRowNameAt(string workbook, string sheet, string expr, Dictionary<string, HashSet<int>> hiddenColumnCache, ExcelSyncReadContext readContext)
         {
             try
@@ -506,7 +518,7 @@ namespace RecoNet
                 CellRef cr;
                 if (String.IsNullOrEmpty(first) || !TryParseCellAddress(first, out cr)) return "";
                 HashSet<int> hiddenColumns = GetSavedHiddenColumns(workbook, sheet, hiddenColumnCache);
-                List<string> parts = new List<string>();
+                List<KeyValuePair<int, string>> fragments = new List<KeyValuePair<int, string>>();
                 for (int col = 1; col < cr.Column; col++)
                 {
                     if (hiddenColumns.Contains(col))
@@ -514,23 +526,70 @@ namespace RecoNet
                         continue;
                     }
 
-                    string addr = ColumnNumberToName(col) + cr.Row.ToString(CultureInfo.InvariantCulture);
-                    string val; string e;
-                    if (readContext != null &&
-                        readContext.TryReadWorkbookCellValue(workbook, sheet, addr, out val, out e) &&
-                        !String.IsNullOrWhiteSpace(val))
+                    string text = ReadRowNameCellText(workbook, sheet, col, cr.Row, readContext);
+                    if (!String.IsNullOrWhiteSpace(text))
                     {
-                        decimal d; string pe;
-                        if (!TryEvaluateDecimal(val, out d, out pe)) parts.Add(val.Trim());
-                        if (parts.Count >= 6)
-                        {
-                            break;
-                        }
+                        fragments.Add(new KeyValuePair<int, string>(col, text.Trim()));
                     }
                 }
-                return String.Join(" ", parts.Take(6).ToArray()).Trim();
+
+                List<KeyValuePair<int, string>> kept = new List<KeyValuePair<int, string>>();
+                int totalLength = 0;
+                foreach (KeyValuePair<int, string> fragment in fragments
+                    .OrderBy(f => Math.Abs(f.Key - cr.Column))
+                    .ThenBy(f => f.Key))
+                {
+                    if (kept.Count >= RowNameMaxFragments)
+                    {
+                        break;
+                    }
+
+                    if (kept.Count > 0 && totalLength + fragment.Value.Length > RowNameMaxLength)
+                    {
+                        break;
+                    }
+
+                    kept.Add(fragment);
+                    totalLength += fragment.Value.Length;
+                }
+
+                return String.Join(" ", kept.OrderBy(f => f.Key).Select(f => f.Value).ToArray()).Trim();
             }
             catch { return ""; }
+        }
+
+        private static string ReadRowNameCellText(string workbook, string sheet, int col, int row, ExcelSyncReadContext readContext)
+        {
+            if (readContext == null)
+            {
+                return "";
+            }
+
+            string val;
+            string readError;
+            string addr = ColumnNumberToName(col) + row.ToString(CultureInfo.InvariantCulture);
+            if (readContext.TryReadWorkbookCellValue(workbook, sheet, addr, out val, out readError) && !String.IsNullOrWhiteSpace(val))
+            {
+                decimal parsed;
+                string parseError;
+                return TryEvaluateDecimal(val, out parsed, out parseError) ? "" : val;
+            }
+
+            // 空格向上回填：找最近的非空内容，是文字则用、是数字则不回填，最多回看10行。
+            for (int up = 1; up <= RowNameFillUpMaxRows && row - up >= 1; up++)
+            {
+                string upAddr = ColumnNumberToName(col) + (row - up).ToString(CultureInfo.InvariantCulture);
+                if (!readContext.TryReadWorkbookCellValue(workbook, sheet, upAddr, out val, out readError) || String.IsNullOrWhiteSpace(val))
+                {
+                    continue;
+                }
+
+                decimal parsed;
+                string parseError;
+                return TryEvaluateDecimal(val, out parsed, out parseError) ? "" : val;
+            }
+
+            return "";
         }
 
         private static HashSet<int> GetSavedHiddenColumns(string workbook, string sheet, Dictionary<string, HashSet<int>> cache)

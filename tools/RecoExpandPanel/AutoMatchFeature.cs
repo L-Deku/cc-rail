@@ -483,6 +483,54 @@ namespace RecoNet
             return item;
         }
 
+        // 过滤模板铺量推送的区段：从"AI推送"标记行（编号为-）开始，到下一个正常标题行
+        // （编号为-且名称不是AI推送）为止，区段内的行（含标记行）不进自动匹配预览；
+        // 正常标题行本身保留作分组参照。条目边界重置状态。
+        private static List<AiQuotaMatchRow> FilterAutoMatchPushedRows(List<AiQuotaMatchRow> rows)
+        {
+            List<AiQuotaMatchRow> result = new List<AiQuotaMatchRow>();
+            bool skippingPushedBlock = false;
+            string currentChapter = null;
+            foreach (AiQuotaMatchRow row in rows ?? new List<AiQuotaMatchRow>())
+            {
+                if (row == null || row.Link == null)
+                {
+                    continue;
+                }
+
+                string chapter = row.Link.ChapterSeq ?? "";
+                if (!String.Equals(chapter, currentChapter, StringComparison.OrdinalIgnoreCase))
+                {
+                    currentChapter = chapter;
+                    skippingPushedBlock = false;
+                }
+
+                string code = (row.Link.QuotaCode ?? "").Trim();
+                if (code == "-")
+                {
+                    string name = (row.Link.QuotaName ?? "").Trim();
+                    if (name.StartsWith("AI推送", StringComparison.Ordinal))
+                    {
+                        skippingPushedBlock = true;
+                        continue;
+                    }
+
+                    skippingPushedBlock = false;
+                    result.Add(row);
+                    continue;
+                }
+
+                if (skippingPushedBlock)
+                {
+                    continue;
+                }
+
+                result.Add(row);
+            }
+
+            return result;
+        }
+
         private static void ApplyAutoMatchPreviewDefaults(List<AiMatchPreviewItem> preview, List<AiQuotaMatchRow> quotas, AiExcelSelectionContext context)
         {
             Dictionary<long, AiQuotaMatchRow> quotaBySequence = (quotas ?? new List<AiQuotaMatchRow>())
@@ -1840,7 +1888,7 @@ namespace RecoNet
                                 totalFilter = " and DE.\u603b\u6982\u7b97\u5e8f\u53f7=@zgs";
                             }
 
-                            cmd.CommandText = "select DE.\u5b9a\u989d\u5e8f\u53f7, DE.\u603b\u6982\u7b97\u5e8f\u53f7, DE.\u6761\u76ee\u5e8f\u53f7, DE.\u987a\u53f7, DE.\u5b9a\u989d\u7f16\u53f7, DE.\u5de5\u7a0b\u6216\u8d39\u7528\u9879\u76ee\u540d\u79f0, DE.\u5355\u4f4d, DE.\u5de5\u7a0b\u6570\u91cf\u8f93\u5165 from \u5b9a\u989d\u8f93\u5165 DE where DE.\u6761\u76ee\u5e8f\u53f7 in (" + String.Join(",", parameterNames.ToArray()) + ")" + totalFilter;
+                            cmd.CommandText = "select DE.\u5b9a\u989d\u5e8f\u53f7, DE.\u603b\u6982\u7b97\u5e8f\u53f7, DE.\u6761\u76ee\u5e8f\u53f7, DE.\u987a\u53f7, DE.\u5b9a\u989d\u7f16\u53f7, DE.\u5de5\u7a0b\u6216\u8d39\u7528\u9879\u76ee\u540d\u79f0, DE.\u5355\u4f4d, DE.\u5de5\u7a0b\u6570\u91cf\u8f93\u5165, ZJ.\u6761\u76ee\u7f16\u53f7 from \u5b9a\u989d\u8f93\u5165 DE left join \u7ae0\u8282\u8868 ZJ on DE.\u6761\u76ee\u5e8f\u53f7=ZJ.\u6761\u76ee\u5e8f\u53f7 where DE.\u6761\u76ee\u5e8f\u53f7 in (" + String.Join(",", parameterNames.ToArray()) + ")" + totalFilter;
                             using (SqlDataReader reader = cmd.ExecuteReader())
                             {
                                 while (reader.Read())
@@ -1874,7 +1922,8 @@ namespace RecoNet
                                         Link = link,
                                         QuotaUnit = ReadAutoMatchReaderText(reader, 6),
                                         CurrentQuantityText = currentQuantity,
-                                        Bindable = bindable
+                                        Bindable = bindable,
+                                        ItemNo = ReadAutoMatchReaderText(reader, 8)
                                     });
                                 }
                             }
@@ -1888,11 +1937,33 @@ namespace RecoNet
                 }
 
                 Log("Auto match chapter quotas: node=" + node.Text + ", tagSeqs=" + tagSeqCount.ToString(CultureInfo.InvariantCulture) + ", itemNo=" + (chapterNo ?? "") + ", totalSeqs=" + chapterSeqs.Count.ToString(CultureInfo.InvariantCulture) + ", zgs=" + totalNo + ", rows=" + result.Count.ToString(CultureInfo.InvariantCulture));
-                return result
-                    .OrderBy(rowItem => ParseAutoMatchSortKey(rowItem.Link.ChapterSeq))
+                // 预览按条目编号由小到大（与左侧章节树一致），同条目内按顺号。
+                return FilterAutoMatchPushedRows(result
+                    .OrderBy(rowItem => BuildAutoMatchItemNoSortKey(rowItem.ItemNo), StringComparer.Ordinal)
+                    .ThenBy(rowItem => ParseAutoMatchSortKey(rowItem.Link.ChapterSeq))
                     .ThenBy(rowItem => ParseAutoMatchSortKey(rowItem.Link.OrderNo))
                     .ThenBy(rowItem => rowItem.Link.QuotaSequence)
-                    .ToList();
+                    .ToList());
+            }
+
+            // 条目编号分段左补零做排序键（0101-4 与 0101-04-01 等长比较），空编号排最后。
+            private static string BuildAutoMatchItemNoSortKey(string itemNo)
+            {
+                itemNo = (itemNo ?? "").Trim();
+                if (itemNo.Length == 0)
+                {
+                    return "~";
+                }
+
+                string[] parts = itemNo.Split('-');
+                StringBuilder builder = new StringBuilder(parts.Length * 13);
+                foreach (string part in parts)
+                {
+                    builder.Append(part.Trim().PadLeft(12, '0'));
+                    builder.Append('-');
+                }
+
+                return builder.ToString();
             }
 
             private void AppendAutoMatchChapterSeqsByItemNo(List<string> chapterSeqs, string itemNo)

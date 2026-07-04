@@ -1518,7 +1518,7 @@ namespace RecoNet
                 });
             }
 
-            return result;
+            return FilterAutoMatchPushedRows(result);
         }
 
         private static bool IsAutoMatchQuotaCode(string quotaCode)
@@ -1787,7 +1787,7 @@ namespace RecoNet
                 return "";
             }
 
-            return selection.GetQuantityNameForRow(target.Row);
+            return selection.GetQuantityNameForCell(target.Row, target.Column);
         }
 
         private static string BuildQuantityNameNearActiveExcelCell(ExcelCellAddress cell)
@@ -4517,12 +4517,19 @@ namespace RecoNet
             public string QuotaUnit;
             public string CurrentQuantityText;
             public bool Bindable;
+            public string ItemNo;
         }
 
         private sealed class AiExcelSelectionContext
         {
+            private const int QuantityNameFillUpMaxRows = 20;
+            private const int QuantityNameMaxLength = 10;
+            private const int QuantityNameMaxFragments = 3;
+
             private Dictionary<string, AiExcelCell> cellByAddress;
-            private Dictionary<int, string> quantityNameByRow;
+            private Dictionary<long, string> quantityNameByCell;
+            private Dictionary<int, Dictionary<int, string>> nameTextByColumnRow;
+            private Dictionary<int, List<int>> nameContentRowsByColumn;
             public string WorkbookPath;
             public string WorksheetName;
             public readonly List<AiExcelCell> Cells = new List<AiExcelCell>();
@@ -4550,24 +4557,143 @@ namespace RecoNet
                 }
             }
 
-            public string GetQuantityNameForRow(int row)
+            public string GetQuantityNameForCell(int row, int column)
             {
-                if (quantityNameByRow == null)
+                EnsureQuantityNameIndexes();
+                long key = (long)row * 1048576L + column;
+                string cached;
+                if (quantityNameByCell.TryGetValue(key, out cached))
                 {
-                    quantityNameByRow = new Dictionary<int, string>();
-                    foreach (IGrouping<int, AiExcelCell> group in Cells.Where(c => !c.IsNumber).GroupBy(c => c.Row))
+                    return cached;
+                }
+
+                List<KeyValuePair<int, string>> fragments = new List<KeyValuePair<int, string>>();
+                foreach (KeyValuePair<int, Dictionary<int, string>> pair in nameTextByColumnRow)
+                {
+                    if (pair.Key == column)
                     {
-                        quantityNameByRow[group.Key] = String.Join(" ", group
-                            .OrderBy(c => c.Column)
-                            .Select(c => c.Text)
-                            .Where(text => !String.IsNullOrWhiteSpace(text))
-                            .Take(6)
-                            .ToArray()).Trim();
+                        continue;
+                    }
+
+                    string text = ResolveQuantityNameText(pair.Key, row);
+                    if (!String.IsNullOrWhiteSpace(text))
+                    {
+                        fragments.Add(new KeyValuePair<int, string>(pair.Key, text.Trim()));
                     }
                 }
 
-                string value;
-                return quantityNameByRow.TryGetValue(row, out value) ? value : "";
+                // 就近优先保留：先收最靠近数量格的列，超过约30字或6段后舍弃更外层的类别文字。
+                List<KeyValuePair<int, string>> kept = new List<KeyValuePair<int, string>>();
+                int totalLength = 0;
+                foreach (KeyValuePair<int, string> fragment in fragments
+                    .OrderBy(f => Math.Abs(f.Key - column))
+                    .ThenBy(f => f.Key))
+                {
+                    if (kept.Count >= QuantityNameMaxFragments)
+                    {
+                        break;
+                    }
+
+                    if (kept.Count > 0 && totalLength + fragment.Value.Length > QuantityNameMaxLength)
+                    {
+                        break;
+                    }
+
+                    kept.Add(fragment);
+                    totalLength += fragment.Value.Length;
+                }
+
+                string name = String.Join(" ", kept.OrderBy(f => f.Key).Select(f => f.Value).ToArray()).Trim();
+                quantityNameByCell[key] = name;
+                return name;
+            }
+
+            private void EnsureQuantityNameIndexes()
+            {
+                if (quantityNameByCell != null)
+                {
+                    return;
+                }
+
+                quantityNameByCell = new Dictionary<long, string>();
+                nameTextByColumnRow = new Dictionary<int, Dictionary<int, string>>();
+                nameContentRowsByColumn = new Dictionary<int, List<int>>();
+                foreach (AiExcelCell cell in Cells)
+                {
+                    if (cell == null || String.IsNullOrWhiteSpace(cell.Text))
+                    {
+                        continue;
+                    }
+
+                    List<int> contentRows;
+                    if (!nameContentRowsByColumn.TryGetValue(cell.Column, out contentRows))
+                    {
+                        contentRows = new List<int>();
+                        nameContentRowsByColumn[cell.Column] = contentRows;
+                    }
+
+                    contentRows.Add(cell.Row);
+                    if (!cell.IsNumber)
+                    {
+                        Dictionary<int, string> byRow;
+                        if (!nameTextByColumnRow.TryGetValue(cell.Column, out byRow))
+                        {
+                            byRow = new Dictionary<int, string>();
+                            nameTextByColumnRow[cell.Column] = byRow;
+                        }
+
+                        byRow[cell.Row] = cell.Text;
+                    }
+                }
+
+                foreach (List<int> rows in nameContentRowsByColumn.Values)
+                {
+                    rows.Sort();
+                }
+            }
+
+            // 本行该列的文字；为空时向上回填最近的文字（竖向合并单元格只有首行有值），
+            // 中间不允许有其它内容、最多回看20行，上方最近内容是数字时不回填。
+            private string ResolveQuantityNameText(int column, int row)
+            {
+                Dictionary<int, string> byRow;
+                if (!nameTextByColumnRow.TryGetValue(column, out byRow))
+                {
+                    return "";
+                }
+
+                string direct;
+                if (byRow.TryGetValue(row, out direct))
+                {
+                    return direct;
+                }
+
+                List<int> contentRows;
+                if (!nameContentRowsByColumn.TryGetValue(column, out contentRows) || contentRows.Count == 0)
+                {
+                    return "";
+                }
+
+                int index = contentRows.BinarySearch(row);
+                if (index >= 0)
+                {
+                    return "";
+                }
+
+                index = ~index - 1;
+                if (index < 0)
+                {
+                    return "";
+                }
+
+                int aboveRow = contentRows[index];
+                if (row - aboveRow > QuantityNameFillUpMaxRows)
+                {
+                    return "";
+                }
+
+                string aboveText;
+                return byRow.TryGetValue(aboveRow, out aboveText) ? aboveText : "";
             }
 
             public string GetUnitNearCell(AiExcelCell target)
