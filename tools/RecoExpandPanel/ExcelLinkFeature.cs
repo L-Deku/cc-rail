@@ -391,6 +391,23 @@ namespace RecoNet
             return String.Join("+", cell.SelectionAddresses.ToArray());
         }
 
+        private static dynamic GetExcelMergeAnchorCell(dynamic cell)
+        {
+            try
+            {
+                dynamic mergeArea = cell.MergeArea;
+                if (mergeArea != null)
+                {
+                    return mergeArea.Cells[1, 1];
+                }
+            }
+            catch
+            {
+            }
+
+            return cell;
+        }
+
         private static string ReadExcelLinkUnitNearCell(dynamic sheet, string workbookPath, string worksheetName, int row, int quantityColumn)
         {
             if (sheet == null || row <= 0 || quantityColumn <= 1)
@@ -1427,7 +1444,7 @@ namespace RecoNet
                     return false;
                 }
 
-                dynamic firstCell = selection.Cells[1, 1];
+                dynamic firstCell = GetExcelMergeAnchorCell(selection.Cells[1, 1]);
                 int rowIndex = Convert.ToInt32(firstCell.Row, CultureInfo.InvariantCulture);
                 int columnIndex = Convert.ToInt32(firstCell.Column, CultureInfo.InvariantCulture);
                 string workbookPath = Convert.ToString(workbook.FullName, CultureInfo.InvariantCulture);
@@ -1478,9 +1495,9 @@ namespace RecoNet
                 int limit = Math.Min(count, Math.Max(1, maxCount));
                 for (int i = 1; i <= limit; i++)
                 {
-                    dynamic selectedCell = selection.Cells[i];
+                    dynamic selectedCell = GetExcelMergeAnchorCell(selection.Cells[i]);
                     string address = Convert.ToString(selectedCell.Address(false, false), CultureInfo.InvariantCulture);
-                    if (!String.IsNullOrEmpty(address))
+                    if (!String.IsNullOrEmpty(address) && !addresses.Contains(address.ToUpperInvariant()))
                     {
                         addresses.Add(address.ToUpperInvariant());
                     }
@@ -3655,6 +3672,54 @@ namespace RecoNet
                 region.LastColumn.ToString(CultureInfo.InvariantCulture);
         }
 
+        private static string BuildExcelCellAddress(int column, int row)
+        {
+            return ColumnNumberToName(column) + row.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static string NormalizeMergedCellAddress(string address, List<ExcelMergedRegion> regions)
+        {
+            string normalized = NormalizeCellAddress(address);
+            CellRef cell;
+            if (!TryParseCellAddress(normalized, out cell))
+            {
+                return normalized;
+            }
+
+            ExcelMergedRegion region = FindExcelMergedRegionAt(regions, cell.Column, cell.Row);
+            return region == null ? normalized : BuildExcelCellAddress(region.FirstColumn, region.FirstRow);
+        }
+
+        private static string NormalizeExpressionMergedAnchors(string expression, List<ExcelMergedRegion> regions)
+        {
+            string normalized = NormalizeExpressionOperators(expression);
+            if (String.IsNullOrWhiteSpace(normalized) || regions == null || regions.Count == 0)
+            {
+                return normalized;
+            }
+
+            foreach (string address in ExtractCellAddressesFromExpression(normalized).OrderByDescending(value => value.Length))
+            {
+                string anchor = NormalizeMergedCellAddress(address, regions);
+                if (!String.Equals(address, anchor, StringComparison.OrdinalIgnoreCase))
+                {
+                    normalized = normalized.Replace(address, anchor);
+                }
+            }
+
+            return normalized;
+        }
+
+        private static string NormalizeExpressionMergedAnchors(string workbook, string sheet, string expression)
+        {
+            if (String.IsNullOrWhiteSpace(workbook) || !File.Exists(workbook))
+            {
+                return NormalizeExpressionOperators(expression);
+            }
+
+            return NormalizeExpressionMergedAnchors(expression, ReadExcelMergedRegions(workbook, sheet));
+        }
+
         private static Dictionary<string, string> ReadXlsxSheetCells(string path, string sheetName, int maxRows, int maxCols)
         {
             Dictionary<string, string> values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -4722,7 +4787,7 @@ namespace RecoNet
 
         private sealed class AiExcelSelectionContext
         {
-            private const int QuantityNameMaxLength = 10;
+            private const int QuantityNameMaxLength = 20;
             private const int QuantityNameMaxFragments = 3;
 
             private Dictionary<string, AiExcelCell> cellByAddress;
@@ -4960,6 +5025,39 @@ namespace RecoNet
                 }
 
                 return null;
+            }
+
+            public string NormalizeMergedCellAddress(string address)
+            {
+                string normalized = FormPanel.NormalizeCellAddress(address);
+                CellRef cell;
+                if (!TryParseCellAddress(normalized, out cell))
+                {
+                    return normalized;
+                }
+
+                AiMergedRange range = FindMergedRange(cell.Column, cell.Row);
+                return range == null ? normalized : BuildExcelCellAddress(range.ValueColumn, range.ValueRow);
+            }
+
+            public string NormalizeMergedExpression(string expression)
+            {
+                string normalized = NormalizeExpressionOperators(expression);
+                if (String.IsNullOrWhiteSpace(normalized))
+                {
+                    return normalized;
+                }
+
+                foreach (string address in ExtractCellAddressesFromExpression(normalized).OrderByDescending(value => value.Length))
+                {
+                    string anchor = NormalizeMergedCellAddress(address);
+                    if (!String.Equals(address, anchor, StringComparison.OrdinalIgnoreCase))
+                    {
+                        normalized = normalized.Replace(address, anchor);
+                    }
+                }
+
+                return normalized;
             }
 
             private static string BuildQuantityNameSourceKey(int column, int row)
@@ -6470,6 +6568,7 @@ namespace RecoNet
                     {
                         expression = BuildDefaultExpression(cell);
                     }
+                    expression = NormalizeExpressionMergedAnchors(cell.WorkbookPath, cell.WorksheetName, expression);
                     if (String.IsNullOrEmpty(expression))
                     {
                         ShowTransientStatus("请填写表达式，或在表达式模式下点击WPS/Excel单元格自动加入。");
@@ -6962,6 +7061,10 @@ namespace RecoNet
                         status.Text = "请先在软件定额表中选中一条定额行。";
                         return;
                     }
+
+                    List<ExcelMergedRegion> mergedRegions = ReadExcelMergedRegions(path, sheet);
+                    address = NormalizeMergedCellAddress(address, mergedRegions);
+                    expression = NormalizeExpressionMergedAnchors(expression, mergedRegions);
 
                     string excelUnit;
                     string quotaUnit;

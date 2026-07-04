@@ -448,6 +448,9 @@ namespace RecoNet
                     item.Status = "模板未记录 Excel 文件"; item.Selected = false; items.Add(item); continue;
                 }
 
+                List<ExcelMergedRegion> rowMergedRegions = GetSavedMergedRegionsCached(workbook, sheet, mergedRegionCache);
+                expr = NormalizeExpressionMergedAnchors(expr, rowMergedRegions);
+
                 PreparedFillPreviewItem preparedItem = new PreparedFillPreviewItem();
                 preparedItem.Item = item;
                 preparedItem.WorkbookPath = workbook;
@@ -460,7 +463,6 @@ namespace RecoNet
                     readLinks.Add(new ExcelQuotaLink { ExcelPath = workbook, WorksheetName = sheet, CellAddress = first, Expression = expr });
 
                     HashSet<int> hiddenColumns = GetSavedHiddenColumns(workbook, sheet, hiddenColumnCache);
-                    List<ExcelMergedRegion> rowMergedRegions = GetSavedMergedRegionsCached(workbook, sheet, mergedRegionCache);
                     for (int col = 1; col < firstCell.Column; col++)
                     {
                         if (hiddenColumns.Contains(col))
@@ -507,7 +509,7 @@ namespace RecoNet
             return items;
         }
 
-        private const int RowNameMaxLength = 10;
+        private const int RowNameMaxLength = 20;
         private const int RowNameMaxFragments = 3;
 
         // 读某表达式首个单元格所在行的名称（该格列前的非数字文本拼接），仅供人工核对。
@@ -516,11 +518,12 @@ namespace RecoNet
         {
             try
             {
+                HashSet<int> hiddenColumns = GetSavedHiddenColumns(workbook, sheet, hiddenColumnCache);
+                List<ExcelMergedRegion> mergedRegions = GetSavedMergedRegionsCached(workbook, sheet, mergedRegionCache);
+                expr = NormalizeExpressionMergedAnchors(expr, mergedRegions);
                 string first = ExtractFirstCellAddress(expr);
                 CellRef cr;
                 if (String.IsNullOrEmpty(first) || !TryParseCellAddress(first, out cr)) return "";
-                HashSet<int> hiddenColumns = GetSavedHiddenColumns(workbook, sheet, hiddenColumnCache);
-                List<ExcelMergedRegion> mergedRegions = GetSavedMergedRegionsCached(workbook, sheet, mergedRegionCache);
                 List<KeyValuePair<int, string>> fragments = new List<KeyValuePair<int, string>>();
                 HashSet<string> sourceKeys = new HashSet<string>(StringComparer.Ordinal);
                 for (int col = 1; col < cr.Column; col++)

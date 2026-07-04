@@ -656,7 +656,23 @@ namespace RecoNet
                     continue;
                 }
 
-                byAddress[cell.Address] = new AutoMatchCellValue { Cell = cell, Value = value };
+                string address = context.NormalizeMergedCellAddress(cell.Address);
+                CellRef normalizedCellRef;
+                AiExcelCell normalizedCell = cell;
+                if (!String.Equals(address, cell.Address, StringComparison.OrdinalIgnoreCase) &&
+                    TryParseCellAddress(address, out normalizedCellRef))
+                {
+                    normalizedCell = new AiExcelCell
+                    {
+                        Address = address,
+                        Text = cell.Text,
+                        Row = normalizedCellRef.Row,
+                        Column = normalizedCellRef.Column,
+                        IsNumber = cell.IsNumber
+                    };
+                }
+
+                byAddress[address] = new AutoMatchCellValue { Cell = normalizedCell, Value = value };
             }
 
             return byAddress.Values.OrderBy(cell => cell.Cell.Row).ThenBy(cell => cell.Cell.Column).ToList();
@@ -1019,7 +1035,7 @@ namespace RecoNet
                 ? new Dictionary<string, AiExcelCell>(StringComparer.OrdinalIgnoreCase)
                 : context.CellByAddress;
 
-            string resolved = NormalizeExpressionOperators(expression);
+            string resolved = context == null ? NormalizeExpressionOperators(expression) : context.NormalizeMergedExpression(expression);
             bool allResolved = true;
             foreach (string address in ExtractCellAddressesFromExpression(resolved).OrderByDescending(value => value.Length))
             {
@@ -1067,7 +1083,7 @@ namespace RecoNet
             }
 
             Dictionary<string, AiExcelCell> cells = context.CellByAddress;
-            string normalized = NormalizeExpressionOperators(expression);
+            string normalized = context.NormalizeMergedExpression(expression);
             MatchCollection matches = Regex.Matches(normalized, @"[A-Z]+\d+");
             if (matches.Count == 0)
             {
@@ -2248,7 +2264,7 @@ namespace RecoNet
                 }
 
                 string expression = Convert.ToString(row.Cells["Expression"].Value, CultureInfo.InvariantCulture);
-                expression = NormalizeExpressionOperators(expression);
+                expression = currentContext == null ? NormalizeExpressionOperators(expression) : currentContext.NormalizeMergedExpression(expression);
                 bool expressionChanged = !String.Equals(item.Expression ?? "", expression ?? "", StringComparison.OrdinalIgnoreCase);
                 item.Expression = expression;
                 item.CellAddress = ExtractFirstCellAddress(expression);
