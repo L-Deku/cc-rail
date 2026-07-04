@@ -1696,9 +1696,6 @@ namespace RecoNet
                 split = new SplitContainer();
                 split.Dock = DockStyle.Fill;
                 split.Orientation = Orientation.Vertical;
-                split.Panel1MinSize = 80;
-                split.Panel2MinSize = 400;
-                split.SplitterDistance = 220;
                 split.Panel1.Controls.Add(itemTree);
                 split.Panel2.Controls.Add(grid);
 
@@ -1715,8 +1712,27 @@ namespace RecoNet
                     manualMatchTimer.Stop();
                     manualMatchTimer.Dispose();
                 };
+                Shown += delegate { SetInitialSplitterDistance(); };
 
                 LoadSheets();
+            }
+
+            private void SetInitialSplitterDistance()
+            {
+                if (split.Width <= 0)
+                {
+                    return;
+                }
+
+                split.Panel1MinSize = 80;
+                split.Panel2MinSize = Math.Min(400, Math.Max(25, split.Width - split.Panel1MinSize));
+                int max = split.Width - split.Panel2MinSize;
+                if (max < split.Panel1MinSize)
+                {
+                    return;
+                }
+
+                split.SplitterDistance = Math.Min(Math.Max(220, split.Panel1MinSize), max);
             }
 
             private void BuildGridColumns()
