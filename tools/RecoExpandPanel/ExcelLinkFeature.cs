@@ -4789,6 +4789,8 @@ namespace RecoNet
         {
             private const int QuantityNameMinLength = 15;
             private const int QuantityNameMinFragments = 3;
+            private const int QuantityNameMaxLength = 30;
+            private const int QuantityNameMaxFragments = 6;
 
             private Dictionary<string, AiExcelCell> cellByAddress;
             private Dictionary<long, string> quantityNameByCell;
@@ -4858,7 +4860,8 @@ namespace RecoNet
                     }
                 }
 
-                // 就近优先保留：先收最靠近数量格的列，超过10字或3段后舍弃更外层的类别文字。
+                // 就近优先保留：先收最靠近数量格的列。凑够至少15字/3段即停；
+                // 但不超过30字/6段硬上界（窄列很多时避免拼出超长名称）。
                 List<KeyValuePair<int, string>> kept = new List<KeyValuePair<int, string>>();
                 int totalLength = 0;
                 foreach (KeyValuePair<int, string> fragment in fragments
@@ -4866,6 +4869,12 @@ namespace RecoNet
                     .ThenBy(f => f.Key))
                 {
                     if (kept.Count >= QuantityNameMinFragments && totalLength >= QuantityNameMinLength)
+                    {
+                        break;
+                    }
+
+                    if (kept.Count >= QuantityNameMaxFragments ||
+                        (kept.Count > 0 && totalLength + fragment.Value.Length > QuantityNameMaxLength))
                     {
                         break;
                     }
