@@ -1159,6 +1159,7 @@ namespace RecoNet
                 link.CellAddress = cell.CellAddress;
                 link.Expression = cell.CellAddress;
                 link.LastSyncValue = cell.DisplayValue;
+                link.QuantityName = BuildQuantityNameForWorkbookExpression(link.ExcelPath, link.WorksheetName, link.Expression);
                 link.LastStatus = "已绑定，等待同步";
                 link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
@@ -1238,6 +1239,7 @@ namespace RecoNet
                     link.CellAddress = address;
                     link.Expression = address;
                     link.LastSyncValue = displayValue ?? "";
+                    link.QuantityName = BuildQuantityNameForWorkbookExpression(link.ExcelPath, link.WorksheetName, link.Expression);
                     link.LastStatus = "批量绑定，等待同步";
                     link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
                     store.Upsert(link);
@@ -1852,50 +1854,92 @@ namespace RecoNet
             return selection.GetQuantityNameForCell(target.Row, target.Column);
         }
 
-        private static string BuildQuantityNameNearActiveExcelCell(ExcelCellAddress cell)
+        private static string BuildQuantityNameForWorkbookExpression(string workbook, string sheet, string expression)
         {
-            if (cell == null)
+            Dictionary<string, HashSet<int>> hiddenColumnCache = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache = new Dictionary<string, List<ExcelMergedRegion>>(StringComparer.OrdinalIgnoreCase);
+            List<ExcelQuotaLink> readLinks = new List<ExcelQuotaLink>();
+            AddQuantityNameReadLinks(readLinks, workbook, sheet, expression, hiddenColumnCache, mergedRegionCache);
+            ExcelSyncReadContext readContext = new ExcelSyncReadContext(readLinks);
+            return ReadRowNameAt(workbook, sheet, expression, hiddenColumnCache, mergedRegionCache, readContext);
+        }
+
+        private static void AddQuantityNameReadLinks(List<ExcelQuotaLink> readLinks, string workbook, string sheet, string expression, Dictionary<string, HashSet<int>> hiddenColumnCache, Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache)
+        {
+            if (readLinks == null || String.IsNullOrWhiteSpace(workbook) || String.IsNullOrWhiteSpace(sheet) || String.IsNullOrWhiteSpace(expression))
             {
-                return "";
+                return;
             }
 
-            try
+            List<ExcelMergedRegion> mergedRegions = GetSavedMergedRegionsCached(workbook, sheet, mergedRegionCache);
+            string expr = NormalizeExpressionMergedAnchors(expression, mergedRegions);
+            string first = ExtractFirstCellAddress(expr);
+            CellRef firstCell;
+            if (String.IsNullOrEmpty(first) || !TryParseCellAddress(first, out firstCell))
             {
-                CellRef cellRef;
-                if (!TryParseCellAddress(cell.CellAddress, out cellRef))
-                {
-                    return "";
-                }
-
-                dynamic excel = GetActiveSpreadsheetApplication();
-                if (excel == null)
-                {
-                    return "";
-                }
-
-                dynamic sheet = excel.ActiveSheet;
-                List<string> texts = new List<string>();
-                int startColumn = Math.Max(1, cellRef.Column - 6);
-                for (int col = startColumn; col < cellRef.Column; col++)
-                {
-                    string address = ColumnNumberToName(col) + cellRef.Row.ToString(CultureInfo.InvariantCulture);
-                    dynamic range = sheet.Range[address];
-                    string text = ExcelValueToText(range.Value2);
-                    decimal parsed;
-                    string parseError;
-                    if (!String.IsNullOrWhiteSpace(text) && !TryEvaluateDecimal(text, out parsed, out parseError))
-                    {
-                        texts.Add(text);
-                    }
-                }
-
-                return String.Join(" ", texts.ToArray()).Trim();
+                return;
             }
-            catch (Exception ex)
+
+            HashSet<int> hiddenColumns = GetSavedHiddenColumns(workbook, sheet, hiddenColumnCache);
+            for (int col = 1; col < firstCell.Column; col++)
             {
-                Log("BuildQuantityNameNearActiveExcelCell failed: " + ex.Message);
-                return "";
+                if (hiddenColumns.Contains(col))
+                {
+                    continue;
+                }
+
+                string address = BuildExcelCellAddress(col, firstCell.Row);
+                readLinks.Add(new ExcelQuotaLink { ExcelPath = workbook, WorksheetName = sheet, CellAddress = address, Expression = address });
+
+                ExcelMergedRegion region = FindExcelMergedRegionAt(mergedRegions, col, firstCell.Row);
+                if (region != null)
+                {
+                    string anchorAddress = BuildExcelCellAddress(region.FirstColumn, region.FirstRow);
+                    readLinks.Add(new ExcelQuotaLink { ExcelPath = workbook, WorksheetName = sheet, CellAddress = anchorAddress, Expression = anchorAddress });
+                }
             }
+        }
+
+        private static int RefreshStoredQuantityNames(ExcelLinkStore store)
+        {
+            if (store == null || store.Links == null || store.Links.Count == 0)
+            {
+                return 0;
+            }
+
+            Dictionary<string, HashSet<int>> hiddenColumnCache = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache = new Dictionary<string, List<ExcelMergedRegion>>(StringComparer.OrdinalIgnoreCase);
+            List<ExcelQuotaLink> readLinks = new List<ExcelQuotaLink>();
+            foreach (ExcelQuotaLink link in store.Links)
+            {
+                if (link == null)
+                {
+                    continue;
+                }
+
+                string expression = String.IsNullOrWhiteSpace(link.Expression) ? link.CellAddress : link.Expression;
+                AddQuantityNameReadLinks(readLinks, link.ExcelPath, link.WorksheetName, expression, hiddenColumnCache, mergedRegionCache);
+            }
+
+            ExcelSyncReadContext readContext = new ExcelSyncReadContext(readLinks);
+            int updated = 0;
+            foreach (ExcelQuotaLink link in store.Links)
+            {
+                if (link == null)
+                {
+                    continue;
+                }
+
+                string expression = String.IsNullOrWhiteSpace(link.Expression) ? link.CellAddress : link.Expression;
+                string name = ReadRowNameAt(link.ExcelPath, link.WorksheetName, expression, hiddenColumnCache, mergedRegionCache, readContext);
+                if (!String.IsNullOrWhiteSpace(name) && !String.Equals(link.QuantityName ?? "", name, StringComparison.Ordinal))
+                {
+                    link.QuantityName = name;
+                    updated++;
+                }
+            }
+
+            return updated;
         }
 
         private static void AcceptAiMatchesToMappingStore(List<AiMatchPreviewItem> items)
@@ -4789,8 +4833,7 @@ namespace RecoNet
         {
             private const int QuantityNameMinLength = 15;
             private const int QuantityNameMinFragments = 3;
-            private const int QuantityNameMaxLength = 30;
-            private const int QuantityNameMaxFragments = 6;
+            private const int QuantityNameMaxFragments = 4;
 
             private Dictionary<string, AiExcelCell> cellByAddress;
             private Dictionary<long, string> quantityNameByCell;
@@ -4860,27 +4903,24 @@ namespace RecoNet
                     }
                 }
 
-                // 就近优先保留：先收最靠近数量格的列。凑够至少15字/3段即停；
-                // 但不超过30字/6段硬上界（窄列很多时避免拼出超长名称）。
+                // 就近优先保留：默认取3段；不足3段时有几段取几段；取满3段仍不足15字时再补1段。
                 List<KeyValuePair<int, string>> kept = new List<KeyValuePair<int, string>>();
                 int totalLength = 0;
                 foreach (KeyValuePair<int, string> fragment in fragments
                     .OrderBy(f => Math.Abs(f.Key - column))
                     .ThenBy(f => f.Key))
                 {
-                    if (kept.Count >= QuantityNameMinFragments && totalLength >= QuantityNameMinLength)
-                    {
-                        break;
-                    }
-
-                    if (kept.Count >= QuantityNameMaxFragments ||
-                        (kept.Count > 0 && totalLength + fragment.Value.Length > QuantityNameMaxLength))
+                    if (kept.Count >= QuantityNameMaxFragments)
                     {
                         break;
                     }
 
                     kept.Add(fragment);
                     totalLength += fragment.Value.Length;
+                    if (kept.Count >= QuantityNameMinFragments && totalLength >= QuantityNameMinLength)
+                    {
+                        break;
+                    }
                 }
 
                 string name = String.Join(" ", kept.OrderBy(f => f.Key).Select(f => f.Value).ToArray()).Trim();
@@ -6637,7 +6677,7 @@ namespace RecoNet
                     link.CellAddress = firstCell;
                     link.Expression = expression;
                     link.LastSyncValue = displayValue ?? "";
-                    link.QuantityName = BuildQuantityNameNearActiveExcelCell(cell);
+                    link.QuantityName = BuildQuantityNameForWorkbookExpression(link.ExcelPath, link.WorksheetName, link.Expression);
                     link.LastStatus = simpleMode.Checked ? "简单绑定，等待同步" : "表达式绑定，等待同步";
                     link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
@@ -7129,7 +7169,7 @@ namespace RecoNet
                     link.CellAddress = address;
                     link.Expression = expression;
                     link.LastSyncValue = displayValue ?? "";
-                    link.QuantityName = activeCell == null ? "" : BuildQuantityNameNearActiveExcelCell(activeCell);
+                    link.QuantityName = BuildQuantityNameForWorkbookExpression(link.ExcelPath, link.WorksheetName, link.Expression);
                     link.LastStatus = "快速绑定，等待同步";
                     link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
@@ -7329,6 +7369,11 @@ namespace RecoNet
                 }
 
                 ExcelLinkStore store = LoadStore(conn);
+                int refreshedNames = RefreshStoredQuantityNames(store);
+                if (refreshedNames > 0)
+                {
+                    SaveStore(conn, store);
+                }
 
                 // 每条绑定的数量表名只算一次。
                 List<KeyValuePair<ExcelQuotaLink, string>> rows = store.Links

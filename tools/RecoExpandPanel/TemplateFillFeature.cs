@@ -511,12 +511,11 @@ namespace RecoNet
 
         private const int RowNameMinLength = 15;
         private const int RowNameMinFragments = 3;
-        private const int RowNameMaxLength = 30;
-        private const int RowNameMaxFragments = 6;
+        private const int RowNameMaxFragments = 4;
 
         // 读某表达式首个单元格所在行的名称（该格列前的非数字文本拼接），仅供人工核对。
-        // 空格只从包含它的真实合并区域锚点回填；就近优先，凑够至少15字/3段即停，
-        // 不超过30字/6段硬上界，同一合并区域只拼一次。
+        // 空格只从包含它的真实合并区域锚点回填；就近优先默认取3段，不足3段时有几段取几段；
+        // 取满3段仍不足15字时再补1段，同一合并区域只拼一次。
         private static string ReadRowNameAt(string workbook, string sheet, string expr, Dictionary<string, HashSet<int>> hiddenColumnCache, Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache, ExcelSyncReadContext readContext)
         {
             try
@@ -556,19 +555,17 @@ namespace RecoNet
                     .OrderBy(f => Math.Abs(f.Key - cr.Column))
                     .ThenBy(f => f.Key))
                 {
-                    if (kept.Count >= RowNameMinFragments && totalLength >= RowNameMinLength)
-                    {
-                        break;
-                    }
-
-                    if (kept.Count >= RowNameMaxFragments ||
-                        (kept.Count > 0 && totalLength + fragment.Value.Length > RowNameMaxLength))
+                    if (kept.Count >= RowNameMaxFragments)
                     {
                         break;
                     }
 
                     kept.Add(fragment);
                     totalLength += fragment.Value.Length;
+                    if (kept.Count >= RowNameMinFragments && totalLength >= RowNameMinLength)
+                    {
+                        break;
+                    }
                 }
 
                 return String.Join(" ", kept.OrderBy(f => f.Key).Select(f => f.Value).ToArray()).Trim();
