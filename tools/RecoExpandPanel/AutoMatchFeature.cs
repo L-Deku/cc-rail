@@ -1103,60 +1103,27 @@ namespace RecoNet
                     continue;
                 }
 
+                builder.Append(normalized.Substring(previousEnd, match.Index - previousEnd));
                 string text = "";
+                bool read = false;
                 AiExcelCell cell;
                 if (cells.TryGetValue(address, out cell))
                 {
                     text = cell.Text ?? "";
+                    read = true;
                 }
                 else
                 {
                     string readError;
-                    TryReadWorkbookCellValue(context.WorkbookPath, context.WorksheetName, address, out text, out readError);
+                    read = TryReadWorkbookCellValue(context.WorkbookPath, context.WorksheetName, address, out text, out readError);
                 }
 
-                string between = normalized.Substring(previousEnd, match.Index - previousEnd);
-                string sign = FindLastExpressionSign(between);
-                if (builder.Length == 0)
-                {
-                    if (String.Equals(sign, "-", StringComparison.Ordinal))
-                    {
-                        builder.Append("-");
-                    }
-                }
-                else
-                {
-                    builder.Append(String.Equals(sign, "-", StringComparison.Ordinal) ? "-" : "+");
-                }
-
-                builder.Append(String.IsNullOrWhiteSpace(text) ? address : text.Trim());
+                builder.Append(!read ? address : (String.IsNullOrWhiteSpace(text) ? "0" : text.Trim()));
                 previousEnd = match.Index + match.Length;
             }
 
+            builder.Append(normalized.Substring(previousEnd));
             return builder.ToString();
-        }
-
-        private static string FindLastExpressionSign(string text)
-        {
-            if (String.IsNullOrEmpty(text))
-            {
-                return "+";
-            }
-
-            for (int i = text.Length - 1; i >= 0; i--)
-            {
-                if (text[i] == '+')
-                {
-                    return "+";
-                }
-
-                if (text[i] == '-')
-                {
-                    return "-";
-                }
-            }
-
-            return "+";
         }
 
         private static bool TryListActiveWorkbookSheets(out List<string> sheetNames, out string activeSheetName, out string error)
@@ -1576,6 +1543,7 @@ namespace RecoNet
                 grid.RowHeadersVisible = false;
                 grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
                 grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+                grid.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
                 grid.CellEndEdit += delegate(object sender, DataGridViewCellEventArgs e)
                 {
                     if (e.RowIndex >= 0 && e.ColumnIndex >= 0 && String.Equals(grid.Columns[e.ColumnIndex].Name, "Expression", StringComparison.Ordinal))
@@ -2276,7 +2244,10 @@ namespace RecoNet
                 }
 
                 return matchStatus.IndexOf("\u6570\u91cf\u4e3a0", StringComparison.Ordinal) >= 0 ||
-                    matchStatus.IndexOf("\u591a\u5904\u5339\u914d", StringComparison.Ordinal) >= 0;
+                    matchStatus.IndexOf("\u591a\u5904\u5339\u914d", StringComparison.Ordinal) >= 0 ||
+                    matchStatus.IndexOf("\u672a\u5339\u914d", StringComparison.Ordinal) >= 0 ||
+                    matchStatus.IndexOf("\u9a8c\u7b97\u4e0d\u7b26", StringComparison.Ordinal) >= 0 ||
+                    matchStatus.IndexOf("\u8868\u8fbe\u5f0f\u65e0\u6cd5\u8ba1\u7b97", StringComparison.Ordinal) >= 0;
             }
 
             private void ApplyAutoMatchRowStyle(DataGridViewRow row)
@@ -2379,7 +2350,9 @@ namespace RecoNet
                 }
                 else
                 {
+                    item.Checked = true;
                     item.MatchStatus = "\u624b\u52a8\u4fee\u6539";
+                    row.Cells["Checked"].Value = true;
                 }
 
                 row.Cells["Expression"].Value = item.Expression;
@@ -2812,7 +2785,7 @@ namespace RecoNet
                 item.Expression = expression;
                 item.CellAddress = snapshotCell.Address;
                 item.DisplayValue = displayValue ?? "";
-                item.ExcelQuantityText = snapshotCell.Text ?? "";
+                item.ExcelQuantityText = String.IsNullOrWhiteSpace(snapshotCell.Text) ? "0" : snapshotCell.Text;
                 item.QuantityName = BuildQuantityNameFromExcelRow(currentContext, snapshotCell.Address);
                 item.MatchStatus = "\u624b\u52a8\u5339\u914d";
                 item.MatchOptions = new List<AutoMatchCandidateOption>();
