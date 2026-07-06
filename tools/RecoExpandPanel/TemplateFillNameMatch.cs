@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
+using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -360,6 +361,132 @@ namespace RecoNet
                 items.Add(item);
             }
             return items;
+        }
+
+        private sealed class ProjectQuota
+        {
+            public string Code; public string Name; public string Unit; public long QuotaSeq;
+            public override string ToString()
+            { return (Code ?? "") + "  " + (Name ?? "") + (String.IsNullOrEmpty(Unit) ? "" : "  [" + Unit + "]"); }
+        }
+
+        private static List<ProjectQuota> LoadProjectQuotas(Form mainForm)
+        {
+            List<ProjectQuota> list = new List<ProjectQuota>();
+            try
+            {
+                using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
+                {
+                    EnsureOpen(conn);
+                    using (SqlCommand cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "select 定额编号, 工程或费用项目名称, 单位, min(定额序号) from 定额输入 " +
+                            "where 定额编号 is not null and ltrim(rtrim(定额编号))<>'' and 定额编号<>'-' " +
+                            "group by 定额编号, 工程或费用项目名称, 单位";
+                        using (SqlDataReader r = cmd.ExecuteReader())
+                        {
+                            while (r.Read())
+                            {
+                                ProjectQuota q = new ProjectQuota();
+                                q.Code = r.IsDBNull(0) ? "" : Convert.ToString(r.GetValue(0)).Trim();
+                                q.Name = r.IsDBNull(1) ? "" : Convert.ToString(r.GetValue(1)).Trim();
+                                q.Unit = r.IsDBNull(2) ? "" : Convert.ToString(r.GetValue(2)).Trim();
+                                q.QuotaSeq = r.IsDBNull(3) ? 0L : Convert.ToInt64(r.GetValue(3), CultureInfo.InvariantCulture);
+                                if (q.Code.Length > 0 && q.QuotaSeq > 0) list.Add(q);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) { Log("LoadProjectQuotas failed: " + ex.Message); }
+            return list;
+        }
+
+        private static long LoadProjectQuotaSeqByCode(List<ProjectQuota> all, string code)
+        {
+            if (String.IsNullOrWhiteSpace(code)) return 0;
+            ProjectQuota q = all.FirstOrDefault(x => String.Equals(x.Code, code.Trim(), StringComparison.OrdinalIgnoreCase));
+            return q == null ? 0 : q.QuotaSeq;
+        }
+
+        private static List<ProjectQuota> RankProjectQuotas(List<ProjectQuota> all, string name)
+        {
+            string q = NormalizeMatchText(name ?? "");
+            return all
+                .Select(o => new KeyValuePair<int, ProjectQuota>(MatchNameScore(q, NormalizeMatchText(o.Name)), o))
+                .Where(p => p.Key > 0)
+                .OrderByDescending(p => p.Key)
+                .Take(8)
+                .Select(p => p.Value)
+                .ToList();
+        }
+
+        // 把手挂结果落到预览：单条=补当前行；多条=当前行为组第一行，其余克隆插入(组内序 GroupOrder)。
+        private static void ApplyManualQuotaPick(List<FillPreviewItem> preview, FillPreviewItem target, List<ProjectQuota> picked)
+        {
+            if (preview == null || target == null || picked == null || picked.Count == 0) return;
+            int idx = preview.IndexOf(target);
+            target.NeedManualQuota = false;
+            target.Selected = true;
+            target.QuotaCode = picked[0].Code;
+            target.ChosenQuotaSeq = picked[0].QuotaSeq;
+            target.GroupOrder = 0;
+            target.AlignNote = "已手挂 " + picked[0].Code + (picked.Count > 1 ? ("（组 " + picked.Count.ToString(CultureInfo.InvariantCulture) + " 条）") : "");
+            for (int k = 1; k < picked.Count; k++)
+            {
+                FillPreviewItem extra = new FillPreviewItem();
+                extra.IsNameDriven = true; extra.Selected = true;
+                extra.TemplateName = target.TemplateName; extra.TargetRow = target.TargetRow;
+                extra.ItemNo = target.ItemNo; extra.OrderInItem = target.OrderInItem;
+                extra.NeighborSourceQuotaSeq = target.NeighborSourceQuotaSeq;
+                extra.QuotaCode = picked[k].Code; extra.ChosenQuotaSeq = picked[k].QuotaSeq;
+                extra.GroupOrder = k; extra.SourceName = ""; extra.TargetName = "";
+                extra.QuantityText = target.QuantityText;
+                extra.AlignNote = "组件框第 " + (k + 1).ToString(CultureInfo.InvariantCulture) + " 条";
+                if (idx >= 0) preview.Insert(idx + k, extra); else preview.Add(extra);
+            }
+        }
+
+        private sealed class QuotaPickerDialog : Form
+        {
+            private readonly TextBox txt = new TextBox();
+            private readonly CheckedListBox lst = new CheckedListBox();
+            private readonly Button ok = new Button();
+            private readonly List<ProjectQuota> all;
+            private readonly List<ProjectQuota> suggested;
+            public List<ProjectQuota> Picked = new List<ProjectQuota>();
+
+            public QuotaPickerDialog(List<ProjectQuota> allq, List<ProjectQuota> sug)
+            {
+                all = allq ?? new List<ProjectQuota>();
+                suggested = sug ?? new List<ProjectQuota>();
+                Text = "选择定额（可多选=一量对多）"; StartPosition = FormStartPosition.CenterParent; ClientSize = new Size(520, 430);
+                Label tip = new Label { Text = "搜索定额编号/名称；留空显示推荐；勾选多条=该工程量对应多条定额", AutoSize = false };
+                tip.SetBounds(12, 10, 496, 18);
+                txt.SetBounds(12, 32, 496, 23);
+                lst.SetBounds(12, 62, 496, 320); lst.CheckOnClick = true;
+                ok.Text = "确定"; ok.SetBounds(428, 392, 80, 27);
+                Controls.Add(tip); Controls.Add(txt); Controls.Add(lst); Controls.Add(ok);
+                txt.TextChanged += delegate { RefreshList(); };
+                ok.Click += delegate {
+                    Picked = lst.CheckedItems.Cast<ProjectQuota>().ToList();
+                    if (Picked.Count == 0 && lst.SelectedItem is ProjectQuota) Picked.Add((ProjectQuota)lst.SelectedItem);
+                    DialogResult = DialogResult.OK; Close();
+                };
+                RefreshList();
+            }
+
+            private void RefreshList()
+            {
+                string q = NormalizeMatchText(txt.Text);
+                lst.Items.Clear();
+                IEnumerable<ProjectQuota> src;
+                if (q.Length == 0) src = suggested;
+                else src = all.Select(o => new KeyValuePair<int, ProjectQuota>(
+                        NormalizeMatchText(o.Code).IndexOf(q, StringComparison.Ordinal) >= 0 ? 1000 : MatchNameScore(q, NormalizeMatchText(o.Name)), o))
+                    .Where(p => p.Key > 0).OrderByDescending(p => p.Key).Take(60).Select(p => p.Value);
+                foreach (ProjectQuota o in src) lst.Items.Add(o);
+            }
         }
     }
 }

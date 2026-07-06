@@ -125,6 +125,7 @@ namespace RecoNet
                         grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
                     }
                 };
+                grid.CellDoubleClick += delegate(object sender, DataGridViewCellEventArgs e) { OnNameGridDoubleClick(e); };
 
                 split.Panel1.Controls.Add(itemTree);
                 split.Panel2.Controls.Add(grid);
@@ -354,6 +355,21 @@ namespace RecoNet
                     {
                         it.Selected = Convert.ToBoolean(row.Cells["sel"].Value ?? false);
                     }
+                }
+            }
+
+            private void OnNameGridDoubleClick(DataGridViewCellEventArgs e)
+            {
+                if (e.RowIndex < 0) return;
+                FillPreviewItem it = grid.Rows[e.RowIndex].Tag as FillPreviewItem;
+                if (it == null || !it.NeedManualQuota) return;
+                List<ProjectQuota> all = LoadProjectQuotas(mainForm);
+                List<ProjectQuota> sug = RankProjectQuotas(all, it.TargetName);
+                using (QuotaPickerDialog dlg = new QuotaPickerDialog(all, sug))
+                {
+                    if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Picked.Count == 0) return;
+                    ApplyManualQuotaPick(preview, it, dlg.Picked);
+                    FillGrid();
                 }
             }
 
