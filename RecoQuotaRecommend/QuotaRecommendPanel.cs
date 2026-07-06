@@ -9980,14 +9980,8 @@ namespace RecoQuotaRecommend
             string filePath = Path.Combine(LearningStore.FindDataDir(), "mapping-boxes.jsonl");
             MappingStore store = new MappingStore(filePath);
             store.LoadFile();
-            if (store.boxes.Count == 0)
-            {
-                store.ImportCorrections(records);
-                if (store.boxes.Count > 0)
-                {
-                    store.Save();
-                }
-            }
+            // 扶正训练器已停写库：不再从旧 learning 纠错记录自动播种 mapping-boxes，
+            // 定额对应框只由“推荐窗口扶正”和“绑定Excel工程量”两条高信号路径写入。
             return store;
         }
 

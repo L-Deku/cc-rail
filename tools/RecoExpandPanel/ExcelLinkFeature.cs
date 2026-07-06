@@ -1159,7 +1159,7 @@ namespace RecoNet
                 link.CellAddress = cell.CellAddress;
                 link.Expression = cell.CellAddress;
                 link.LastSyncValue = cell.DisplayValue;
-                link.QuantityName = BuildQuantityNameForWorkbookExpression(link.ExcelPath, link.WorksheetName, link.Expression);
+                FinalizeBoundLinkName(link);
                 link.LastStatus = "已绑定，等待同步";
                 link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
@@ -1239,7 +1239,7 @@ namespace RecoNet
                     link.CellAddress = address;
                     link.Expression = address;
                     link.LastSyncValue = displayValue ?? "";
-                    link.QuantityName = BuildQuantityNameForWorkbookExpression(link.ExcelPath, link.WorksheetName, link.Expression);
+                    FinalizeBoundLinkName(link);
                     link.LastStatus = "批量绑定，等待同步";
                     link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
                     store.Upsert(link);
@@ -1854,14 +1854,23 @@ namespace RecoNet
             return selection.GetQuantityNameForCell(target.Row, target.Column);
         }
 
-        private static string BuildQuantityNameForWorkbookExpression(string workbook, string sheet, string expression)
+        // 绑定收尾：一次读取派生“显示名(截断，供联动面板)”＋“全名(不截断，写定额对应框)”，
+        // 避免 Excel 点选即时绑定热路径重复读表；随后把全名->定额写入 mapping-boxes。
+        private static void FinalizeBoundLinkName(ExcelQuotaLink link)
         {
+            if (link == null)
+            {
+                return;
+            }
+
             Dictionary<string, HashSet<int>> hiddenColumnCache = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
             Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache = new Dictionary<string, List<ExcelMergedRegion>>(StringComparer.OrdinalIgnoreCase);
             List<ExcelQuotaLink> readLinks = new List<ExcelQuotaLink>();
-            AddQuantityNameReadLinks(readLinks, workbook, sheet, expression, hiddenColumnCache, mergedRegionCache);
+            AddQuantityNameReadLinks(readLinks, link.ExcelPath, link.WorksheetName, link.Expression, hiddenColumnCache, mergedRegionCache);
             ExcelSyncReadContext readContext = new ExcelSyncReadContext(readLinks);
-            return ReadRowNameAt(workbook, sheet, expression, hiddenColumnCache, mergedRegionCache, readContext);
+            link.QuantityName = ReadRowNameAt(link.ExcelPath, link.WorksheetName, link.Expression, hiddenColumnCache, mergedRegionCache, readContext);
+            string fullName = ReadRowNameAt(link.ExcelPath, link.WorksheetName, link.Expression, hiddenColumnCache, mergedRegionCache, readContext, true);
+            RecordBindingToMappingStore(link, fullName);
         }
 
         private static void AddQuantityNameReadLinks(List<ExcelQuotaLink> readLinks, string workbook, string sheet, string expression, Dictionary<string, HashSet<int>> hiddenColumnCache, Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache)
@@ -1942,9 +1951,11 @@ namespace RecoNet
             return updated;
         }
 
-        private static void AcceptAiMatchesToMappingStore(List<AiMatchPreviewItem> items)
+        // 绑定Excel工程量成功后，把“工程量全名 -> 定额编号”写入推荐插件的定额对应框（mapping-boxes.jsonl）。
+        // 复用推荐窗口扶正一致的 schema/互斥锁/框内去重加权；写库失败不得影响绑定本身。
+        private static void RecordBindingToMappingStore(ExcelQuotaLink link, string fullQuantityName)
         {
-            if (items == null || items.Count == 0)
+            if (link == null || !IsAutoMatchQuotaCode(link.QuotaCode) || String.IsNullOrWhiteSpace(fullQuantityName))
             {
                 return;
             }
@@ -1968,42 +1979,34 @@ namespace RecoNet
                     }
                 }
 
-                foreach (AiMatchPreviewItem item in items)
+                string targetKey = "quota:" + link.QuotaCode.Trim().ToUpperInvariant();
+                string boxId = FindExistingMappingBoxId(rows, targetKey) ?? BuildSingleQuotaBoxId(link.QuotaCode);
+                string signature = NormalizeForSignature(fullQuantityName) + "|";
+                Dictionary<string, string> existing = rows.FirstOrDefault(row =>
+                    String.Equals(GetFlat(row, "box_id"), boxId, StringComparison.OrdinalIgnoreCase) &&
+                    String.Equals(NormalizeForSignature(GetFlat(row, "quantity_name")) + "|" + NormalizeForSignature(GetFlat(row, "quantity_unit")), signature, StringComparison.OrdinalIgnoreCase));
+
+                if (existing == null)
                 {
-                    if (item == null || item.Link == null || String.IsNullOrWhiteSpace(item.Link.QuotaCode) || String.IsNullOrWhiteSpace(item.QuantityName))
-                    {
-                        continue;
-                    }
-
-                    string targetKey = "quota:" + item.Link.QuotaCode.Trim().ToUpperInvariant();
-                    string boxId = FindExistingMappingBoxId(rows, targetKey) ?? BuildSingleQuotaBoxId(item.Link.QuotaCode);
-                    string signature = NormalizeForSignature(item.QuantityName) + "|";
-                    Dictionary<string, string> existing = rows.FirstOrDefault(row =>
-                        String.Equals(GetFlat(row, "box_id"), boxId, StringComparison.OrdinalIgnoreCase) &&
-                        String.Equals(NormalizeForSignature(GetFlat(row, "quantity_name")) + "|" + NormalizeForSignature(GetFlat(row, "quantity_unit")), signature, StringComparison.OrdinalIgnoreCase));
-
-                    if (existing == null)
-                    {
-                        existing = new Dictionary<string, string>();
-                        rows.Add(existing);
-                        existing["record_type"] = "mapping_box";
-                        existing["box_id"] = boxId;
-                        existing["target_kind"] = "quota";
-                        existing["target_code"] = item.Link.QuotaCode ?? "";
-                        existing["target_name"] = item.Link.QuotaName ?? "";
-                        existing["target_unit"] = item.QuotaUnit ?? "";
-                        existing["quantity_name"] = item.QuantityName ?? "";
-                        existing["quantity_unit"] = "";
-                        existing["weight"] = "10";
-                        existing["accepted_count"] = "0";
-                        existing["corrected_count"] = "0";
-                        existing["rejected_count"] = "0";
-                    }
-
-                    existing["weight"] = (ReadFlatInt(existing, "weight", 0) + 5).ToString(CultureInfo.InvariantCulture);
-                    existing["accepted_count"] = (ReadFlatInt(existing, "accepted_count", 0) + 1).ToString(CultureInfo.InvariantCulture);
-                    existing["last_used_at"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+                    existing = new Dictionary<string, string>();
+                    rows.Add(existing);
+                    existing["record_type"] = "mapping_box";
+                    existing["box_id"] = boxId;
+                    existing["target_kind"] = "quota";
+                    existing["target_code"] = link.QuotaCode ?? "";
+                    existing["target_name"] = link.QuotaName ?? "";
+                    existing["target_unit"] = "";
+                    existing["quantity_name"] = fullQuantityName;
+                    existing["quantity_unit"] = "";
+                    existing["weight"] = "10";
+                    existing["accepted_count"] = "0";
+                    existing["corrected_count"] = "0";
+                    existing["rejected_count"] = "0";
                 }
+
+                existing["weight"] = (ReadFlatInt(existing, "weight", 0) + 5).ToString(CultureInfo.InvariantCulture);
+                existing["accepted_count"] = (ReadFlatInt(existing, "accepted_count", 0) + 1).ToString(CultureInfo.InvariantCulture);
+                existing["last_used_at"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
                 TrimMappingRows(rows, 30);
                 File.WriteAllLines(path, rows.Select(ToFlatJson).ToArray(), Encoding.UTF8);
@@ -2011,7 +2014,7 @@ namespace RecoNet
             }
             catch (Exception ex)
             {
-                Log("Accept AI Excel matches to mapping store failed: " + ex.Message);
+                Log("Record binding to mapping store failed: " + ex.Message);
             }
         }
 
@@ -6677,7 +6680,7 @@ namespace RecoNet
                     link.CellAddress = firstCell;
                     link.Expression = expression;
                     link.LastSyncValue = displayValue ?? "";
-                    link.QuantityName = BuildQuantityNameForWorkbookExpression(link.ExcelPath, link.WorksheetName, link.Expression);
+                    FinalizeBoundLinkName(link);
                     link.LastStatus = simpleMode.Checked ? "简单绑定，等待同步" : "表达式绑定，等待同步";
                     link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
@@ -7169,7 +7172,7 @@ namespace RecoNet
                     link.CellAddress = address;
                     link.Expression = expression;
                     link.LastSyncValue = displayValue ?? "";
-                    link.QuantityName = BuildQuantityNameForWorkbookExpression(link.ExcelPath, link.WorksheetName, link.Expression);
+                    FinalizeBoundLinkName(link);
                     link.LastStatus = "快速绑定，等待同步";
                     link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 

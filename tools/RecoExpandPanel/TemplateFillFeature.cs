@@ -518,6 +518,12 @@ namespace RecoNet
         // 取满3段仍不足15字时再补1段，同一合并区域只拼一次。
         private static string ReadRowNameAt(string workbook, string sheet, string expr, Dictionary<string, HashSet<int>> hiddenColumnCache, Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache, ExcelSyncReadContext readContext)
         {
+            return ReadRowNameAt(workbook, sheet, expr, hiddenColumnCache, mergedRegionCache, readContext, false);
+        }
+
+        // fullText=true：不做 15字/3段 截断，取该行数量列左侧全部非数字文本，供机器匹配（绑定写定额对应框）。
+        private static string ReadRowNameAt(string workbook, string sheet, string expr, Dictionary<string, HashSet<int>> hiddenColumnCache, Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache, ExcelSyncReadContext readContext, bool fullText)
+        {
             try
             {
                 HashSet<int> hiddenColumns = GetSavedHiddenColumns(workbook, sheet, hiddenColumnCache);
@@ -555,14 +561,14 @@ namespace RecoNet
                     .OrderBy(f => Math.Abs(f.Key - cr.Column))
                     .ThenBy(f => f.Key))
                 {
-                    if (kept.Count >= RowNameMaxFragments)
+                    if (!fullText && kept.Count >= RowNameMaxFragments)
                     {
                         break;
                     }
 
                     kept.Add(fragment);
                     totalLength += fragment.Value.Length;
-                    if (kept.Count >= RowNameMinFragments && totalLength >= RowNameMinLength)
+                    if (!fullText && kept.Count >= RowNameMinFragments && totalLength >= RowNameMinLength)
                     {
                         break;
                     }
