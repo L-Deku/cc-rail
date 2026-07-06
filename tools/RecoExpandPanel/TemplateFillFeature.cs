@@ -426,13 +426,6 @@ namespace RecoNet
                 new KeyValuePair<string, string>(targetSheet, RetargetExprColumn(row.SourceExpr, targetColumn)));
         }
 
-        // 模式二：固定绑定列。直接读模板记录的原 sheet/单元格（用户已把目标单元数量粘进该列）。
-        private static List<FillPreviewItem> BuildPreview_FixedColumn(FillTemplate template)
-        {
-            return BuildPreview(template, row =>
-                new KeyValuePair<string, string>(row.SourceSheet, row.SourceExpr));
-        }
-
         // 两种取数模式共用：resolver 给出每行的 (目标sheet, 取数表达式)，其余流程一致。
         private static List<FillPreviewItem> BuildPreview(
             FillTemplate template, Func<FillTemplateRow, KeyValuePair<string, string>> resolver)

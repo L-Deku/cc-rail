@@ -26,6 +26,7 @@ namespace RecoNet
             private readonly TextBox txtTargetUnit = new TextBox();
             private readonly Button btnPreview = new Button();
             private readonly Button btnApply = new Button();
+            private readonly CheckBox chkNameMode = new CheckBox();
             private readonly SplitContainer split = new SplitContainer();
             private readonly TreeView itemTree = new TreeView();
             private readonly DataGridView grid = new DataGridView();
@@ -59,6 +60,9 @@ namespace RecoNet
                 txtName.SetBounds(438, 12, 120, 23); txtName.Text = "";
                 btnBuild.SetBounds(568, 11, 130, 25); btnBuild.Text = "从该单元生成模板";
                 btnBuild.Click += delegate { OnBuild(); };
+                chkNameMode.SetBounds(568, 38, 130, 20);
+                chkNameMode.Text = "按名字生成";
+                Controls.Add(chkNameMode);
 
                 // —— 套用配置 ——
                 AddLabel("模板", 12, 50, 36);
@@ -67,7 +71,7 @@ namespace RecoNet
                 btnDeleteTemplate.Click += delegate { OnDeleteTemplate(); };
                 AddLabel("取数模式", 320, 50, 60);
                 cmbMode.SetBounds(385, 47, 150, 23); cmbMode.DropDownStyle = ComboBoxStyle.DropDownList;
-                cmbMode.Items.AddRange(new object[] { "一·列锚点", "二·固定绑定列" });
+                cmbMode.Items.AddRange(new object[] { "一·列锚点", "二·名字驱动" });
                 cmbMode.SelectedIndex = 0;
                 AddLabel("目标sheet", 12, 82, 60);
                 txtSheet.SetBounds(75, 79, 120, 23); txtSheet.Text = "";
@@ -184,8 +188,9 @@ namespace RecoNet
                     int count;
                     using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
                     {
-                        FillTemplate t = BuildFillTemplateFromBindings(mainForm, conn, txtName.Text.Trim(),
-                            txtUnit.Text.Trim(), cmbSourceSheet.Text.Trim());
+                        FillTemplate t = chkNameMode.Checked
+                            ? BuildNameFillTemplateFromBindings(mainForm, conn, txtName.Text.Trim(), txtUnit.Text.Trim(), cmbSourceSheet.Text.Trim())
+                            : BuildFillTemplateFromBindings(mainForm, conn, txtName.Text.Trim(), txtUnit.Text.Trim(), cmbSourceSheet.Text.Trim());
                         count = t.Rows.Count;
                         SaveFillTemplate(t);
                     }
@@ -206,9 +211,11 @@ namespace RecoNet
                     if (cmbTemplate.SelectedItem == null) { MessageBox.Show(this, "请先选择模板。", "模板铺量"); return; }
                     FillTemplate t = LoadFillTemplate(Convert.ToString(cmbTemplate.SelectedItem));
                     if (t == null) { MessageBox.Show(this, "模板加载失败。", "模板铺量"); return; }
+                    string ndWarning = null;
                     preview = cmbMode.SelectedIndex == 0
                         ? BuildPreview_ColumnAnchor(t, txtSheet.Text.Trim(), txtColumn.Text.Trim())
-                        : BuildPreview_FixedColumn(t);
+                        : BuildPreview_NameDriven(mainForm, t, txtSheet.Text.Trim(), txtColumn.Text.Trim(), out ndWarning);
+                    if (!String.IsNullOrEmpty(ndWarning)) MessageBox.Show(this, ndWarning, "模板铺量");
                     RebuildItemTree();
                     FillGrid();
                     if (preview.Count == 0)
@@ -223,16 +230,22 @@ namespace RecoNet
             {
                 grid.Rows.Clear();
                 string scope = currentTreeScope ?? "";
-                foreach (FillPreviewItem it in preview
-                    .Where(item => String.IsNullOrEmpty(scope) || IsItemNoUnderChapter(item.ItemNo ?? "", scope))
-                    .OrderBy(item => item.ItemNo ?? "", StringComparer.OrdinalIgnoreCase)
-                    .ThenBy(item => item.OrderInItem))
+                bool nameDriven = preview.Any(p => p.IsNameDriven);
+                IEnumerable<FillPreviewItem> ordered = preview
+                    .Where(item => String.IsNullOrEmpty(scope) || IsItemNoUnderChapter(item.ItemNo ?? "", scope));
+                ordered = nameDriven
+                    ? ordered.OrderBy(item => item.TargetRow).ThenBy(item => item.GroupOrder)
+                    : ordered.OrderBy(item => item.ItemNo ?? "", StringComparer.OrdinalIgnoreCase).ThenBy(item => item.OrderInItem);
+                foreach (FillPreviewItem it in ordered)
                 {
+                    string statusText = String.IsNullOrEmpty(it.Status) ? (it.AlignNote ?? "") : it.Status;
                     int idx = grid.Rows.Add(it.Selected, it.ItemNo, it.QuotaCode,
-                        it.SourceName, it.TargetName, it.QuantityText, it.Status);
+                        it.SourceName, it.TargetName, it.QuantityText, statusText);
                     grid.Rows[idx].Tag = it;
                     if (!String.IsNullOrEmpty(it.Status))
                         grid.Rows[idx].DefaultCellStyle.BackColor = Color.MistyRose;
+                    else if (!String.IsNullOrEmpty(it.AlignNote))
+                        grid.Rows[idx].DefaultCellStyle.BackColor = Color.FromArgb(255, 246, 196);
                 }
             }
 
