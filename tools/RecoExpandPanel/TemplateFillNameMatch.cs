@@ -2,9 +2,11 @@
 using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Windows.Forms;
+using NPOI.SS.UserModel;
 
 namespace RecoNet
 {
@@ -134,6 +136,116 @@ namespace RecoNet
             AddQuantityNameReadLinks(readLinks, workbook, sheet, expr, hiddenCache, mergedCache);
             ExcelSyncReadContext ctx = new ExcelSyncReadContext(readLinks);
             return ReadRowNameAt(workbook, sheet, expr, hiddenCache, mergedCache, ctx, true);
+        }
+
+        private sealed class TargetQtyRow
+        {
+            public int Row;
+            public string RawName;    // 数量列左侧全名(不截断)
+            public string NormName;   // 归一化
+            public string Chapter;    // 所属 Excel 章节锚点行文本(供章节内就近)；空=未分段
+            public decimal Quantity;
+            public string QuantityText;
+            public bool IsAnchor;     // 章节锚点行(“一、/(一)/第X章”)
+        }
+
+        // 读目标 sheet：数量列(qtyColumn) 有数字的行=工程量行；行全名取数量列左侧不截断文本；
+        // 章节锚点行用于给每个工程量行标 Chapter(取其上方最近锚点)。
+        private static List<TargetQtyRow> ReadTargetQtyRows(string workbook, string sheet, int qtyColumn)
+        {
+            List<TargetQtyRow> result = new List<TargetQtyRow>();
+            Dictionary<string, HashSet<int>> hiddenCache = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, List<ExcelMergedRegion>> mergedCache = new Dictionary<string, List<ExcelMergedRegion>>(StringComparer.OrdinalIgnoreCase);
+
+            List<ExcelQuotaLink> readLinks = new List<ExcelQuotaLink>();
+            int firstRow, lastRow;
+            if (!TryGetSheetRowRange(workbook, sheet, out firstRow, out lastRow)) return result;
+            string qtyColName = ColumnNumberToName(qtyColumn);
+            for (int r = firstRow; r <= lastRow; r++)
+            {
+                string qtyAddr = qtyColName + r.ToString(CultureInfo.InvariantCulture);
+                readLinks.Add(new ExcelQuotaLink { ExcelPath = workbook, WorksheetName = sheet, CellAddress = qtyAddr, Expression = qtyAddr });
+                AddQuantityNameReadLinks(readLinks, workbook, sheet, qtyAddr, hiddenCache, mergedCache);
+            }
+            ExcelSyncReadContext ctx = new ExcelSyncReadContext(readLinks);
+
+            string currentChapter = "";
+            for (int r = firstRow; r <= lastRow; r++)
+            {
+                string qtyAddr = qtyColName + r.ToString(CultureInfo.InvariantCulture);
+                string name = ReadRowNameAt(workbook, sheet, qtyAddr, hiddenCache, mergedCache, ctx, true);
+                if (IsChapterAnchorRaw(name)) { currentChapter = name; continue; }
+
+                string disp; decimal qty; string err;
+                bool hasQty = TryEvaluateWorkbookExpression(ctx, workbook, sheet, qtyAddr, out disp, out qty, out err, true) && qty != 0m;
+                if (!hasQty || String.IsNullOrWhiteSpace(name)) continue;
+
+                TargetQtyRow row = new TargetQtyRow();
+                row.Row = r;
+                row.RawName = name;
+                row.NormName = NormalizeMatchText(name);
+                row.Chapter = currentChapter;
+                row.Quantity = qty;
+                row.QuantityText = disp;
+                result.Add(row);
+            }
+            return result;
+        }
+
+        // “一、/(一)/第X章/第X部分” 视为章节锚点。
+        private static bool IsChapterAnchorRaw(string raw)
+        {
+            if (String.IsNullOrWhiteSpace(raw)) return false;
+            string t = raw.Trim();
+            return System.Text.RegularExpressions.Regex.IsMatch(t,
+                "^(第?[一二三四五六七八九十百]+[、\\.．章节部分]|[(（][一二三四五六七八九十]+[)）])");
+        }
+
+        // 取 sheet 的 UsedRange 行范围（首末非空行号）。
+        private static bool TryGetSheetRowRange(string workbook, string sheet, out int firstRow, out int lastRow)
+        {
+            firstRow = 0; lastRow = 0;
+            try
+            {
+                if (!TryGetXlsxUsedRowRange(workbook, sheet, out firstRow, out lastRow)) return false;
+                return lastRow >= firstRow && lastRow - firstRow < 20000;
+            }
+            catch { return false; }
+        }
+
+        // 用 NPOI 打开工作簿(只读共享流)，取该 sheet 的首末非空行号(1基)。
+        // 打不开工作簿或找不到该 sheet 返回 false。参照 ExcelLinkFeature.cs 里
+        // TryReadSheetTargetCellsByNpoi/ReadSheetCellsByNpoi 等既有 NPOI 只读用法。
+        private static bool TryGetXlsxUsedRowRange(string workbook, string sheet, out int firstRow, out int lastRow)
+        {
+            firstRow = 0; lastRow = 0;
+            if (String.IsNullOrWhiteSpace(workbook) || String.IsNullOrWhiteSpace(sheet) || !File.Exists(workbook))
+            {
+                return false;
+            }
+
+            try
+            {
+                using (Stream stream = OpenWorkbookStreamShared(workbook))
+                {
+                    IWorkbook wb = WorkbookFactory.Create(stream);
+                    ISheet sh = wb.GetSheet(sheet);
+                    if (sh == null) return false;
+
+                    int first0 = sh.FirstRowNum;
+                    int last0 = sh.LastRowNum;
+                    if (last0 < first0) return false;
+
+                    firstRow = first0 + 1;
+                    lastRow = last0 + 1;
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("TryGetXlsxUsedRowRange 失败: " + ex.Message);
+                return false;
+            }
         }
     }
 }
