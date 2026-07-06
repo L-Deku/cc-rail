@@ -258,23 +258,21 @@ namespace RecoNet
                 helpPanel = new Panel();
                 helpPanel.Dock = DockStyle.Fill;
                 helpPanel.Visible = false;
-                helpPanel.Padding = new Padding(10, 8, 10, 8);
+                helpPanel.Padding = new Padding(8, 4, 8, 4);
 
                 Panel helpTop = new Panel();
                 helpTop.Dock = DockStyle.Top;
-                helpTop.Height = 42;
-                helpTop.Padding = new Padding(0, 0, 0, 8);
+                helpTop.Height = 34;
 
                 Label helpTitle = new Label();
-                helpTitle.Text = "帮助内容（常用指令表）";
+                helpTitle.Text = "帮助内容";
                 helpTitle.Dock = DockStyle.Fill;
                 helpTitle.TextAlign = ContentAlignment.MiddleLeft;
                 helpTitle.ForeColor = Color.FromArgb(60, 60, 60);
-                helpTitle.Font = new Font(Font.FontFamily, 10.5f, FontStyle.Bold);
 
                 Button closeHelpButton = new Button();
                 closeHelpButton.Text = "关闭帮助";
-                closeHelpButton.Width = 92;
+                closeHelpButton.Width = 82;
                 closeHelpButton.Dock = DockStyle.Right;
                 closeHelpButton.Click += delegate { HideHelp(); };
 
@@ -291,27 +289,9 @@ namespace RecoNet
                 helpGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
                 helpGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
                 helpGrid.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells;
-                helpGrid.BackgroundColor = Color.White;
-                helpGrid.BorderStyle = BorderStyle.FixedSingle;
-                helpGrid.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
-                helpGrid.GridColor = Color.FromArgb(225, 230, 235);
-                helpGrid.EnableHeadersVisualStyles = false;
-                helpGrid.ColumnHeadersHeight = 36;
-                helpGrid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
-                helpGrid.Font = new Font(Font.FontFamily, 10.5f);
-                helpGrid.RowTemplate.MinimumHeight = 48;
                 helpGrid.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
                 helpGrid.DefaultCellStyle.Alignment = DataGridViewContentAlignment.TopLeft;
-                helpGrid.DefaultCellStyle.Padding = new Padding(8, 6, 8, 6);
-                helpGrid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(225, 238, 250);
-                helpGrid.DefaultCellStyle.SelectionForeColor = Color.Black;
-                helpGrid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(248, 250, 252);
-                helpGrid.AlternatingRowsDefaultCellStyle.Padding = new Padding(8, 6, 8, 6);
                 helpGrid.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-                helpGrid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(235, 240, 246);
-                helpGrid.ColumnHeadersDefaultCellStyle.ForeColor = Color.FromArgb(45, 55, 65);
-                helpGrid.ColumnHeadersDefaultCellStyle.Font = new Font(Font.FontFamily, 10.5f, FontStyle.Bold);
-                helpGrid.ColumnHeadersDefaultCellStyle.Padding = new Padding(4, 4, 4, 4);
                 helpGrid.ClipboardCopyMode = DataGridViewClipboardCopyMode.EnableWithoutHeaderText;
                 helpGrid.Columns.Add("Scene", "场景");
                 helpGrid.Columns.Add("Format", "写法");
@@ -321,10 +301,6 @@ namespace RecoNet
                 helpGrid.Columns["Format"].FillWeight = 25;
                 helpGrid.Columns["Example"].FillWeight = 31;
                 helpGrid.Columns["Note"].FillWeight = 31;
-                helpGrid.Columns["Scene"].MinimumWidth = 90;
-                helpGrid.Columns["Format"].MinimumWidth = 160;
-                helpGrid.Columns["Example"].MinimumWidth = 190;
-                helpGrid.Columns["Note"].MinimumWidth = 210;
 
                 helpPanel.Controls.Add(helpGrid);
                 helpPanel.Controls.Add(helpTop);
