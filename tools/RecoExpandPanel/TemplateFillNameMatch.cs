@@ -488,5 +488,43 @@ namespace RecoNet
                 foreach (ProjectQuota o in src) lst.Items.Add(o);
             }
         }
+
+        // 回写：把本次名字驱动确认的"工程量名 -> 定额(可多条)"写进对应框 + 当前模版。
+        private static void FeedbackNameMatches(string templateName, List<FillPreviewItem> written)
+        {
+            foreach (IGrouping<int, FillPreviewItem> g in written
+                .Where(i => i.IsNameDriven && !String.IsNullOrWhiteSpace(i.QuotaCode))
+                .GroupBy(i => i.TargetRow))
+            {
+                string name = g.Select(x => x.TargetName).FirstOrDefault(n => !String.IsNullOrWhiteSpace(n));
+                if (String.IsNullOrWhiteSpace(name)) continue;
+                foreach (FillPreviewItem it in g)
+                {
+                    ExcelQuotaLink pseudo = new ExcelQuotaLink { QuotaCode = it.QuotaCode, QuotaName = "" };
+                    RecordBindingToMappingStore(pseudo, name);
+                }
+            }
+
+            try
+            {
+                FillTemplate t = LoadFillTemplate(templateName);
+                if (t == null || !String.Equals(t.MatchBy, "name", StringComparison.OrdinalIgnoreCase)) return;
+                bool changed = false;
+                foreach (FillPreviewItem it in written.Where(i => i.IsNameDriven && !String.IsNullOrWhiteSpace(i.QuotaCode) && i.GroupOrder == 0))
+                {
+                    string nm = it.TargetName ?? "";
+                    bool exists = t.Rows.Any(r =>
+                        String.Equals(NormalizeMatchText(r.MatchName ?? ""), NormalizeMatchText(nm), StringComparison.Ordinal) &&
+                        String.Equals(r.QuotaCode ?? "", it.QuotaCode ?? "", StringComparison.OrdinalIgnoreCase) &&
+                        String.Equals(r.ItemNo ?? "", it.ItemNo ?? "", StringComparison.OrdinalIgnoreCase));
+                    if (exists) continue;
+                    t.Rows.Add(new FillTemplateRow { ItemNo = it.ItemNo, ItemName = it.ItemNo, QuotaCode = it.QuotaCode,
+                        MatchName = nm, SourceName = nm, SourceQuotaSeq = it.ChosenQuotaSeq, OrderInItem = it.OrderInItem });
+                    changed = true;
+                }
+                if (changed) SaveFillTemplate(t);
+            }
+            catch (Exception ex) { Log("FeedbackNameMatches template writeback failed: " + ex.Message); }
+        }
     }
 }

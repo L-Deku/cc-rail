@@ -894,7 +894,7 @@ namespace RecoNet
             List<FillPreviewItem> selected = items
                 .Where(i => i.Selected &&
                     (String.IsNullOrEmpty(i.Status) || String.Equals(i.Status, "\u6570\u91cf\u4e3a0", StringComparison.Ordinal)) &&
-                    i.SourceQuotaSeq > 0)
+                    (i.SourceQuotaSeq > 0 || (i.IsNameDriven && i.ChosenQuotaSeq > 0)))
                 .OrderBy(i => i.ItemNo, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(i => i.OrderInItem)
                 .ToList();
@@ -919,8 +919,14 @@ namespace RecoNet
                     {
                         foreach (FillPreviewItem item in selected)
                         {
-                            Dictionary<string, object> row = LoadTemplateFullRow(conn, transaction, item.SourceQuotaSeq);
+                            long copyFrom = item.IsNameDriven ? item.ChosenQuotaSeq : item.SourceQuotaSeq;
+                            Dictionary<string, object> row = LoadTemplateFullRow(conn, transaction, copyFrom);
                             if (row == null) { skipped++; continue; }
+                            if (item.IsNameDriven && item.NeighborSourceQuotaSeq > 0)
+                            {
+                                Dictionary<string, object> anchor = LoadTemplateFullRow(conn, transaction, item.NeighborSourceQuotaSeq);
+                                if (anchor != null) row["条目序号"] = anchor["条目序号"];
+                            }
 
                             // 条目序号(全局)保持不变 -> 落到目标单元的同一条目。
                             long itemSeq = Convert.ToInt64(row["条目序号"], CultureInfo.InvariantCulture);
@@ -985,6 +991,10 @@ namespace RecoNet
                 {
                     GetAgentUndoStack(mainForm).Add(undo);
                     GetAgentRedoStack(mainForm).Clear();
+                }
+                if (selected.Any(i => i.IsNameDriven))
+                {
+                    FeedbackNameMatches(selected[0].TemplateName, selected);
                 }
                 RefreshCurrentQuotaGrid(mainForm);
 
