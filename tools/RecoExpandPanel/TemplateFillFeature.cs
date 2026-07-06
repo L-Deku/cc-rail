@@ -31,6 +31,15 @@ namespace RecoNet
             public string SourceExpr;    // 绑定表达式，如 "E5" 或 "E4+E5"
             public string SourceName;    // 源行项目名（供预览核对）
             public long SourceQuotaSeq;  // 源定额序号（写入时直接复制该行）
+            public string MatchName;      // 名字模式：该定额对应的 Excel 工程量【全名】(不截断)
+            public List<FillOperand> Operands;  // 名字模式且为表达式(如 E1+E2)时的操作数；否则 null
+        }
+
+        public sealed class FillOperand
+        {
+            public string Name;     // 该操作数所在行的工程量全名
+            public string Op;       // 与前一操作数的连接符："+" / "-" / "*" / "/"；首个为 "+"
+            public string Literal;  // 该操作数是纯字面量(如 *1.5 的 1.5)时填此，Name 为空
         }
 
         // 一份模板
@@ -40,6 +49,7 @@ namespace RecoNet
             public string Profession;
             public string SourceUnitNo;
             public string WorkbookPath;
+            public string MatchBy = "position";  // "position"（现有列锚点） | "name"（名字驱动）
             public List<FillTemplateRow> Rows = new List<FillTemplateRow>();
         }
 
