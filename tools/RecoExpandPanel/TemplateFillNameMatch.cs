@@ -247,5 +247,119 @@ namespace RecoNet
                 return false;
             }
         }
+
+        private sealed class BoxCandidate
+        {
+            public string QuotaCode;
+            public string QuotaName;
+            public int Score;
+        }
+
+        // 读 mapping-boxes.jsonl，为一个工程量全名返回候选定额(按名字相似度)。一期只吃对应框(绑定飞轮)。
+        private static List<BoxCandidate> LookupMappingBox(string queryFullName)
+        {
+            List<BoxCandidate> result = new List<BoxCandidate>();
+            string norm = NormalizeMatchText(queryFullName);
+            if (norm.Length == 0) return result;
+            try
+            {
+                string path = System.IO.Path.Combine(FindRecoQuotaDataDir(), "mapping-boxes.jsonl");
+                if (!System.IO.File.Exists(path)) return result;
+                foreach (string line in System.IO.File.ReadAllLines(path, Encoding.UTF8))
+                {
+                    Dictionary<string, string> row = ParseFlatJson(line);
+                    if (row.Count == 0) continue;
+                    string qn = GetFlat(row, "quantity_name");
+                    string code = GetFlat(row, "target_code");
+                    if (String.IsNullOrWhiteSpace(qn) || String.IsNullOrWhiteSpace(code)) continue;
+                    int s = MatchNameScore(norm, NormalizeMatchText(qn));
+                    if (s < NameMatchMinScore) continue;
+                    result.Add(new BoxCandidate { QuotaCode = code, QuotaName = GetFlat(row, "target_name"), Score = s });
+                }
+            }
+            catch (Exception ex) { Log("LookupMappingBox failed: " + ex.Message); }
+            return result
+                .GroupBy(c => c.QuotaCode, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.OrderByDescending(c => c.Score).First())
+                .OrderByDescending(c => c.Score)
+                .ToList();
+        }
+
+        // 名字驱动套用：以目标 Excel 工程量行为主序，逐行匹配定额。返回 items 已按 Excel 行序。
+        private static List<FillPreviewItem> BuildPreview_NameDriven(Form mainForm, FillTemplate template,
+            string targetSheet, string targetColumn, out string warning)
+        {
+            warning = null;
+            CellRef colRef;
+            if (!TryParseCellAddress((targetColumn ?? "").Trim().ToUpperInvariant() + "1", out colRef))
+            {
+                warning = "目标列无效。";
+                return new List<FillPreviewItem>();
+            }
+            string workbook = template.WorkbookPath;
+            if (String.IsNullOrWhiteSpace(workbook))
+            {
+                warning = "模版未记录 Excel 文件。";
+                return new List<FillPreviewItem>();
+            }
+
+            List<TargetQtyRow> targetRows = ReadTargetQtyRows(workbook, targetSheet, colRef.Column);
+            if (targetRows.Count == 0)
+            {
+                warning = "目标 sheet 未读到工程量行（检查目标列是否为数量列，Excel 是否已保存）。";
+                return new List<FillPreviewItem>();
+            }
+
+            List<FillPreviewItem> items = new List<FillPreviewItem>();
+            List<string> tmplNorms = template.Rows.Select(r => NormalizeMatchText(r.MatchName ?? r.SourceName ?? "")).ToList();
+
+            FillPreviewItem lastMatched = null;
+            foreach (TargetQtyRow tr in targetRows)
+            {
+                FillPreviewItem item = new FillPreviewItem();
+                item.IsNameDriven = true;
+                item.TemplateName = template.Name;
+                item.TargetRow = tr.Row;
+                item.SourceName = tr.RawName;
+                item.TargetName = tr.RawName;
+                item.QuantityText = tr.QuantityText;
+
+                int ti = BestMatchIndex(tr.NormName, tmplNorms);
+                if (ti >= 0)
+                {
+                    FillTemplateRow trow = template.Rows[ti];
+                    item.ItemNo = trow.ItemNo;
+                    item.QuotaCode = trow.QuotaCode;
+                    item.Adjust = trow.Adjust;
+                    item.OrderInItem = trow.OrderInItem;
+                    item.ChosenQuotaSeq = trow.SourceQuotaSeq;
+                    item.AlignNote = "模版命中";
+                    lastMatched = item;
+                    items.Add(item);
+                    continue;
+                }
+
+                List<BoxCandidate> box = LookupMappingBox(tr.RawName);
+                if (box.Count > 0 && box[0].Score >= 70)
+                {
+                    item.QuotaCode = box[0].QuotaCode;
+                    item.ItemNo = lastMatched == null ? "" : lastMatched.ItemNo;
+                    item.NeighborSourceQuotaSeq = lastMatched == null ? 0 : lastMatched.ChosenQuotaSeq;
+                    item.AlignNote = "对应框建议 " + box[0].QuotaCode + "，双击可改";
+                    item.NeedManualQuota = true;
+                    item.Selected = false;
+                }
+                else
+                {
+                    item.ItemNo = lastMatched == null ? "" : lastMatched.ItemNo;
+                    item.NeighborSourceQuotaSeq = lastMatched == null ? 0 : lastMatched.ChosenQuotaSeq;
+                    item.AlignNote = "无对应定额，双击手挂";
+                    item.NeedManualQuota = true;
+                    item.Selected = false;
+                }
+                items.Add(item);
+            }
+            return items;
+        }
     }
 }

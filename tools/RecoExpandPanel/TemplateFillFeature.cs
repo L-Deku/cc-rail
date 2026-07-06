@@ -67,6 +67,13 @@ namespace RecoNet
             public string Status;
             public int OrderInItem;
             public long SourceQuotaSeq;  // 源定额序号（写入时直接复制该行）
+            public int TargetRow;          // 目标 Excel 行号(排序用)
+            public string AlignNote;       // 分诊提示
+            public bool IsNameDriven;      // 名字驱动产生
+            public bool NeedManualQuota;   // 未匹配定额，待手挂
+            public long ChosenQuotaSeq;    // 手挂/命中的可复制源定额行(整行复制来源)；0=无
+            public long NeighborSourceQuotaSeq; // 条目落位锚点(上方最近已匹配行的源定额)
+            public int GroupOrder;         // 一量对多定额时组内序(第一行承载工程量名)
         }
 
         private sealed class PreparedFillPreviewItem
