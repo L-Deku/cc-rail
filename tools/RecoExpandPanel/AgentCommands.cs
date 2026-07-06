@@ -16,6 +16,7 @@ namespace RecoNet
         private sealed class AgentQuotaInput
         {
             public string Code;
+            public string Name;
             public string Quantity;
         }
 
