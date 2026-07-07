@@ -300,6 +300,30 @@ namespace RecoNet
             return true;
         }
 
+        private static bool LooksLikeAgentRemoveItemList(string token)
+        {
+            List<string> values = SplitAgentList(token);
+            if (values.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (string value in values)
+            {
+                if (value == AgentSelectedToken || value == AgentCurrentItemToken)
+                {
+                    continue;
+                }
+
+                if (!LooksLikeAgentItemNo(value) && !IsAgentDigits(value))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         // 分号链式：把 "指令A ; 指令B" 拆成多条确定性命令合并到一个计划里。
         // 含分号即按链式处理；每段都必须是确定性命令（链式不支持AI），任一段失败则整体报错。
         // 不含分号时等价于直接调用 TryParseAgentFallback。
@@ -620,8 +644,20 @@ namespace RecoNet
                     return true;
                 }
 
-                command.RemoveText = tokens[0];
-                command.Items = tokens.Count < 2 ? AgentSelectedItems() : SplitAgentList(tokens[1]);
+                if (tokens.Count >= 2 && LooksLikeAgentRemoveItemList(tokens[0]))
+                {
+                    command.Items = SplitAgentList(tokens[0]);
+                    command.RemoveText = tokens[tokens.Count - 1].Trim();
+                    if (tokens.Count > 2 && command.QuotaFilter.Count == 0)
+                    {
+                        command.QuotaFilter = SplitAgentList(String.Join(",", tokens.Skip(1).Take(tokens.Count - 2).ToArray()));
+                    }
+                }
+                else
+                {
+                    command.RemoveText = tokens[0];
+                    command.Items = tokens.Count < 2 ? AgentSelectedItems() : SplitAgentList(tokens[1]);
+                }
                 result.Commands.Add(command);
                 return true;
             }

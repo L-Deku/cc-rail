@@ -1105,7 +1105,7 @@ namespace RecoNet
                         continue;
                     }
 
-                    string newExpr = oldExpr.Replace(fragment, "");
+                    string newExpr = RemoveAgentQuantityFragment(oldExpr, fragment);
                     object newQuantity;
                     if (String.IsNullOrEmpty(newExpr))
                     {
@@ -1140,6 +1140,60 @@ namespace RecoNet
             {
                 plan.Warnings.Add("有 " + skipped.ToString(CultureInfo.InvariantCulture) + " 行不含\"" + fragment + "\"或去掉后无法计算，已跳过。");
             }
+        }
+
+        private static string RemoveAgentQuantityFragment(string oldExpr, string fragment)
+        {
+            string newExpr = oldExpr.Replace(fragment, "");
+            string trimmed = newExpr.Trim();
+            if (IsAgentWholeParenthesizedExpression(trimmed))
+            {
+                string unwrapped = trimmed.Substring(1, trimmed.Length - 2).Trim();
+                if (newExpr.Length == trimmed.Length)
+                {
+                    return unwrapped;
+                }
+
+                int start = newExpr.IndexOf(trimmed, StringComparison.Ordinal);
+                return newExpr.Substring(0, start) +
+                    unwrapped +
+                    newExpr.Substring(start + trimmed.Length);
+            }
+
+            return newExpr;
+        }
+
+        private static bool IsAgentWholeParenthesizedExpression(string text)
+        {
+            if (String.IsNullOrEmpty(text) || text.Length < 2 || text[0] != '(' || text[text.Length - 1] != ')')
+            {
+                return false;
+            }
+
+            int depth = 0;
+            for (int i = 0; i < text.Length; i++)
+            {
+                char c = text[i];
+                if (c == '(')
+                {
+                    depth++;
+                }
+                else if (c == ')')
+                {
+                    depth--;
+                    if (depth == 0 && i < text.Length - 1)
+                    {
+                        return false;
+                    }
+
+                    if (depth < 0)
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return depth == 0;
         }
 
         private static void BuildClearQuantityPlan(SqlConnection conn, AgentSelectionSnapshot selection, AgentCommand command, List<long> unitIds, AgentPlan plan)
