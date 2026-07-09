@@ -16,6 +16,7 @@ namespace RecoNet
         private sealed class AgentQuotaInput
         {
             public string Code;
+            public string Name;
             public string Quantity;
         }
 
@@ -291,6 +292,30 @@ namespace RecoNet
             foreach (char c in token)
             {
                 if (!Char.IsDigit(c))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool LooksLikeAgentRemoveItemList(string token)
+        {
+            List<string> values = SplitAgentList(token);
+            if (values.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (string value in values)
+            {
+                if (value == AgentSelectedToken || value == AgentCurrentItemToken)
+                {
+                    continue;
+                }
+
+                if (!LooksLikeAgentItemNo(value) && !IsAgentDigits(value))
                 {
                     return false;
                 }
@@ -619,8 +644,20 @@ namespace RecoNet
                     return true;
                 }
 
-                command.RemoveText = tokens[0];
-                command.Items = tokens.Count < 2 ? AgentSelectedItems() : SplitAgentList(tokens[1]);
+                if (tokens.Count >= 2 && LooksLikeAgentRemoveItemList(tokens[0]))
+                {
+                    command.Items = SplitAgentList(tokens[0]);
+                    command.RemoveText = tokens[tokens.Count - 1].Trim();
+                    if (tokens.Count > 2 && command.QuotaFilter.Count == 0)
+                    {
+                        command.QuotaFilter = SplitAgentList(String.Join(",", tokens.Skip(1).Take(tokens.Count - 2).ToArray()));
+                    }
+                }
+                else
+                {
+                    command.RemoveText = tokens[0];
+                    command.Items = tokens.Count < 2 ? AgentSelectedItems() : SplitAgentList(tokens[1]);
+                }
                 result.Commands.Add(command);
                 return true;
             }

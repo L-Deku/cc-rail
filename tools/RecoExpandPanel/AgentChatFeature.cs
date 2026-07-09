@@ -86,6 +86,8 @@ namespace RecoNet
         {
             private readonly Form mainForm;
             private readonly RichTextBox transcript;
+            private readonly Panel helpPanel;
+            private readonly DataGridView helpGrid;
             private readonly Panel previewPanel;
             private readonly Label summaryLabel;
             private readonly DataGridView previewGrid;
@@ -202,16 +204,16 @@ namespace RecoNet
                 previewGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
                 previewGrid.Columns.Add("Action", "操作");
                 previewGrid.Columns.Add("Unit", "单元");
-                previewGrid.Columns.Add("Item", "条目编号");
+                previewGrid.Columns.Add("Item", "工程或费用项目名称");
                 previewGrid.Columns.Add("Code", "定额编号");
                 previewGrid.Columns.Add("Old", "原值");
                 previewGrid.Columns.Add("New", "新值");
                 previewGrid.Columns["Action"].FillWeight = 13;
                 previewGrid.Columns["Unit"].FillWeight = 9;
-                previewGrid.Columns["Item"].FillWeight = 20;
-                previewGrid.Columns["Code"].FillWeight = 16;
-                previewGrid.Columns["Old"].FillWeight = 21;
-                previewGrid.Columns["New"].FillWeight = 21;
+                previewGrid.Columns["Item"].FillWeight = 28;
+                previewGrid.Columns["Code"].FillWeight = 14;
+                previewGrid.Columns["Old"].FillWeight = 18;
+                previewGrid.Columns["New"].FillWeight = 18;
 
                 Panel buttonPanel = new Panel();
                 buttonPanel.Dock = DockStyle.Bottom;
@@ -253,7 +255,58 @@ namespace RecoNet
                 transcript.BorderStyle = BorderStyle.None;
                 transcript.Font = new Font(Font.FontFamily, 10f);
 
+                helpPanel = new Panel();
+                helpPanel.Dock = DockStyle.Fill;
+                helpPanel.Visible = false;
+                helpPanel.Padding = new Padding(8, 4, 8, 4);
+
+                Panel helpTop = new Panel();
+                helpTop.Dock = DockStyle.Top;
+                helpTop.Height = 34;
+
+                Label helpTitle = new Label();
+                helpTitle.Text = "帮助内容";
+                helpTitle.Dock = DockStyle.Fill;
+                helpTitle.TextAlign = ContentAlignment.MiddleLeft;
+                helpTitle.ForeColor = Color.FromArgb(60, 60, 60);
+
+                Button closeHelpButton = new Button();
+                closeHelpButton.Text = "关闭帮助";
+                closeHelpButton.Width = 82;
+                closeHelpButton.Dock = DockStyle.Right;
+                closeHelpButton.Click += delegate { HideHelp(); };
+
+                helpTop.Controls.Add(closeHelpButton);
+                helpTop.Controls.Add(helpTitle);
+
+                helpGrid = new DataGridView();
+                helpGrid.Dock = DockStyle.Fill;
+                helpGrid.ReadOnly = true;
+                helpGrid.AllowUserToAddRows = false;
+                helpGrid.AllowUserToDeleteRows = false;
+                helpGrid.AllowUserToResizeRows = true;
+                helpGrid.RowHeadersVisible = false;
+                helpGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+                helpGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+                helpGrid.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells;
+                helpGrid.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
+                helpGrid.DefaultCellStyle.Alignment = DataGridViewContentAlignment.TopLeft;
+                helpGrid.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+                helpGrid.ClipboardCopyMode = DataGridViewClipboardCopyMode.EnableWithoutHeaderText;
+                helpGrid.Columns.Add("Scene", "场景");
+                helpGrid.Columns.Add("Format", "写法");
+                helpGrid.Columns.Add("Example", "实例");
+                helpGrid.Columns.Add("Note", "说明");
+                helpGrid.Columns["Scene"].FillWeight = 13;
+                helpGrid.Columns["Format"].FillWeight = 25;
+                helpGrid.Columns["Example"].FillWeight = 31;
+                helpGrid.Columns["Note"].FillWeight = 31;
+
+                helpPanel.Controls.Add(helpGrid);
+                helpPanel.Controls.Add(helpTop);
+
                 Controls.Add(transcript);
+                Controls.Add(helpPanel);
                 Controls.Add(previewPanel);
                 Controls.Add(inputPanel);
 
@@ -395,6 +448,8 @@ namespace RecoNet
                     ShowHelp();
                     return;
                 }
+
+                HideHelp();
 
                 if (normalized == "撤销" || normalized == "撤回" || normalized == "撤掉上一步" || normalized == "撤掉")
                 {
@@ -594,13 +649,14 @@ namespace RecoNet
             private void ShowPlanPreview(AgentPlan plan)
             {
                 pendingPlan = plan;
+                HideHelp();
                 previewGrid.Rows.Clear();
                 foreach (AgentPlanRow row in plan.PreviewRows.Take(2000))
                 {
                     previewGrid.Rows.Add(
                         row.Action,
                         AgentUnitDisplay(plan.UnitCodes, row.UnitId),
-                        row.ItemNo ?? "",
+                        !String.IsNullOrEmpty(row.ItemName) ? row.ItemName : (row.ItemNo ?? ""),
                         row.QuotaCode ?? "",
                         row.OldValue ?? "",
                         row.NewValue ?? "");
@@ -712,29 +768,95 @@ namespace RecoNet
 
             private void ShowHelp()
             {
-                AppendSystem("直接用自然语言描述操作（需配置AI），例如：");
-                AppendSystem("  把0101-01条目的定额数量乘0.85 / 把定额编号乘0.9 / 把单价乘1.1");
-                AppendSystem("  把0101-01的数量设为100 / 把0101-01里的LY-21全换成QY-100");
-                AppendSystem("  删除当前条目里LY-21 / 在0101-01下输入LY-21数量100");
-                AppendSystem("  把南江路泵房单元0308-01的运输方案设为3 / 把该单元材料费方案换成部颁25年4季度");
-                AppendSystem("  照着_ZGS_02再建一个单元，叫测算二版");
-                AppendSystem("不用AI的确定性语法（单元=xxx 可选）。条目/定额规则：给定额编号=该条目下全部该定额；不给=当前选中的定额行；不给条目编号=当前条目：");
-                AppendSystem("  工程数量 / 定额编号 / 单价 / 定额调整  [条目编号] [定额编号] 操作 —— 单个编号自动判别：带-纯数字(0101-01)=条目；材料编号无-；含字母(LY-21/ZLF/TLF/SH/SQ)=定额");
-                AppendSystem("    工程数量/定额编号/单价 的操作为 *系数 / /系数（乘除）或 删除*系数 / 删除/系数（去掉）");
-                AppendSystem("    例：工程数量 0101-01 LY-21 *0.85 / 定额编号 0101-01 LY-21 *9 / 单价 LY-21 /1.1 / 工程数量 删除*0.85（当前选中定额）");
-                AppendSystem("    （定额编号字段不管装定额/材料编号/ZLF，操作都只在其后追加或删除乘除；单价为计算值不支持删除）");
-                AppendSystem("  定额调整 0101-01 LY-21 /XG1（整串写入，原样）/ 定额调整 0101-01 LY-21 删除 /XG1（去掉该调整）/ 定额调整 LY-21 /1294861,,1（当前条目该定额）");
-                AppendSystem("  设数量 0101-01 LY-21 100 / 清空数量 0101-01 LY-21 / 删除定额 0101-01 LY-21（条目/定额规则同上：省略定额=选中定额，省略条目=当前条目）");
-                AppendSystem("  替换定额 0101-01 LY-21 QY-100 / 复制定额 0101-01 到 0102-01 / 输入定额 [0101-01] LY-21=100（省略条目编号则输入到当前选中条目）");
-                AppendSystem("  设运输方案 0101-01 4 PH0 单元=南江路泵房（PH0为可选运输参数）/ 改材料价 材料 部颁25年4季度 单元=南江路泵房");
-                AppendSystem("  新建单元 新名称 从 源单元名称（源也可用 _ZGS_02 或总概算序号）");
-                AppendSystem("  分号链式：多条指令用 ; 隔开一次预览执行，例：工程数量 0101-01 *0.9 ; 定额编号 0102-01 *0.9 ; 设数量 0103-01 100（各段独立，互不依赖前一段结果）");
-                AppendSystem("其他命令：撤销(撤回/撤掉上一步) / 重做(恢复刚撤销的) / 探查(诊断) / 帮助");
-                AppendSystem("提示：用\"定额编号 ×系数\"(追加*系数,软件原生缩放,重算后有效)优于直接\"单价 ×系数\"(仅补充定额长期有效)。");
-                AppendSystem("省事：不写条目编号=作用于当前选中的条目/定额；不写[定额过滤]=该条目下全部定额(若有选中定额行则只作用于选中的)。");
-                AppendSystem("  例：选中几行定额后直接发 \"工程数量 0.85\" 就只改那几行；什么都不选则改当前条目全部。");
-                AppendSystem("重要：同一条目编号在每个单元里都存在！不点名单元时默认只改当前单元；要全部单元请明说\"所有单元\"。");
-                AppendSystem("条目编号：在左侧树点中后按\"插入当前条目\"填入。所有修改先预览确认，可\"撤销\"。改编号/单价/方案后需在软件里手工重算。");
+                if (helpGrid.Rows.Count == 0)
+                {
+                    PopulateHelpGrid(helpGrid);
+                }
+
+                transcript.Visible = false;
+                helpPanel.Visible = true;
+                helpGrid.Focus();
+            }
+
+            private void HideHelp()
+            {
+                helpPanel.Visible = false;
+                transcript.Visible = true;
+                FocusInput();
+            }
+
+            private static void PopulateHelpGrid(DataGridView grid)
+            {
+                grid.Rows.Clear();
+                AddHelpRow(grid, "自然语言（需AI）",
+                    "直接用一句话描述要改什么，助手会先生成预览，确认后才执行。",
+                    "把0101-01条目的定额数量乘0.85\r\n把南江路泵房单元0308-01的运输方案设为3\r\n照着_ZGS_02再建一个单元，叫测算二版",
+                    "需要已配置 RecoQuotaData/deepseek-settings.json。AI 无法唯一判断条目或单元时，会要求补充。");
+                AddHelpRow(grid, "作用范围",
+                    "不写条目编号=当前选中的条目或定额；不写定额过滤=该条目下全部定额；单元=xxx 可限定单元。",
+                    "工程数量 *0.85\r\n工程数量 0101-01 *0.85\r\n工程数量 0101-01,0102-01 *0.85\r\n删除数量 0308,0309 *0 单元=所有",
+                    "多个条目编号用英文逗号隔开；同一个条目编号在每个单元都存在。不写单元时默认只改当前单元；要跨单元请写 单元=所有 或 单元=具体名称。");
+                AddHelpRow(grid, "编号判别",
+                    "带横杠且纯数字的编号当作条目；含字母或 SH/SQ/ZLF/TLF/LF 等当作定额或费用代码。",
+                    "0101-01 是条目\r\nLY-21 是定额\r\nSH 是填单价代码",
+                    "左侧树选中条目后，可点“插入当前条目”把条目编号填入输入框。");
+                AddHelpRow(grid, "乘除工程数量",
+                    "工程数量 [条目编号] [定额编号] *系数 或 /系数",
+                    "工程数量 0101-01 LY-21 *0.85\r\n工程数量 0101-01 /2\r\n工程数量 *1.1",
+                    "给定额编号时只改该定额；省略定额时改条目下符合当前选择规则的行。数量表达式会写入工程数量输入。");
+                AddHelpRow(grid, "乘定额编号",
+                    "定额编号 [条目编号] [定额编号] *系数 或 /系数",
+                    "定额编号 0101-01 LY-21 *9\r\n定额编号 LY-21 /1.1",
+                    "是在定额编号后追加乘除系数，适合软件原生缩放定额；改后通常需要在软件里手工重算。");
+                AddHelpRow(grid, "改单价",
+                    "单价 [条目编号] [定额编号] *系数 或 /系数",
+                    "单价 0101-01 SH *1.05\r\n单价 SH /1.1",
+                    "单价按两位小数预览；仅改当前计算值，长期保留通常不如用“定额编号 *系数”。");
+                AddHelpRow(grid, "删除乘除片段",
+                    "工程数量/定额编号 [条目编号] [定额编号] 删除*系数；删除数量 条目编号[,条目编号] 要删除的片段",
+                    "工程数量 0101-01 LY-21 删除*0.85\r\n删除数量 0308,0309 *0 单元=所有\r\n定额编号 LY-21 删除/1.1",
+                    "删除数量可把条目列表放中间、要删的片段放末尾；字段里不存在该片段的行会跳过。单价不支持删除片段。");
+                AddHelpRow(grid, "定额调整",
+                    "定额调整 [条目编号] [定额编号] 调整内容；删除时在调整内容前写 删除。",
+                    "定额调整 0101-01 LY-21 /XG1\r\n定额调整 0101-01 LY-21 删除 /XG1\r\n定额调整 LY-21 /1294861,,1",
+                    "调整内容按整串写入或从原串删除。省略条目时作用于当前条目。");
+                AddHelpRow(grid, "设数量/清空数量",
+                    "设数量 [条目编号] [定额编号] 数量；清空数量 [条目编号] [定额编号]",
+                    "设数量 0101-01 LY-21 100\r\n清空数量 0101-01 LY-21\r\n设数量 LY-21 25.5",
+                    "设数量会同时更新工程数量输入和计算数量；清空数量会把数量置空。");
+                AddHelpRow(grid, "替换/删除定额",
+                    "替换定额 [条目编号] 原定额 新定额；删除定额 [条目编号] [定额编号]",
+                    "替换定额 0101-01 LY-21 QY-100\r\n删除定额 0101-01 LY-21\r\n删除定额 LY-21",
+                    "替换会保留原定额编号后面的乘除系数后缀；删除会连同相关计算缓存一起清理。");
+                AddHelpRow(grid, "输入/复制定额",
+                    "输入定额 [条目编号] 编号=数量；复制定额 来源条目 到 目标条目",
+                    "输入定额 0101-01 LY-21=100\r\n输入定额 LY-21=100,QY-100=5\r\n复制定额 0101-01 到 0102-01",
+                    "输入定额省略条目时写入当前选中条目；复制定额会把来源条目中命中的定额复制到目标条目。");
+                AddHelpRow(grid, "运输方案",
+                    "设运输方案 [条目编号] 方案序号 [运输参数] 单元=单元名",
+                    "设运输方案 0101-01 4 PH0 单元=南江路泵房\r\n设运输方案 0308-01 3 单元=_ZGS_03",
+                    "方案序号必须是数字。工具只设置方案号和可选参数，不现场生成材料运输方案定义。");
+                AddHelpRow(grid, "材料/机械/设备/工费方案",
+                    "改材料价 [材料|机械|设备|工费] 方案名称 单元=单元名",
+                    "改材料价 材料 部颁25年4季度 单元=南江路泵房\r\n改材料价 机械 机械费方案A 单元=_ZGS_03",
+                    "必须明确单元。修改方案后需要在软件里手工触发重算，相关费用才会更新。");
+                AddHelpRow(grid, "新建单元",
+                    "新建单元 新名称 从 源单元名称；源也可写 _ZGS_编号 或总概算序号。",
+                    "新建单元 测算二版 从 _ZGS_02\r\n复制单元 比选方案 从 南江路泵房",
+                    "会复制源单元的总概算条目、单项概算信息、定额输入等相关数据，并生成新的总概算编号。");
+                AddHelpRow(grid, "多条链式执行",
+                    "多条确定性指令用英文分号 ; 隔开，一次生成预览。",
+                    "工程数量 0101-01 *0.9 ; 定额编号 0102-01 *0.9 ; 设数量 0103-01 100",
+                    "各段独立解析，不依赖前一段结果。任一段格式错误会中止整条链式指令。");
+                AddHelpRow(grid, "撤销/重做/探查",
+                    "撤销；重做；探查 关键词；帮助",
+                    "撤销\r\n重做\r\n探查 当前选择",
+                    "撤销只记录本次软件运行期间由智能指令助手执行的操作；删除、插入、新建单元不支持重做。");
+            }
+
+            private static void AddHelpRow(DataGridView grid, string scene, string format, string example, string note)
+            {
+                grid.Rows.Add(scene, format, example, note);
             }
         }
     }

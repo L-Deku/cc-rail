@@ -5087,6 +5087,35 @@ namespace RecoNet
                 return range == null ? normalized : BuildExcelCellAddress(range.ValueColumn, range.ValueRow);
             }
 
+            public bool IsCellInTargetColumns(AiExcelCell cell, HashSet<int> targetColumns)
+            {
+                if (cell == null)
+                {
+                    return false;
+                }
+
+                if (targetColumns == null || targetColumns.Count == 0 || targetColumns.Contains(cell.Column))
+                {
+                    return true;
+                }
+
+                AiMergedRange range = FindMergedRange(cell.Column, cell.Row);
+                if (range == null)
+                {
+                    return false;
+                }
+
+                foreach (int column in targetColumns)
+                {
+                    if (column >= range.FirstColumn && column <= range.LastColumn)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
             public string NormalizeMergedExpression(string expression)
             {
                 string normalized = NormalizeExpressionOperators(expression);

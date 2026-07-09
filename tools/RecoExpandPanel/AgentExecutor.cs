@@ -58,6 +58,7 @@ namespace RecoNet
         {
             public long QuotaSequence;
             public string ItemNo;
+            public string ItemName;
             public string QuotaCode;
             public string QuantityInput;
             public object Quantity;      // double 或 DBNull
@@ -79,6 +80,7 @@ namespace RecoNet
             public string Action;
             public long UnitId;
             public string ItemNo;
+            public string ItemName;
             public string QuotaCode;
             public string OldDisplay;
             public string NewDisplay;
@@ -89,6 +91,7 @@ namespace RecoNet
             public long QuotaSequence;
             public long UnitId;
             public string ItemNo;
+            public string ItemName;
             public string QuotaCode;
         }
 
@@ -113,6 +116,7 @@ namespace RecoNet
             public string Action;
             public long UnitId;
             public string ItemNo;
+            public string ItemName;
             public string QuotaCode;
             public string OldValue;
             public string NewValue;
@@ -670,17 +674,18 @@ namespace RecoNet
             AgentTargetRow row = new AgentTargetRow();
             row.QuotaSequence = Convert.ToInt64(record.GetValue(0), CultureInfo.InvariantCulture);
             row.ItemNo = record.IsDBNull(1) ? "" : Convert.ToString(record.GetValue(1)).Trim();
-            row.QuotaCode = record.IsDBNull(2) ? "" : Convert.ToString(record.GetValue(2)).Trim();
-            row.QuantityInput = record.IsDBNull(3) ? "" : Convert.ToString(record.GetValue(3)).Trim();
-            row.Quantity = record.IsDBNull(4) ? (object)DBNull.Value : record.GetValue(4);
-            row.UnitPrice = record.IsDBNull(5) ? (object)DBNull.Value : record.GetValue(5);
-            row.UnitId = record.IsDBNull(6) ? 0 : Convert.ToInt64(record.GetValue(6), CultureInfo.InvariantCulture);
-            row.AdjustText = record.IsDBNull(7) ? "" : Convert.ToString(record.GetValue(7)).Trim();
+            row.ItemName = record.IsDBNull(2) ? "" : Convert.ToString(record.GetValue(2)).Trim();
+            row.QuotaCode = record.IsDBNull(3) ? "" : Convert.ToString(record.GetValue(3)).Trim();
+            row.QuantityInput = record.IsDBNull(4) ? "" : Convert.ToString(record.GetValue(4)).Trim();
+            row.Quantity = record.IsDBNull(5) ? (object)DBNull.Value : record.GetValue(5);
+            row.UnitPrice = record.IsDBNull(6) ? (object)DBNull.Value : record.GetValue(6);
+            row.UnitId = record.IsDBNull(7) ? 0 : Convert.ToInt64(record.GetValue(7), CultureInfo.InvariantCulture);
+            row.AdjustText = record.IsDBNull(8) ? "" : Convert.ToString(record.GetValue(8)).Trim();
             return row;
         }
 
         private const string AgentTargetRowSelect =
-            "select DE.定额序号, ZJ.条目编号, DE.定额编号, DE.工程数量输入, DE.工程数量, DE.单价, DE.总概算序号, cast(DE.定额调整 as nvarchar(max)) " +
+            "select DE.定额序号, ZJ.条目编号, DE.工程或费用项目名称, DE.定额编号, DE.工程数量输入, DE.工程数量, DE.单价, DE.总概算序号, cast(DE.定额调整 as nvarchar(max)) " +
             "from 定额输入 DE inner join 章节表 ZJ on DE.条目序号=ZJ.条目序号 ";
 
         private static List<AgentTargetRow> ResolveAgentTargetRows(SqlConnection conn, AgentSelectionSnapshot selection,
@@ -814,6 +819,7 @@ namespace RecoNet
             update.Action = action;
             update.UnitId = row.UnitId;
             update.ItemNo = row.ItemNo;
+            update.ItemName = row.ItemName;
             update.QuotaCode = row.QuotaCode;
             update.OldDisplay = oldDisplay;
             update.NewDisplay = newDisplay;
@@ -1093,13 +1099,26 @@ namespace RecoNet
                 else
                 {
                     string oldExpr = row.QuantityInput;
-                    if (String.IsNullOrEmpty(oldExpr) || oldExpr.IndexOf(fragment, StringComparison.Ordinal) < 0)
+                    if (String.IsNullOrEmpty(oldExpr))
                     {
                         skipped++;
                         continue;
                     }
 
-                    string newExpr = oldExpr.Replace(fragment, "");
+                    string newExpr;
+                    if (oldExpr.IndexOf(fragment, StringComparison.Ordinal) >= 0)
+                    {
+                        newExpr = RemoveAgentQuantityFragment(oldExpr, fragment);
+                    }
+                    else if (IsAgentQuantityOperatorFragment(fragment) && TryUnwrapAgentQuantityExpression(oldExpr, out newExpr))
+                    {
+                    }
+                    else
+                    {
+                        skipped++;
+                        continue;
+                    }
+
                     object newQuantity;
                     if (String.IsNullOrEmpty(newExpr))
                     {
@@ -1134,6 +1153,83 @@ namespace RecoNet
             {
                 plan.Warnings.Add("有 " + skipped.ToString(CultureInfo.InvariantCulture) + " 行不含\"" + fragment + "\"或去掉后无法计算，已跳过。");
             }
+        }
+
+        private static string RemoveAgentQuantityFragment(string oldExpr, string fragment)
+        {
+            string newExpr = oldExpr.Replace(fragment, "");
+            string unwrapped;
+            return TryUnwrapAgentQuantityExpression(newExpr, out unwrapped) ? unwrapped : newExpr;
+        }
+
+        private static bool IsAgentQuantityOperatorFragment(string fragment)
+        {
+            if (String.IsNullOrEmpty(fragment))
+            {
+                return false;
+            }
+
+            string trimmed = fragment.Trim();
+            return trimmed.StartsWith("*", StringComparison.Ordinal) ||
+                trimmed.StartsWith("/", StringComparison.Ordinal) ||
+                trimmed.StartsWith("×", StringComparison.Ordinal) ||
+                trimmed.StartsWith("÷", StringComparison.Ordinal);
+        }
+
+        private static bool TryUnwrapAgentQuantityExpression(string expression, out string unwrappedExpression)
+        {
+            unwrappedExpression = expression;
+            string trimmed = expression.Trim();
+            if (IsAgentWholeParenthesizedExpression(trimmed))
+            {
+                string unwrapped = trimmed.Substring(1, trimmed.Length - 2).Trim();
+                if (expression.Length == trimmed.Length)
+                {
+                    unwrappedExpression = unwrapped;
+                    return true;
+                }
+
+                int start = expression.IndexOf(trimmed, StringComparison.Ordinal);
+                unwrappedExpression = expression.Substring(0, start) +
+                    unwrapped +
+                    expression.Substring(start + trimmed.Length);
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsAgentWholeParenthesizedExpression(string text)
+        {
+            if (String.IsNullOrEmpty(text) || text.Length < 2 || text[0] != '(' || text[text.Length - 1] != ')')
+            {
+                return false;
+            }
+
+            int depth = 0;
+            for (int i = 0; i < text.Length; i++)
+            {
+                char c = text[i];
+                if (c == '(')
+                {
+                    depth++;
+                }
+                else if (c == ')')
+                {
+                    depth--;
+                    if (depth == 0 && i < text.Length - 1)
+                    {
+                        return false;
+                    }
+
+                    if (depth < 0)
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return depth == 0;
         }
 
         private static void BuildClearQuantityPlan(SqlConnection conn, AgentSelectionSnapshot selection, AgentCommand command, List<long> unitIds, AgentPlan plan)
@@ -1200,6 +1296,7 @@ namespace RecoNet
                     QuotaSequence = row.QuotaSequence,
                     UnitId = row.UnitId,
                     ItemNo = row.ItemNo,
+                    ItemName = row.ItemName,
                     QuotaCode = row.QuotaCode
                 });
             }
@@ -1222,6 +1319,7 @@ namespace RecoNet
                 {
                     AgentQuotaInput quota = new AgentQuotaInput();
                     quota.Code = src.QuotaCode;
+                    quota.Name = src.ItemName;
                     quota.Quantity = !String.IsNullOrEmpty(src.QuantityInput)
                         ? src.QuantityInput
                         : (src.Quantity == DBNull.Value ? "" : Convert.ToString(src.Quantity, CultureInfo.InvariantCulture));
@@ -1283,7 +1381,7 @@ namespace RecoNet
             string unitIn = String.Join(",", unitIds.Select(u => u.ToString(CultureInfo.InvariantCulture)).ToArray());
             using (SqlCommand cmd = conn.CreateCommand())
             {
-                cmd.CommandText = "select TGT.总概算序号, TGT.条目序号, TGT.运输方案, ZJ.条目编号, cast(TGT.参数调整 as nvarchar(200)) " +
+                cmd.CommandText = "select TGT.总概算序号, TGT.条目序号, TGT.运输方案, ZJ.条目编号, ZJ.工程或费用项目名称, cast(TGT.参数调整 as nvarchar(200)) " +
                     "from 总概算条目 TGT inner join 章节表 ZJ on TGT.条目序号=ZJ.条目序号 " +
                     "where TGT.总概算序号 in (" + unitIn + ") and TGT.条目序号 in (" + seqIn + ")";
                 using (SqlDataReader reader = cmd.ExecuteReader())
@@ -1294,7 +1392,8 @@ namespace RecoNet
                         long seq = Convert.ToInt64(reader.GetValue(1), CultureInfo.InvariantCulture);
                         string oldScheme = reader.IsDBNull(2) ? "" : Convert.ToString(reader.GetValue(2)).Trim();
                         string itemNo = reader.IsDBNull(3) ? "" : Convert.ToString(reader.GetValue(3)).Trim();
-                        string oldParam = reader.IsDBNull(4) ? "" : Convert.ToString(reader.GetValue(4)).Trim();
+                        string itemName = reader.IsDBNull(4) ? "" : Convert.ToString(reader.GetValue(4)).Trim();
+                        string oldParam = reader.IsDBNull(5) ? "" : Convert.ToString(reader.GetValue(5)).Trim();
                         bool schemeSame = oldScheme == command.Scheme;
                         bool paramSame = !setParam || oldParam == command.TransportParam;
                         if (schemeSame && paramSame)
@@ -1318,6 +1417,7 @@ namespace RecoNet
                         update.Action = "设运输方案";
                         update.UnitId = unitId;
                         update.ItemNo = itemNo;
+                        update.ItemName = itemName;
                         update.OldDisplay = oldScheme + (setParam ? "/" + oldParam : "");
                         update.NewDisplay = command.Scheme + (setParam ? "/" + command.TransportParam : "");
                         plan.FieldUpdates.Add(update);
@@ -1373,6 +1473,7 @@ namespace RecoNet
                         update.Action = "改" + command.SchemeKind + "费方案";
                         update.UnitId = unitId;
                         update.ItemNo = zgs;
+                        update.ItemName = command.SchemeKind + "费方案";
                         update.OldDisplay = oldName;
                         update.NewDisplay = command.SchemeName;
                         plan.FieldUpdates.Add(update);
@@ -1382,6 +1483,12 @@ namespace RecoNet
 
             plan.NeedsRecalc = true;
             plan.Warnings.Add("改" + command.SchemeKind + "费方案后，需要在软件里手工触发\"重算\"，相关费用才会按新方案更新。");
+        }
+
+        private static string AgentPreviewItemName(string itemName, string fallback)
+        {
+            string name = (itemName ?? "").Trim();
+            return name.Length > 0 ? name : (fallback ?? "");
         }
 
         private static void FinalizeAgentPlan(AgentPlan plan)
@@ -1402,6 +1509,7 @@ namespace RecoNet
                     Action = update.Action,
                     UnitId = update.UnitId,
                     ItemNo = update.ItemNo,
+                    ItemName = AgentPreviewItemName(update.ItemName, update.ItemNo),
                     QuotaCode = update.QuotaCode,
                     OldValue = update.OldDisplay,
                     NewValue = update.NewDisplay
@@ -1415,6 +1523,7 @@ namespace RecoNet
                     Action = "删除",
                     UnitId = del.UnitId,
                     ItemNo = del.ItemNo,
+                    ItemName = AgentPreviewItemName(del.ItemName, del.ItemNo),
                     QuotaCode = del.QuotaCode,
                     OldValue = "(整行删除)",
                     NewValue = ""
@@ -1429,6 +1538,7 @@ namespace RecoNet
                     {
                         Action = "插入",
                         ItemNo = group.ItemNo,
+                        ItemName = quota.Name ?? "",
                         QuotaCode = quota.Code,
                         OldValue = "(新增)",
                         NewValue = quota.Quantity
@@ -1443,6 +1553,7 @@ namespace RecoNet
                     Action = "新建单元",
                     UnitId = copy.SourceUnitId,
                     ItemNo = copy.NewZgsNo,
+                    ItemName = AgentPreviewItemName(copy.NewName, copy.NewZgsNo),
                     OldValue = "(复制自 " + copy.SourceZgsNo + " " + copy.SourceName + ")",
                     NewValue = copy.NewName
                 });

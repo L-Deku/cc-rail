@@ -644,7 +644,7 @@ namespace RecoNet
             Dictionary<string, AutoMatchCellValue> byAddress = new Dictionary<string, AutoMatchCellValue>(StringComparer.OrdinalIgnoreCase);
             foreach (AiExcelCell cell in context == null ? new List<AiExcelCell>() : context.Cells)
             {
-                if (cell == null || !cell.IsNumber || (targetSet != null && !targetSet.Contains(cell.Column)))
+                if (cell == null || !cell.IsNumber || !context.IsCellInTargetColumns(cell, targetSet))
                 {
                     continue;
                 }
@@ -1330,7 +1330,7 @@ namespace RecoNet
             HashSet<int> targetSet = targetColumns != null && targetColumns.Count > 0
                 ? new HashSet<int>(targetColumns)
                 : null;
-            return context.Cells.Any(cell => cell.IsNumber && (targetSet == null || targetSet.Contains(cell.Column)));
+            return context.Cells.Any(cell => cell.IsNumber && context.IsCellInTargetColumns(cell, targetSet));
         }
 
         private static bool TryReadWorksheetRangeCells(dynamic sheet, AiExcelSelectionContext context, int firstRow, int firstColumn, int rowCount, int colCount)
@@ -1979,7 +1979,7 @@ namespace RecoNet
                     totalNo = ResolveAutoMatchTotalNo(node);
                     // 树节点 Tag 里经常没有条目序号，且子节点可能懒加载未展开；
                     // 按当前条目编号从章节表补全本条目及全部子条目的序号。
-                    chapterNo = ResolveChapterNo(mainForm, conn, node);
+                    chapterNo = ResolveAutoMatchChapterNo(node);
                     AppendAutoMatchChapterSeqsByItemNo(chapterSeqs, chapterNo);
                     if (chapterSeqs.Count == 0)
                     {
@@ -2066,6 +2066,83 @@ namespace RecoNet
                     .ToList());
             }
 
+            private string ResolveAutoMatchChapterNo(TreeNode node)
+            {
+                if (node == null)
+                {
+                    return "";
+                }
+
+                string fromTag = TryGetValue(node.Tag, "\u6761\u76ee\u7f16\u53f7");
+                if (!String.IsNullOrWhiteSpace(fromTag))
+                {
+                    return fromTag.Trim();
+                }
+
+                string nodeName = (node.Name ?? "").Trim();
+                string byName = ResolveAutoMatchChapterNoByExactCode(nodeName);
+                if (!String.IsNullOrWhiteSpace(byName))
+                {
+                    return byName;
+                }
+
+                string seq = TryGetValue(node.Tag, "\u6761\u76ee\u5e8f\u53f7");
+                if (String.IsNullOrWhiteSpace(seq) && IsNumeric(nodeName))
+                {
+                    seq = nodeName;
+                }
+
+                string bySeq = ResolveAutoMatchChapterNoBySeq(seq);
+                if (!String.IsNullOrWhiteSpace(bySeq))
+                {
+                    return bySeq;
+                }
+
+                if (!String.IsNullOrWhiteSpace(nodeName) && !IsNumeric(nodeName))
+                {
+                    return nodeName;
+                }
+
+                string fallback = ResolveChapterNo(mainForm, conn, node);
+                return fallback == null ? "" : fallback.Trim();
+            }
+
+            private string ResolveAutoMatchChapterNoByExactCode(string itemNo)
+            {
+                itemNo = (itemNo ?? "").Trim();
+                if (String.IsNullOrWhiteSpace(itemNo))
+                {
+                    return "";
+                }
+
+                EnsureOpen(conn);
+                using (SqlCommand cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "select top 1 \u6761\u76ee\u7f16\u53f7 from \u7ae0\u8282\u8868 where \u6761\u76ee\u7f16\u53f7=@no";
+                    cmd.Parameters.AddWithValue("@no", itemNo);
+                    object result = cmd.ExecuteScalar();
+                    return result == null || result == DBNull.Value ? "" : Convert.ToString(result, CultureInfo.InvariantCulture).Trim();
+                }
+            }
+
+            private string ResolveAutoMatchChapterNoBySeq(string seq)
+            {
+                seq = (seq ?? "").Trim();
+                if (String.IsNullOrWhiteSpace(seq))
+                {
+                    return "";
+                }
+
+                EnsureOpen(conn);
+                using (SqlCommand cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "select top 1 \u6761\u76ee\u7f16\u53f7 from \u7ae0\u8282\u8868 where \u6761\u76ee\u5e8f\u53f7=@id";
+                    cmd.Parameters.AddWithValue("@id", seq);
+                    object result = cmd.ExecuteScalar();
+                    return result == null || result == DBNull.Value ? "" : Convert.ToString(result, CultureInfo.InvariantCulture).Trim();
+                }
+            }
+
             // 条目编号分段左补零做排序键（0101-4 与 0101-04-01 等长比较），空编号排最后。
             private static string BuildAutoMatchItemNoSortKey(string itemNo)
             {
@@ -2097,14 +2174,20 @@ namespace RecoNet
                 HashSet<string> seen = new HashSet<string>(chapterSeqs, StringComparer.OrdinalIgnoreCase);
                 using (SqlCommand cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "select \u6761\u76ee\u5e8f\u53f7 from \u7ae0\u8282\u8868 where \u6761\u76ee\u7f16\u53f7=@no or \u6761\u76ee\u7f16\u53f7 like @prefix";
+                    cmd.CommandText = "select \u6761\u76ee\u5e8f\u53f7, \u6761\u76ee\u7f16\u53f7 from \u7ae0\u8282\u8868 where \u6761\u76ee\u7f16\u53f7=@no or \u6761\u76ee\u7f16\u53f7 like @prefix";
                     cmd.Parameters.AddWithValue("@no", itemNo);
-                    cmd.Parameters.AddWithValue("@prefix", itemNo + "-%");
+                    cmd.Parameters.AddWithValue("@prefix", itemNo + "%");
                     using (SqlDataReader reader = cmd.ExecuteReader())
                     {
                         while (reader.Read())
                         {
                             if (reader.IsDBNull(0))
+                            {
+                                continue;
+                            }
+
+                            string childNo = reader.IsDBNull(1) ? "" : Convert.ToString(reader.GetValue(1), CultureInfo.InvariantCulture).Trim();
+                            if (!IsItemNoUnderChapter(childNo, itemNo))
                             {
                                 continue;
                             }
@@ -2673,7 +2756,7 @@ namespace RecoNet
                     return;
                 }
 
-                string address = NormalizeCellAddress(rawAddress);
+                string address = currentContext.NormalizeMergedCellAddress(rawAddress);
                 string key = (workbookPath ?? "") + "|" + (worksheetName ?? "") + "|" + address + "|" + row.Index.ToString(CultureInfo.InvariantCulture);
                 if (String.Equals(lastManualCellKey, key, StringComparison.OrdinalIgnoreCase))
                 {
