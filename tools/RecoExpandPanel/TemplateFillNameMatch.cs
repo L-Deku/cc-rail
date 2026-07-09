@@ -328,15 +328,49 @@ namespace RecoNet
                 int ti = BestMatchIndex(tr.NormName, tmplNorms);
                 if (ti >= 0)
                 {
-                    FillTemplateRow trow = template.Rows[ti];
-                    item.ItemNo = trow.ItemNo;
-                    item.QuotaCode = trow.QuotaCode;
-                    item.Adjust = trow.Adjust;
-                    item.OrderInItem = trow.OrderInItem;
-                    item.ChosenQuotaSeq = trow.SourceQuotaSeq;
-                    item.AlignNote = "模版命中";
-                    lastMatched = item;
-                    items.Add(item);
+                    // 组件框：目标一行工程量 -> 模版里所有同名(归一化相等)定额，按条目内序全展开。
+                    string bestNorm = tmplNorms[ti];
+                    List<int> groupIdx = new List<int>();
+                    for (int gi = 0; gi < tmplNorms.Count; gi++)
+                    {
+                        if (String.Equals(tmplNorms[gi], bestNorm, StringComparison.Ordinal)) groupIdx.Add(gi);
+                    }
+                    groupIdx.Sort(delegate(int a, int b) { return template.Rows[a].OrderInItem.CompareTo(template.Rows[b].OrderInItem); });
+
+                    int go = 0;
+                    foreach (int gi in groupIdx)
+                    {
+                        FillTemplateRow trow = template.Rows[gi];
+                        FillPreviewItem gitem = (go == 0) ? item : new FillPreviewItem();
+                        gitem.IsNameDriven = true;
+                        gitem.TemplateName = template.Name;
+                        gitem.TargetRow = tr.Row;
+                        gitem.ItemNo = trow.ItemNo;
+                        gitem.QuotaCode = trow.QuotaCode;
+                        gitem.Adjust = trow.Adjust;
+                        gitem.OrderInItem = trow.OrderInItem;
+                        gitem.ChosenQuotaSeq = trow.SourceQuotaSeq;
+                        gitem.GroupOrder = go;
+                        gitem.SourceName = (go == 0) ? tr.RawName : "";
+                        gitem.TargetName = (go == 0) ? tr.RawName : "";
+                        gitem.AlignNote = (go == 0) ? "模版命中" : ("组件框第 " + (go + 1).ToString(CultureInfo.InvariantCulture) + " 条");
+
+                        // 套用源绑定表达式的换算系数：把目标数量代入源单格表达式(如 I19/100)求值。
+                        string fdisp; decimal fqty; string ferr;
+                        string fcell = ExtractFirstCellAddress(trow.SourceExpr);
+                        if (!String.IsNullOrEmpty(fcell) && TryEvaluateExpressionWithKnownCell(trow.SourceExpr, fcell, tr.QuantityText, out fdisp, out fqty, out ferr))
+                        {
+                            gitem.QuantityText = fdisp;
+                        }
+                        else
+                        {
+                            gitem.QuantityText = tr.QuantityText;
+                        }
+
+                        if (go == 0) lastMatched = gitem;
+                        items.Add(gitem);
+                        go++;
+                    }
                     continue;
                 }
 
