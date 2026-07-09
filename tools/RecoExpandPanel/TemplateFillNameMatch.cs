@@ -142,7 +142,8 @@ namespace RecoNet
         private sealed class TargetQtyRow
         {
             public int Row;
-            public string RawName;    // 数量列左侧全名(不截断)
+            public string RawName;    // 数量列左侧全名(不截断，供匹配)
+            public string DisplayName;// 数量列左侧截断显示名(3段/15字)，供 UI 显示
             public string NormName;   // 归一化
             public string Chapter;    // 所属 Excel 章节锚点行文本(供章节内就近)；空=未分段
             public decimal Quantity;
@@ -184,6 +185,7 @@ namespace RecoNet
                 TargetQtyRow row = new TargetQtyRow();
                 row.Row = r;
                 row.RawName = name;
+                row.DisplayName = ReadRowNameAt(workbook, sheet, qtyAddr, hiddenCache, mergedCache, ctx, false);
                 row.NormName = NormalizeMatchText(name);
                 row.Chapter = currentChapter;
                 row.Quantity = qty;
@@ -321,8 +323,8 @@ namespace RecoNet
                 item.IsNameDriven = true;
                 item.TemplateName = template.Name;
                 item.TargetRow = tr.Row;
-                item.SourceName = tr.RawName;
-                item.TargetName = tr.RawName;
+                item.SourceName = "";
+                item.TargetName = tr.DisplayName;
                 item.QuantityText = tr.QuantityText;
 
                 int ti = BestMatchIndex(tr.NormName, tmplNorms);
@@ -351,8 +353,8 @@ namespace RecoNet
                         gitem.OrderInItem = trow.OrderInItem;
                         gitem.ChosenQuotaSeq = trow.SourceQuotaSeq;
                         gitem.GroupOrder = go;
-                        gitem.SourceName = (go == 0) ? tr.RawName : "";
-                        gitem.TargetName = (go == 0) ? tr.RawName : "";
+                        gitem.SourceName = trow.SourceName;
+                        gitem.TargetName = (go == 0) ? tr.DisplayName : "";
                         gitem.AlignNote = (go == 0) ? "模版命中" : ("组件框第 " + (go + 1).ToString(CultureInfo.InvariantCulture) + " 条");
 
                         // 套用源绑定表达式的换算系数：把目标数量代入源单格表达式(如 I19/100)求值。
@@ -464,6 +466,7 @@ namespace RecoNet
             target.Selected = true;
             target.QuotaCode = picked[0].Code;
             target.ChosenQuotaSeq = picked[0].QuotaSeq;
+            target.SourceName = picked[0].Name;
             target.GroupOrder = 0;
             target.AlignNote = "已手挂 " + picked[0].Code + (picked.Count > 1 ? ("（组 " + picked.Count.ToString(CultureInfo.InvariantCulture) + " 条）") : "");
             for (int k = 1; k < picked.Count; k++)
@@ -474,7 +477,7 @@ namespace RecoNet
                 extra.ItemNo = target.ItemNo; extra.OrderInItem = target.OrderInItem;
                 extra.NeighborSourceQuotaSeq = target.NeighborSourceQuotaSeq;
                 extra.QuotaCode = picked[k].Code; extra.ChosenQuotaSeq = picked[k].QuotaSeq;
-                extra.GroupOrder = k; extra.SourceName = ""; extra.TargetName = "";
+                extra.GroupOrder = k; extra.SourceName = picked[k].Name; extra.TargetName = "";
                 extra.QuantityText = target.QuantityText;
                 extra.AlignNote = "组件框第 " + (k + 1).ToString(CultureInfo.InvariantCulture) + " 条";
                 if (idx >= 0) preview.Insert(idx + k, extra); else preview.Add(extra);

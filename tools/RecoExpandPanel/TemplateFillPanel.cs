@@ -245,7 +245,7 @@ namespace RecoNet
                     grid.Rows[idx].Tag = it;
                     if (!String.IsNullOrEmpty(it.Status))
                         grid.Rows[idx].DefaultCellStyle.BackColor = Color.MistyRose;
-                    else if (!String.IsNullOrEmpty(it.AlignNote))
+                    else if (it.NeedManualQuota)
                         grid.Rows[idx].DefaultCellStyle.BackColor = Color.FromArgb(255, 246, 196);
                 }
             }
