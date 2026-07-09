@@ -1099,13 +1099,26 @@ namespace RecoNet
                 else
                 {
                     string oldExpr = row.QuantityInput;
-                    if (String.IsNullOrEmpty(oldExpr) || oldExpr.IndexOf(fragment, StringComparison.Ordinal) < 0)
+                    if (String.IsNullOrEmpty(oldExpr))
                     {
                         skipped++;
                         continue;
                     }
 
-                    string newExpr = RemoveAgentQuantityFragment(oldExpr, fragment);
+                    string newExpr;
+                    if (oldExpr.IndexOf(fragment, StringComparison.Ordinal) >= 0)
+                    {
+                        newExpr = RemoveAgentQuantityFragment(oldExpr, fragment);
+                    }
+                    else if (IsAgentQuantityOperatorFragment(fragment) && TryUnwrapAgentQuantityExpression(oldExpr, out newExpr))
+                    {
+                    }
+                    else
+                    {
+                        skipped++;
+                        continue;
+                    }
+
                     object newQuantity;
                     if (String.IsNullOrEmpty(newExpr))
                     {
@@ -1145,22 +1158,45 @@ namespace RecoNet
         private static string RemoveAgentQuantityFragment(string oldExpr, string fragment)
         {
             string newExpr = oldExpr.Replace(fragment, "");
-            string trimmed = newExpr.Trim();
+            string unwrapped;
+            return TryUnwrapAgentQuantityExpression(newExpr, out unwrapped) ? unwrapped : newExpr;
+        }
+
+        private static bool IsAgentQuantityOperatorFragment(string fragment)
+        {
+            if (String.IsNullOrEmpty(fragment))
+            {
+                return false;
+            }
+
+            string trimmed = fragment.Trim();
+            return trimmed.StartsWith("*", StringComparison.Ordinal) ||
+                trimmed.StartsWith("/", StringComparison.Ordinal) ||
+                trimmed.StartsWith("×", StringComparison.Ordinal) ||
+                trimmed.StartsWith("÷", StringComparison.Ordinal);
+        }
+
+        private static bool TryUnwrapAgentQuantityExpression(string expression, out string unwrappedExpression)
+        {
+            unwrappedExpression = expression;
+            string trimmed = expression.Trim();
             if (IsAgentWholeParenthesizedExpression(trimmed))
             {
                 string unwrapped = trimmed.Substring(1, trimmed.Length - 2).Trim();
-                if (newExpr.Length == trimmed.Length)
+                if (expression.Length == trimmed.Length)
                 {
-                    return unwrapped;
+                    unwrappedExpression = unwrapped;
+                    return true;
                 }
 
-                int start = newExpr.IndexOf(trimmed, StringComparison.Ordinal);
-                return newExpr.Substring(0, start) +
+                int start = expression.IndexOf(trimmed, StringComparison.Ordinal);
+                unwrappedExpression = expression.Substring(0, start) +
                     unwrapped +
-                    newExpr.Substring(start + trimmed.Length);
+                    expression.Substring(start + trimmed.Length);
+                return true;
             }
 
-            return newExpr;
+            return false;
         }
 
         private static bool IsAgentWholeParenthesizedExpression(string text)

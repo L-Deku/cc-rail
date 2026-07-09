@@ -22,6 +22,7 @@ powershell.exe -ExecutionPolicy Bypass -File "C:\Users\谢刚\Desktop\自动预�
 ```
 
 - 构建成功后，脚本会生成并部署 `RecoQuotaRecommend.dll` 到软件目录。
+- 修改 `tools/RecoExpandPanel/` 后，如果因为目标软件正在运行只编译了 `RecoQuotaRecommend/bin/RecoExpandPanel.dll` 而未部署，必须明确说明运行目录仍是旧 DLL；现场验证前先用 DLL 时间戳或 marker 确认运行目录 `RecoExpandPanel.dll` 已更新。
 - 需要同步 `自动预算`、`自动预算专用线`、`铁路工程云计价系统网络版V1.0-徐总` 三个运行目录时，先运行统一部署脚本干跑检查：
 
 ```powershell
