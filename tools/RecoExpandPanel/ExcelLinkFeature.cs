@@ -1979,34 +1979,7 @@ namespace RecoNet
                     }
                 }
 
-                string targetKey = "quota:" + link.QuotaCode.Trim().ToUpperInvariant();
-                string boxId = FindExistingMappingBoxId(rows, targetKey) ?? BuildSingleQuotaBoxId(link.QuotaCode);
-                string signature = NormalizeForSignature(fullQuantityName) + "|";
-                Dictionary<string, string> existing = rows.FirstOrDefault(row =>
-                    String.Equals(GetFlat(row, "box_id"), boxId, StringComparison.OrdinalIgnoreCase) &&
-                    String.Equals(NormalizeForSignature(GetFlat(row, "quantity_name")) + "|" + NormalizeForSignature(GetFlat(row, "quantity_unit")), signature, StringComparison.OrdinalIgnoreCase));
-
-                if (existing == null)
-                {
-                    existing = new Dictionary<string, string>();
-                    rows.Add(existing);
-                    existing["record_type"] = "mapping_box";
-                    existing["box_id"] = boxId;
-                    existing["target_kind"] = "quota";
-                    existing["target_code"] = link.QuotaCode ?? "";
-                    existing["target_name"] = link.QuotaName ?? "";
-                    existing["target_unit"] = "";
-                    existing["quantity_name"] = fullQuantityName;
-                    existing["quantity_unit"] = "";
-                    existing["weight"] = "10";
-                    existing["accepted_count"] = "0";
-                    existing["corrected_count"] = "0";
-                    existing["rejected_count"] = "0";
-                }
-
-                existing["weight"] = (ReadFlatInt(existing, "weight", 0) + 5).ToString(CultureInfo.InvariantCulture);
-                existing["accepted_count"] = (ReadFlatInt(existing, "accepted_count", 0) + 1).ToString(CultureInfo.InvariantCulture);
-                existing["last_used_at"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+                UpsertMappingBoxRow(rows, link.QuotaCode, link.QuotaName, fullQuantityName);
 
                 TrimMappingRows(rows, 30);
                 File.WriteAllLines(path, rows.Select(ToFlatJson).ToArray(), Encoding.UTF8);
@@ -2016,6 +1989,73 @@ namespace RecoNet
             {
                 Log("Record binding to mapping store failed: " + ex.Message);
             }
+        }
+
+        // 名字驱动写入后合批回写：一次锁/读/写完成多条“工程量全名->定额”。
+        private static void RecordNameMatchesToMappingStore(List<KeyValuePair<string, string>> codeNamePairs)
+        {
+            if (codeNamePairs == null || codeNamePairs.Count == 0) return;
+            try
+            {
+                WithMappingBoxesLock(delegate
+                {
+                string path = Path.Combine(FindRecoQuotaDataDir(), "mapping-boxes.jsonl");
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                List<Dictionary<string, string>> rows = new List<Dictionary<string, string>>();
+                if (File.Exists(path))
+                {
+                    foreach (string line in File.ReadAllLines(path, Encoding.UTF8))
+                    {
+                        Dictionary<string, string> parsed = ParseFlatJson(line);
+                        if (parsed.Count > 0) rows.Add(parsed);
+                    }
+                }
+                foreach (KeyValuePair<string, string> pair in codeNamePairs)
+                {
+                    if (!IsAutoMatchQuotaCode(pair.Key) || String.IsNullOrWhiteSpace(pair.Value)) continue;
+                    UpsertMappingBoxRow(rows, pair.Key, "", pair.Value);
+                }
+                TrimMappingRows(rows, 30);
+                File.WriteAllLines(path, rows.Select(ToFlatJson).ToArray(), Encoding.UTF8);
+                });
+            }
+            catch (Exception ex)
+            {
+                Log("Record name matches to mapping store failed: " + ex.Message);
+            }
+        }
+
+        // 单条对应框记录 upsert：命中(box_id+归一化工程量名+单位)则加权计次，否则新建。供绑定/名字驱动写入共用。
+        private static void UpsertMappingBoxRow(List<Dictionary<string, string>> rows, string quotaCode, string quotaName, string quantityName)
+        {
+            string targetKey = "quota:" + quotaCode.Trim().ToUpperInvariant();
+            string boxId = FindExistingMappingBoxId(rows, targetKey) ?? BuildSingleQuotaBoxId(quotaCode);
+            string signature = NormalizeForSignature(quantityName) + "|";
+            Dictionary<string, string> existing = rows.FirstOrDefault(row =>
+                String.Equals(GetFlat(row, "box_id"), boxId, StringComparison.OrdinalIgnoreCase) &&
+                String.Equals(NormalizeForSignature(GetFlat(row, "quantity_name")) + "|" + NormalizeForSignature(GetFlat(row, "quantity_unit")), signature, StringComparison.OrdinalIgnoreCase));
+
+            if (existing == null)
+            {
+                existing = new Dictionary<string, string>();
+                rows.Add(existing);
+                existing["record_type"] = "mapping_box";
+                existing["box_id"] = boxId;
+                existing["target_kind"] = "quota";
+                existing["target_code"] = quotaCode ?? "";
+                existing["target_name"] = quotaName ?? "";
+                existing["target_unit"] = "";
+                existing["quantity_name"] = quantityName;
+                existing["quantity_unit"] = "";
+                existing["weight"] = "10";
+                existing["accepted_count"] = "0";
+                existing["corrected_count"] = "0";
+                existing["rejected_count"] = "0";
+            }
+
+            existing["weight"] = (ReadFlatInt(existing, "weight", 0) + 5).ToString(CultureInfo.InvariantCulture);
+            existing["accepted_count"] = (ReadFlatInt(existing, "accepted_count", 0) + 1).ToString(CultureInfo.InvariantCulture);
+            existing["last_used_at"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
         }
 
         private static string FindRecoQuotaDataDir()

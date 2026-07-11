@@ -667,6 +667,7 @@ namespace RecoNet
         // 回写：把本次名字驱动确认的"工程量名 -> 定额(可多条)"写进对应框 + 当前模版。
         private static void FeedbackNameMatches(string templateName, List<FillPreviewItem> written)
         {
+            List<KeyValuePair<string, string>> pairs = new List<KeyValuePair<string, string>>();
             foreach (IGrouping<int, FillPreviewItem> g in written
                 .Where(i => i.IsNameDriven && !String.IsNullOrWhiteSpace(i.QuotaCode))
                 .GroupBy(i => i.TargetRow))
@@ -675,10 +676,10 @@ namespace RecoNet
                 if (String.IsNullOrWhiteSpace(name)) continue;
                 foreach (FillPreviewItem it in g)
                 {
-                    ExcelQuotaLink pseudo = new ExcelQuotaLink { QuotaCode = it.QuotaCode, QuotaName = "" };
-                    RecordBindingToMappingStore(pseudo, name);
+                    pairs.Add(new KeyValuePair<string, string>(it.QuotaCode, name));
                 }
             }
+            RecordNameMatchesToMappingStore(pairs);
 
             try
             {

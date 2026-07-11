@@ -891,7 +891,7 @@ namespace RecoNet
             List<FillPreviewItem> selected = items
                 .Where(i => i.Selected &&
                     (String.IsNullOrEmpty(i.Status) || String.Equals(i.Status, "\u6570\u91cf\u4e3a0", StringComparison.Ordinal)) &&
-                    (i.SourceQuotaSeq > 0 || (i.IsNameDriven && i.ChosenQuotaSeq > 0)))
+                    (i.SourceQuotaSeq > 0 || (i.IsNameDriven && i.ChosenQuotaSeq > 0 && i.NeighborSourceQuotaSeq > 0)))
                 .OrderBy(i => i.ItemNo, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(i => i.OrderInItem)
                 .ToList();
@@ -909,6 +909,7 @@ namespace RecoNet
                 // 每个 (条目序号) 的下一个顺号，写入时递增。
                 Dictionary<long, int> nextShun = new Dictionary<long, int>();
                 HashSet<long> markerInserted = new HashSet<long>();
+                List<FillPreviewItem> writtenOk = new List<FillPreviewItem>();
 
                 using (SqlTransaction transaction = conn.BeginTransaction())
                 {
@@ -919,7 +920,7 @@ namespace RecoNet
                             long copyFrom = item.IsNameDriven ? item.ChosenQuotaSeq : item.SourceQuotaSeq;
                             Dictionary<string, object> row = LoadTemplateFullRow(conn, transaction, copyFrom);
                             if (row == null) { skipped++; continue; }
-                            if (item.IsNameDriven && item.NeighborSourceQuotaSeq > 0)
+                            if (item.IsNameDriven && item.NeighborSourceQuotaSeq > 0 && item.NeighborSourceQuotaSeq != copyFrom)
                             {
                                 Dictionary<string, object> anchor = LoadTemplateFullRow(conn, transaction, item.NeighborSourceQuotaSeq);
                                 if (anchor != null) row["条目序号"] = anchor["条目序号"];
@@ -971,6 +972,7 @@ namespace RecoNet
                                 undo.Rows.Add(new AgentUndoRow { Kind = "I", QuotaSequence = newId });
                                 inserted++;
                                 nextShun[itemSeq] = shun + 1;
+                                writtenOk.Add(item);
                             }
                             else { skipped++; }
                         }
@@ -989,9 +991,9 @@ namespace RecoNet
                     GetAgentUndoStack(mainForm).Add(undo);
                     GetAgentRedoStack(mainForm).Clear();
                 }
-                if (selected.Any(i => i.IsNameDriven))
+                if (writtenOk.Any(i => i.IsNameDriven))
                 {
-                    FeedbackNameMatches(selected[0].TemplateName, selected);
+                    FeedbackNameMatches(writtenOk[0].TemplateName, writtenOk);
                 }
                 RefreshCurrentQuotaGrid(mainForm);
 
