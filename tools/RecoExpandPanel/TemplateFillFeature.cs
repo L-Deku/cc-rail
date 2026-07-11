@@ -15,9 +15,6 @@ namespace RecoNet
 {
     public partial class FormPanel : Form
     {
-        // 取数模式
-        public enum FillMode { ColumnAnchor = 1, FixedColumn = 2 }
-
         // 模板里的一条定额
         public sealed class FillTemplateRow
         {

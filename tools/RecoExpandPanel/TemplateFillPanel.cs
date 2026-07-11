@@ -13,6 +13,7 @@ namespace RecoNet
         {
             private readonly Form mainForm;
             private List<FillPreviewItem> preview = new List<FillPreviewItem>();
+            private List<ProjectQuota> projectQuotaCache;
 
             private readonly ComboBox cmbTemplate = new ComboBox();
             private readonly Button btnDeleteTemplate = new Button();
@@ -207,6 +208,7 @@ namespace RecoNet
             private void OnPreview()
             {
                 SetBusy(true, "预览中...");
+                projectQuotaCache = null;
                 try
                 {
                     if (cmbTemplate.SelectedItem == null) { MessageBox.Show(this, "请先选择模板。", "模板铺量"); return; }
@@ -232,6 +234,7 @@ namespace RecoNet
                 grid.Rows.Clear();
                 string scope = currentTreeScope ?? "";
                 bool nameDriven = preview.Any(p => p.IsNameDriven);
+                grid.Columns["item"].Visible = nameDriven;
                 IEnumerable<FillPreviewItem> ordered = preview
                     .Where(item => String.IsNullOrEmpty(scope) || IsItemNoUnderChapter(item.ItemNo ?? "", scope));
                 ordered = nameDriven
@@ -363,7 +366,8 @@ namespace RecoNet
                 if (e.RowIndex < 0) return;
                 FillPreviewItem it = grid.Rows[e.RowIndex].Tag as FillPreviewItem;
                 if (it == null || !it.NeedManualQuota) return;
-                List<ProjectQuota> all = LoadProjectQuotas(mainForm);
+                if (projectQuotaCache == null) projectQuotaCache = LoadProjectQuotas(mainForm);
+                List<ProjectQuota> all = projectQuotaCache;
                 List<ProjectQuota> sug = RankProjectQuotas(all, it.TargetName);
                 using (QuotaPickerDialog dlg = new QuotaPickerDialog(all, sug))
                 {

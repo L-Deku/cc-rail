@@ -145,10 +145,9 @@ namespace RecoNet
             public string RawName;    // 数量列左侧全名(不截断，供匹配)
             public string DisplayName;// 数量列左侧截断显示名(3段/15字)，供 UI 显示
             public string NormName;   // 归一化
-            public string Chapter;    // 所属 Excel 章节锚点行文本(供章节内就近)；空=未分段
+            public string Chapter;    // 预留：二期章节内就近约束
             public decimal Quantity;
             public string QuantityText;
-            public bool IsAnchor;     // 章节锚点行(“一、/(一)/第X章”)
         }
 
         // 读目标 sheet：数量列(qtyColumn) 有数字的行=工程量行；行全名取数量列左侧不截断文本；
@@ -258,29 +257,39 @@ namespace RecoNet
             public int Score;
         }
 
-        // 读 mapping-boxes.jsonl，为一个工程量全名返回候选定额(按名字相似度)。一期只吃对应框(绑定飞轮)。
-        private static List<BoxCandidate> LookupMappingBox(string queryFullName)
+        // 读 mapping-boxes.jsonl 全量行；一次性读入供本次预览多次查询，避免逐行重复打开文件。
+        private static List<Dictionary<string, string>> LoadMappingBoxRows()
         {
-            List<BoxCandidate> result = new List<BoxCandidate>();
-            string norm = NormalizeMatchText(queryFullName);
-            if (norm.Length == 0) return result;
+            List<Dictionary<string, string>> rows = new List<Dictionary<string, string>>();
             try
             {
                 string path = System.IO.Path.Combine(FindRecoQuotaDataDir(), "mapping-boxes.jsonl");
-                if (!System.IO.File.Exists(path)) return result;
+                if (!System.IO.File.Exists(path)) return rows;
                 foreach (string line in System.IO.File.ReadAllLines(path, Encoding.UTF8))
                 {
                     Dictionary<string, string> row = ParseFlatJson(line);
-                    if (row.Count == 0) continue;
-                    string qn = GetFlat(row, "quantity_name");
-                    string code = GetFlat(row, "target_code");
-                    if (String.IsNullOrWhiteSpace(qn) || String.IsNullOrWhiteSpace(code)) continue;
-                    int s = MatchNameScore(norm, NormalizeMatchText(qn));
-                    if (s < NameMatchMinScore) continue;
-                    result.Add(new BoxCandidate { QuotaCode = code, QuotaName = GetFlat(row, "target_name"), Score = s });
+                    if (row.Count > 0) rows.Add(row);
                 }
             }
-            catch (Exception ex) { Log("LookupMappingBox failed: " + ex.Message); }
+            catch (Exception ex) { Log("LoadMappingBoxRows failed: " + ex.Message); }
+            return rows;
+        }
+
+        // 为一个工程量全名返回候选定额(按名字相似度)。一期只吃对应框(绑定飞轮)。boxRows 由调用方预读一次。
+        private static List<BoxCandidate> LookupMappingBox(string queryFullName, List<Dictionary<string, string>> boxRows)
+        {
+            List<BoxCandidate> result = new List<BoxCandidate>();
+            string norm = NormalizeMatchText(queryFullName);
+            if (norm.Length == 0 || boxRows == null) return result;
+            foreach (Dictionary<string, string> row in boxRows)
+            {
+                string qn = GetFlat(row, "quantity_name");
+                string code = GetFlat(row, "target_code");
+                if (String.IsNullOrWhiteSpace(qn) || String.IsNullOrWhiteSpace(code)) continue;
+                int s = MatchNameScore(norm, NormalizeMatchText(qn));
+                if (s < NameMatchMinScore) continue;
+                result.Add(new BoxCandidate { QuotaCode = code, QuotaName = GetFlat(row, "target_name"), Score = s });
+            }
             return result
                 .GroupBy(c => c.QuotaCode, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.OrderByDescending(c => c.Score).First())
@@ -288,11 +297,70 @@ namespace RecoNet
                 .ToList();
         }
 
+        // 多操作数表达式(如 E4+E5)：把每个操作数按其工程量名在目标表定位,以其数量代入原表达式。
+        // 全部命中才返回 true；exprText=代入后的数字表达式(软件工程数量输入格式)；
+        // operandTargetIdx=各操作数命中的目标行下标(供主循环标注“已并入”)。
+        private static bool TrySubstituteOperandQuantities(FillTemplateRow trow, List<TargetQtyRow> targetRows,
+            List<string> targetNorms, out string exprText, out List<int> operandTargetIdx)
+        {
+            exprText = null;
+            operandTargetIdx = new List<int>();
+            if (trow == null || trow.Operands == null || trow.Operands.Count < 2 || String.IsNullOrWhiteSpace(trow.SourceExpr))
+            {
+                return false;
+            }
+
+            List<string> cells = ExtractCellAddressesFromExpression(trow.SourceExpr);
+            if (cells.Count != trow.Operands.Count)
+            {
+                return false;
+            }
+
+            List<string> values = new List<string>();
+            foreach (FillOperand op in trow.Operands)
+            {
+                int idx = BestMatchIndex(NormalizeMatchText(op.Name), targetNorms);
+                if (idx < 0)
+                {
+                    return false;
+                }
+
+                operandTargetIdx.Add(idx);
+                values.Add("(" + targetRows[idx].QuantityText + ")");
+            }
+
+            int next = 0;
+            string result = System.Text.RegularExpressions.Regex.Replace(
+                trow.SourceExpr.ToUpperInvariant(), "\\$?[A-Z]{1,3}\\$?\\d+",
+                delegate(System.Text.RegularExpressions.Match m)
+                {
+                    string v = next < values.Count ? values[next] : m.Value;
+                    next++;
+                    return v;
+                });
+
+            decimal parsed;
+            string err;
+            if (!TryEvaluateDecimal(result, out parsed, out err))
+            {
+                return false;
+            }
+
+            exprText = result;
+            return true;
+        }
+
         // 名字驱动套用：以目标 Excel 工程量行为主序，逐行匹配定额。返回 items 已按 Excel 行序。
         private static List<FillPreviewItem> BuildPreview_NameDriven(Form mainForm, FillTemplate template,
             string targetSheet, string targetColumn, out string warning)
         {
             warning = null;
+            if (!String.Equals(template.MatchBy, "name", StringComparison.OrdinalIgnoreCase))
+            {
+                warning = "该模板不是“按名字生成”的模板，名字驱动无法使用。请勾选“按名字生成”重新生成模板。";
+                return new List<FillPreviewItem>();
+            }
+
             CellRef colRef;
             if (!TryParseCellAddress((targetColumn ?? "").Trim().ToUpperInvariant() + "1", out colRef))
             {
@@ -313,12 +381,37 @@ namespace RecoNet
                 return new List<FillPreviewItem>();
             }
 
+            List<ProjectQuota> projectQuotas = LoadProjectQuotas(mainForm);
+            List<Dictionary<string, string>> boxRows = LoadMappingBoxRows();
+
             List<FillPreviewItem> items = new List<FillPreviewItem>();
             List<string> tmplNorms = template.Rows.Select(r => NormalizeMatchText(r.MatchName ?? r.SourceName ?? "")).ToList();
+            List<string> targetNorms = targetRows.Select(x => x.NormName).ToList();
+
+            HashSet<int> usedTmplIdx = new HashSet<int>();
+            Dictionary<int, string> mergedIntoByTargetIdx = new Dictionary<int, string>();
 
             FillPreviewItem lastMatched = null;
-            foreach (TargetQtyRow tr in targetRows)
+            for (int trIdx = 0; trIdx < targetRows.Count; trIdx++)
             {
+                TargetQtyRow tr = targetRows[trIdx];
+
+                string mergedNote;
+                if (mergedIntoByTargetIdx.TryGetValue(trIdx, out mergedNote))
+                {
+                    FillPreviewItem mergedItem = new FillPreviewItem();
+                    mergedItem.IsNameDriven = true;
+                    mergedItem.TemplateName = template.Name;
+                    mergedItem.TargetRow = tr.Row;
+                    mergedItem.TargetName = tr.DisplayName;
+                    mergedItem.QuantityText = tr.QuantityText;
+                    mergedItem.AlignNote = mergedNote;
+                    mergedItem.Selected = false;
+                    mergedItem.NeedManualQuota = false;
+                    items.Add(mergedItem);
+                    continue;
+                }
+
                 FillPreviewItem item = new FillPreviewItem();
                 item.IsNameDriven = true;
                 item.TemplateName = template.Name;
@@ -327,17 +420,26 @@ namespace RecoNet
                 item.TargetName = tr.DisplayName;
                 item.QuantityText = tr.QuantityText;
 
-                int ti = BestMatchIndex(tr.NormName, tmplNorms);
+                int ti = -1, tiScore = NameMatchMinScore - 1;
+                for (int gi = 0; gi < tmplNorms.Count; gi++)
+                {
+                    if (usedTmplIdx.Contains(gi)) continue;
+                    int s = MatchNameScore(tr.NormName, tmplNorms[gi]);
+                    if (s > tiScore) { tiScore = s; ti = gi; }
+                }
+
                 if (ti >= 0)
                 {
-                    // 组件框：目标一行工程量 -> 模版里所有同名(归一化相等)定额，按条目内序全展开。
+                    // 组件框：目标一行工程量 -> 模版里所有同名(归一化相等)且未被消费过的定额，按条目内序全展开。
                     string bestNorm = tmplNorms[ti];
                     List<int> groupIdx = new List<int>();
                     for (int gi = 0; gi < tmplNorms.Count; gi++)
                     {
+                        if (usedTmplIdx.Contains(gi)) continue;
                         if (String.Equals(tmplNorms[gi], bestNorm, StringComparison.Ordinal)) groupIdx.Add(gi);
                     }
                     groupIdx.Sort(delegate(int a, int b) { return template.Rows[a].OrderInItem.CompareTo(template.Rows[b].OrderInItem); });
+                    foreach (int gi in groupIdx) usedTmplIdx.Add(gi);
 
                     int go = 0;
                     foreach (int gi in groupIdx)
@@ -352,21 +454,41 @@ namespace RecoNet
                         gitem.Adjust = trow.Adjust;
                         gitem.OrderInItem = trow.OrderInItem;
                         gitem.ChosenQuotaSeq = trow.SourceQuotaSeq;
+                        gitem.NeighborSourceQuotaSeq = trow.SourceQuotaSeq; // 自锚点：模版命中行不依赖上方行也可写入
                         gitem.GroupOrder = go;
                         gitem.SourceName = trow.SourceName;
                         gitem.TargetName = (go == 0) ? tr.DisplayName : "";
                         gitem.AlignNote = (go == 0) ? "模版命中" : ("组件框第 " + (go + 1).ToString(CultureInfo.InvariantCulture) + " 条");
 
-                        // 套用源绑定表达式的换算系数：把目标数量代入源单格表达式(如 I19/100)求值。
-                        string fdisp; decimal fqty; string ferr;
-                        string fcell = ExtractFirstCellAddress(trow.SourceExpr);
-                        if (!String.IsNullOrEmpty(fcell) && TryEvaluateExpressionWithKnownCell(trow.SourceExpr, fcell, tr.QuantityText, out fdisp, out fqty, out ferr))
+                        // 数量：多操作数表达式(如 E4+E5)优先按名字把各操作数代入源表达式求值；
+                        // 否则套用源绑定表达式的换算系数(如 I19/100)；否则直接用目标数量。
+                        string exprText;
+                        List<int> operandIdx;
+                        if (trow.Operands != null && trow.Operands.Count > 1 &&
+                            TrySubstituteOperandQuantities(trow, targetRows, targetNorms, out exprText, out operandIdx))
                         {
-                            gitem.QuantityText = fdisp;
+                            gitem.QuantityText = exprText;
+                            for (int oi = 0; oi < operandIdx.Count; oi++)
+                            {
+                                int oIdx = operandIdx[oi];
+                                if (oIdx != trIdx && !mergedIntoByTargetIdx.ContainsKey(oIdx))
+                                {
+                                    mergedIntoByTargetIdx[oIdx] = "已并入第 " + tr.Row.ToString(CultureInfo.InvariantCulture) + " 行的表达式取数";
+                                }
+                            }
                         }
                         else
                         {
-                            gitem.QuantityText = tr.QuantityText;
+                            string fdisp; decimal fqty; string ferr;
+                            string fcell = ExtractFirstCellAddress(trow.SourceExpr);
+                            if (!String.IsNullOrEmpty(fcell) && TryEvaluateExpressionWithKnownCell(trow.SourceExpr, fcell, tr.QuantityText, out fdisp, out fqty, out ferr))
+                            {
+                                gitem.QuantityText = fdisp;
+                            }
+                            else
+                            {
+                                gitem.QuantityText = tr.QuantityText;
+                            }
                         }
 
                         if (go == 0) lastMatched = gitem;
@@ -376,15 +498,23 @@ namespace RecoNet
                     continue;
                 }
 
-                List<BoxCandidate> box = LookupMappingBox(tr.RawName);
+                List<BoxCandidate> box = LookupMappingBox(tr.RawName, boxRows);
                 if (box.Count > 0 && box[0].Score >= 70)
                 {
                     item.QuotaCode = box[0].QuotaCode;
+                    item.ChosenQuotaSeq = LoadProjectQuotaSeqByCode(projectQuotas, box[0].QuotaCode);
                     item.ItemNo = lastMatched == null ? "" : lastMatched.ItemNo;
                     item.NeighborSourceQuotaSeq = lastMatched == null ? 0 : lastMatched.ChosenQuotaSeq;
-                    item.AlignNote = "对应框建议 " + box[0].QuotaCode + "，双击可改";
+                    item.AlignNote = item.ChosenQuotaSeq > 0
+                        ? ("对应框建议 " + box[0].QuotaCode + "，可直接勾选写入，双击可改")
+                        : ("对应框建议 " + box[0].QuotaCode + "（项目内无此定额），双击手挂");
                     item.NeedManualQuota = true;
                     item.Selected = false;
+                    if (lastMatched == null)
+                    {
+                        item.Status = "无条目锚点（上方无模版命中行），不可写入";
+                        item.NeedManualQuota = false;
+                    }
                 }
                 else
                 {
@@ -393,6 +523,11 @@ namespace RecoNet
                     item.AlignNote = "无对应定额，双击手挂";
                     item.NeedManualQuota = true;
                     item.Selected = false;
+                    if (lastMatched == null)
+                    {
+                        item.Status = "无条目锚点（上方无模版命中行），不可写入";
+                        item.NeedManualQuota = false;
+                    }
                 }
                 items.Add(item);
             }
@@ -402,6 +537,7 @@ namespace RecoNet
         private sealed class ProjectQuota
         {
             public string Code; public string Name; public string Unit; public long QuotaSeq;
+            public string NormCode; public string NormName; // 预计算的归一化文本，避免每次打分重复归一化
             public override string ToString()
             { return (Code ?? "") + "  " + (Name ?? "") + (String.IsNullOrEmpty(Unit) ? "" : "  [" + Unit + "]"); }
         }
@@ -428,6 +564,8 @@ namespace RecoNet
                                 q.Name = r.IsDBNull(1) ? "" : Convert.ToString(r.GetValue(1)).Trim();
                                 q.Unit = r.IsDBNull(2) ? "" : Convert.ToString(r.GetValue(2)).Trim();
                                 q.QuotaSeq = r.IsDBNull(3) ? 0L : Convert.ToInt64(r.GetValue(3), CultureInfo.InvariantCulture);
+                                q.NormCode = NormalizeMatchText(q.Code);
+                                q.NormName = NormalizeMatchText(q.Name);
                                 if (q.Code.Length > 0 && q.QuotaSeq > 0) list.Add(q);
                             }
                         }
@@ -449,7 +587,7 @@ namespace RecoNet
         {
             string q = NormalizeMatchText(name ?? "");
             return all
-                .Select(o => new KeyValuePair<int, ProjectQuota>(MatchNameScore(q, NormalizeMatchText(o.Name)), o))
+                .Select(o => new KeyValuePair<int, ProjectQuota>(MatchNameScore(q, o.NormName), o))
                 .Where(p => p.Key > 0)
                 .OrderByDescending(p => p.Key)
                 .Take(8)
@@ -520,7 +658,7 @@ namespace RecoNet
                 IEnumerable<ProjectQuota> src;
                 if (q.Length == 0) src = suggested;
                 else src = all.Select(o => new KeyValuePair<int, ProjectQuota>(
-                        NormalizeMatchText(o.Code).IndexOf(q, StringComparison.Ordinal) >= 0 ? 1000 : MatchNameScore(q, NormalizeMatchText(o.Name)), o))
+                        o.NormCode.IndexOf(q, StringComparison.Ordinal) >= 0 ? 1000 : MatchNameScore(q, o.NormName), o))
                     .Where(p => p.Key > 0).OrderByDescending(p => p.Key).Take(60).Select(p => p.Value);
                 foreach (ProjectQuota o in src) lst.Items.Add(o);
             }
