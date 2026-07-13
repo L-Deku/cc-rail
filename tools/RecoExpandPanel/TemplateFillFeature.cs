@@ -49,6 +49,7 @@ namespace RecoNet
             public string WorkbookPath;
             public string MatchBy = "position";  // "position"（现有列锚点） | "name"（名字驱动）
             public List<FillTemplateRow> Rows = new List<FillTemplateRow>();
+            public List<string> BuildWarnings;   // 生成时被跳过的绑定提示（不属于源单元等）；null=无
         }
 
         // 预览/写入用的一条结果
@@ -331,7 +332,16 @@ namespace RecoNet
             foreach (ExcelQuotaLink link in picked)
             {
                 FillTemplateRow row;
-                if (!byId.TryGetValue(link.QuotaSequence, out row)) continue; // 定额已删/不在本单元
+                if (!byId.TryGetValue(link.QuotaSequence, out row))
+                {
+                    // 定额已删/不在本单元：不再无声丢弃，收集提示供生成后显式报告。
+                    if (template.BuildWarnings == null) template.BuildWarnings = new List<string>();
+                    if (template.BuildWarnings.Count < 20)
+                    {
+                        template.BuildWarnings.Add((link.QuotaCode ?? "") + " <- " + (link.CellAddress ?? link.Expression ?? "") + "（" + (link.QuantityName ?? "") + "）不属于源单元，已跳过");
+                    }
+                    continue;
+                }
                 row.SourceWorkbookPath = link.ExcelPath;
                 row.SourceSheet = link.WorksheetName;
                 row.SourceExpr = String.IsNullOrEmpty(link.Expression) ? link.CellAddress : link.Expression;

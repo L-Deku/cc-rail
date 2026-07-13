@@ -24,9 +24,9 @@ namespace RecoNet
             private readonly TextBox txtName = new TextBox();
             private readonly Button btnBuild = new Button();
             private readonly ComboBox cmbMode = new ComboBox();
-            private readonly TextBox txtSheet = new TextBox();
+            private readonly ComboBox cmbTargetSheet = new ComboBox();
             private readonly TextBox txtColumn = new TextBox();
-            private readonly TextBox txtTargetUnit = new TextBox();
+            private readonly ComboBox cmbTargetUnit = new ComboBox();
             private readonly Button btnPreview = new Button();
             private readonly Button btnApply = new Button();
             private readonly CheckBox chkNameMode = new CheckBox();
@@ -77,11 +77,15 @@ namespace RecoNet
                 cmbMode.Items.AddRange(new object[] { "一·列锚点", "二·名字驱动" });
                 cmbMode.SelectedIndex = 0;
                 AddLabel("目标sheet", 12, 82, 60);
-                txtSheet.SetBounds(75, 79, 120, 23); txtSheet.Text = "";
+                cmbTargetSheet.SetBounds(75, 79, 120, 23); cmbTargetSheet.Text = "";
+                cmbTargetSheet.DropDownStyle = ComboBoxStyle.DropDown; // 可选可填
+                cmbTargetSheet.DropDown += delegate { ReloadTargetSheets(); };
                 AddLabel("目标列", 205, 82, 50);
                 txtColumn.SetBounds(255, 79, 50, 23); txtColumn.Text = "";
                 AddLabel("目标单元", 315, 82, 60);
-                txtTargetUnit.SetBounds(380, 79, 90, 23); txtTargetUnit.Text = "_ZGS_02";
+                cmbTargetUnit.SetBounds(380, 79, 90, 23); cmbTargetUnit.Text = "_ZGS_02";
+                cmbTargetUnit.DropDownStyle = ComboBoxStyle.DropDown; // 可选可填
+                cmbTargetUnit.DropDown += delegate { ReloadTargetUnits(); };
                 btnPreview.SetBounds(480, 78, 70, 25); btnPreview.Text = "预览";
                 btnPreview.Click += delegate { OnPreview(); };
                 btnApply.SetBounds(560, 78, 150, 25); btnApply.Text = "写入目标单元";
@@ -130,12 +134,29 @@ namespace RecoNet
                 };
                 grid.CellDoubleClick += delegate(object sender, DataGridViewCellEventArgs e) { OnNameGridDoubleClick(e); };
 
+                ContextMenuStrip gridMenu = new ContextMenuStrip();
+                ToolStripMenuItem miBindSelected = new ToolStripMenuItem("绑定软件选中的定额到此行");
+                gridMenu.Items.Add(miBindSelected);
+                grid.ContextMenuStrip = gridMenu;
+                grid.MouseDown += delegate(object sender, MouseEventArgs e)
+                {
+                    if (e.Button != MouseButtons.Right) return;
+                    DataGridView.HitTestInfo hit = grid.HitTest(e.X, e.Y);
+                    if (hit.RowIndex >= 0) { grid.ClearSelection(); grid.Rows[hit.RowIndex].Selected = true; grid.CurrentCell = grid.Rows[hit.RowIndex].Cells[0]; }
+                };
+                gridMenu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e)
+                {
+                    FillPreviewItem cur = grid.SelectedRows.Count > 0 ? grid.SelectedRows[0].Tag as FillPreviewItem : null;
+                    miBindSelected.Enabled = cur != null && cur.IsNameDriven;
+                };
+                miBindSelected.Click += delegate { OnBindSelectedQuotaToRow(); };
+
                 split.Panel1.Controls.Add(itemTree);
                 split.Panel2.Controls.Add(grid);
 
                 Controls.Add(txtUnit); Controls.Add(cmbSourceSheet); Controls.Add(txtName); Controls.Add(btnBuild);
-                Controls.Add(cmbTemplate); Controls.Add(btnDeleteTemplate); Controls.Add(cmbMode); Controls.Add(txtSheet); Controls.Add(txtColumn);
-                Controls.Add(txtTargetUnit);
+                Controls.Add(cmbTemplate); Controls.Add(btnDeleteTemplate); Controls.Add(cmbMode); Controls.Add(cmbTargetSheet); Controls.Add(txtColumn);
+                Controls.Add(cmbTargetUnit);
                 Controls.Add(btnPreview); Controls.Add(btnApply); Controls.Add(reminder); Controls.Add(split);
             }
 
@@ -169,6 +190,75 @@ namespace RecoNet
                 catch { /* 取不到绑定时留空，用户可手填 */ }
             }
 
+            // 目标sheet 下拉展开时刷新：优先读当前打开的 Excel/WPS 工作簿的全部工作表名；
+            // 读不到（Excel 未开）时回退绑定库里出现过的 sheet 名。
+            private void ReloadTargetSheets()
+            {
+                try
+                {
+                    string keep = cmbTargetSheet.Text;
+                    List<string> sheetNames; string activeSheetName; string error;
+                    if (TryListActiveWorkbookSheets(out sheetNames, out activeSheetName, out error) && sheetNames.Count > 0)
+                    {
+                        cmbTargetSheet.Items.Clear();
+                        foreach (string s in sheetNames) cmbTargetSheet.Items.Add(s);
+                    }
+                    else
+                    {
+                        cmbTargetSheet.Items.Clear();
+                        using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
+                        {
+                            foreach (string s in ListBoundSheetNames(conn)) cmbTargetSheet.Items.Add(s);
+                        }
+                    }
+                    cmbTargetSheet.Text = keep;
+                }
+                catch { /* 取不到时留空，用户可手填 */ }
+            }
+
+            // 目标单元 下拉展开时刷新：列出项目全部单元（_ZGS_ 编号，纯编号，供 ResolveAgentUnitIdSimple 精确匹配）。
+            private void ReloadTargetUnits()
+            {
+                try
+                {
+                    string keep = cmbTargetUnit.Text;
+                    List<string> units = ListAgentUnits(mainForm);
+                    if (units.Count > 0)
+                    {
+                        cmbTargetUnit.Items.Clear();
+                        foreach (string u in units) cmbTargetUnit.Items.Add(u);
+                    }
+                    cmbTargetUnit.Text = keep;
+                }
+                catch { /* 取不到时留空，用户可手填 */ }
+            }
+
+            // 列出项目全部单元(编号 如 _ZGS_01)。
+            private static List<string> ListAgentUnits(Form mainForm)
+            {
+                List<string> result = new List<string>();
+                try
+                {
+                    using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
+                    {
+                        using (SqlCommand cmd = conn.CreateCommand())
+                        {
+                            cmd.CommandText = "select 总概算编号 from 总概算信息 order by 总概算序号";
+                            using (SqlDataReader reader = cmd.ExecuteReader())
+                            {
+                                while (reader.Read())
+                                {
+                                    string code = reader.IsDBNull(0) ? "" : Convert.ToString(reader.GetValue(0)).Trim();
+                                    if (code.Length > 0) result.Add(code);
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { /* 取不到时留空，用户可手填 */ }
+                return result;
+            }
+
             private void OnDeleteTemplate()
             {
                 try
@@ -190,19 +280,25 @@ namespace RecoNet
                     // 用克隆的独立连接（与 ApplyFill/智能助手一致），不要直接用主程序共享连接，
                     // 否则可能拿到未初始化连接串、或被 using 误释放主程序连接。
                     int count;
+                    List<string> warnings;
                     using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
                     {
                         FillTemplate t = chkNameMode.Checked
                             ? BuildNameFillTemplateFromBindings(mainForm, conn, txtName.Text.Trim(), txtUnit.Text.Trim(), cmbSourceSheet.Text.Trim())
                             : BuildFillTemplateFromBindings(mainForm, conn, txtName.Text.Trim(), txtUnit.Text.Trim(), cmbSourceSheet.Text.Trim());
                         count = t.Rows.Count;
+                        warnings = t.BuildWarnings;
                         SaveFillTemplate(t);
                     }
                     ReloadTemplateList();
-                    MessageBox.Show(this, count > 0
+                    string msg = count > 0
                         ? ("模板已生成并保存：" + count + " 条定额。")
-                        : ("模板已生成，但收到 0 条定额。\n请确认该单元的定额已用“绑定Excel工程量”绑到 sheet「" + cmbSourceSheet.Text.Trim() + "」。"),
-                        "模板铺量");
+                        : ("模板已生成，但收到 0 条定额。\n请确认该单元的定额已用“绑定Excel工程量”绑到 sheet「" + cmbSourceSheet.Text.Trim() + "」。");
+                    if (warnings != null && warnings.Count > 0)
+                    {
+                        msg += "\n\n以下绑定被跳过（不属于源单元 " + txtUnit.Text.Trim() + "）：\n" + String.Join("\n", warnings.ToArray());
+                    }
+                    MessageBox.Show(this, msg, "模板铺量");
                 }
                 catch (Exception ex) { MessageBox.Show(this, "生成失败：" + ex.Message, "模板铺量"); }
             }
@@ -220,8 +316,8 @@ namespace RecoNet
                     if (t == null) { MessageBox.Show(this, "模板加载失败。", "模板铺量"); return; }
                     string ndWarning = null;
                     preview = cmbMode.SelectedIndex == 0
-                        ? BuildPreview_ColumnAnchor(t, txtSheet.Text.Trim(), txtColumn.Text.Trim())
-                        : BuildPreview_NameDriven(mainForm, t, txtSheet.Text.Trim(), txtColumn.Text.Trim(), out ndWarning);
+                        ? BuildPreview_ColumnAnchor(t, cmbTargetSheet.Text.Trim(), txtColumn.Text.Trim())
+                        : BuildPreview_NameDriven(mainForm, t, cmbTargetSheet.Text.Trim(), txtColumn.Text.Trim(), out ndWarning);
                     if (!String.IsNullOrEmpty(ndWarning)) MessageBox.Show(this, ndWarning, "模板铺量");
                     RebuildItemTree();
                     FillGrid();
@@ -381,13 +477,50 @@ namespace RecoNet
                 }
             }
 
+            // 右键：把软件定额输入表当前选中的一行，绑定为该预览行的复制来源（含所在条目）。
+            private void OnBindSelectedQuotaToRow()
+            {
+                try
+                {
+                    if (grid.SelectedRows.Count == 0) return;
+                    FillPreviewItem it = grid.SelectedRows[0].Tag as FillPreviewItem;
+                    if (it == null || !it.IsNameDriven) return;
+                    DataGridView de = GetField<DataGridView>(mainForm, "dataGridViewDE");
+                    DataGridViewRow row = GetCurrentQuotaRow(de);
+                    if (row == null) { MessageBox.Show(this, "请先在软件定额输入表中选中一条定额行。", "模板铺量"); return; }
+                    using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
+                    {
+                        ExcelQuotaLink link; string err;
+                        if (!TryCreateQuotaLink(mainForm, conn, row, out link, out err)) { MessageBox.Show(this, err, "模板铺量"); return; }
+                        it.ChosenQuotaSeq = link.QuotaSequence;
+                        it.QuotaCode = link.QuotaCode;
+                        it.SourceName = link.QuotaName;
+                        it.IsLibraryQuota = false;
+                        long itemSeq;
+                        if (Int64.TryParse((link.ChapterSeq ?? "").Trim(), out itemSeq) && itemSeq > 0)
+                        {
+                            it.ChosenItemSeq = itemSeq;
+                            it.ChosenItemNo = ResolveChapterItemNo(conn, link.ChapterSeq, null);
+                            it.ItemNo = it.ChosenItemNo;
+                        }
+                        it.Unit = GetRowValue(row, "单位", "定额单位");
+                        it.NeedManualQuota = false;
+                        it.Selected = true;
+                        it.Status = "";
+                        it.AlignNote = "已绑定 " + (link.QuotaCode ?? "") + "（软件选中行，含条目）";
+                    }
+                    FillGrid();
+                }
+                catch (Exception ex) { MessageBox.Show(this, "绑定失败：" + ex.Message, "模板铺量"); }
+            }
+
             private void OnApply()
             {
                 try
                 {
                     FlushGridSelectionsToPreview();
                     int selectedCount = preview.Count(it => it.Selected);
-                    string targetUnit = txtTargetUnit.Text.Trim();
+                    string targetUnit = cmbTargetUnit.Text.Trim();
                     if (MessageBox.Show(this, "确认把勾选的 " + selectedCount.ToString() + " 条定额（含树筛选后未显示条目中已勾选的行）复制到目标单元【" + targetUnit + "】的对应条目？",
                         "模板铺量", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
 
