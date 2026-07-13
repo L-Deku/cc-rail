@@ -14,6 +14,8 @@ namespace RecoNet
             private readonly Form mainForm;
             private List<FillPreviewItem> preview = new List<FillPreviewItem>();
             private List<ProjectQuota> projectQuotaCache;
+            private List<ProjectQuota> libraryQuotaCache;
+            private List<ChapterItemOption> chapterItemCache;
 
             private readonly ComboBox cmbTemplate = new ComboBox();
             private readonly Button btnDeleteTemplate = new Button();
@@ -209,6 +211,8 @@ namespace RecoNet
             {
                 SetBusy(true, "预览中...");
                 projectQuotaCache = null;
+                libraryQuotaCache = null;
+                chapterItemCache = null;
                 try
                 {
                     if (cmbTemplate.SelectedItem == null) { MessageBox.Show(this, "请先选择模板。", "模板铺量"); return; }
@@ -366,12 +370,13 @@ namespace RecoNet
                 FillPreviewItem it = grid.Rows[e.RowIndex].Tag as FillPreviewItem;
                 if (it == null || !it.NeedManualQuota) return;
                 if (projectQuotaCache == null) projectQuotaCache = LoadProjectQuotas(mainForm);
-                List<ProjectQuota> all = projectQuotaCache;
-                List<ProjectQuota> sug = RankProjectQuotas(all, String.IsNullOrEmpty(it.TargetFullName) ? it.TargetName : it.TargetFullName);
-                using (QuotaPickerDialog dlg = new QuotaPickerDialog(all, sug))
+                if (libraryQuotaCache == null) libraryQuotaCache = LoadLibraryQuotas();
+                if (chapterItemCache == null) chapterItemCache = LoadChapterItemOptions(mainForm);
+                List<ProjectQuota> sug = RankProjectQuotas(projectQuotaCache, String.IsNullOrEmpty(it.TargetFullName) ? it.TargetName : it.TargetFullName);
+                using (QuotaPickerDialog dlg = new QuotaPickerDialog(projectQuotaCache, libraryQuotaCache, sug, chapterItemCache, it.ItemNo))
                 {
                     if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Picked.Count == 0) return;
-                    ApplyManualQuotaPick(preview, it, dlg.Picked);
+                    ApplyManualQuotaPick(preview, it, dlg.Picked, dlg.PickedItem);
                     FillGrid();
                 }
             }

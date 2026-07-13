@@ -604,8 +604,12 @@ namespace RecoNet
         {
             public string Code; public string Name; public string Unit; public long QuotaSeq;
             public string NormCode; public string NormName; // 预计算的归一化文本，避免每次打分重复归一化
+            public bool IsLibrary;  // true=来自全库 quota-index.jsonl，项目里(尚)无此编号，写入需原生粘贴
             public override string ToString()
-            { return (Code ?? "") + "  " + (Name ?? "") + (String.IsNullOrEmpty(Unit) ? "" : "  [" + Unit + "]"); }
+            {
+                string tail = String.IsNullOrEmpty(Unit) ? "" : "  [" + Unit + "]";
+                return (IsLibrary ? "〔库〕" : "") + (Code ?? "") + "  " + (Name ?? "") + tail;
+            }
         }
 
         private static List<ProjectQuota> LoadProjectQuotas(Form mainForm)
@@ -649,6 +653,74 @@ namespace RecoNet
             return q == null ? 0 : q.QuotaSeq;
         }
 
+        // 全库定额(quota-index.jsonl)。IsLibrary=true 表示项目里(尚)无此编号，写入需原生粘贴。
+        private static List<ProjectQuota> LoadLibraryQuotas()
+        {
+            List<ProjectQuota> list = new List<ProjectQuota>();
+            try
+            {
+                string path = System.IO.Path.Combine(FindRecoQuotaDataDir(), "quota-index.jsonl");
+                if (!System.IO.File.Exists(path)) return list;
+                foreach (string line in System.IO.File.ReadAllLines(path, Encoding.UTF8))
+                {
+                    Dictionary<string, string> row = ParseFlatJson(line);
+                    if (row.Count == 0) continue;
+                    ProjectQuota q = new ProjectQuota();
+                    q.Code = GetFlat(row, "quota_code").Trim();
+                    q.Name = GetFlat(row, "quota_name").Trim();
+                    q.Unit = GetFlat(row, "quota_unit").Trim();
+                    if (q.Code.Length == 0) continue;
+                    q.QuotaSeq = 0;
+                    q.IsLibrary = true;
+                    q.NormCode = NormalizeMatchText(q.Code);
+                    q.NormName = NormalizeMatchText(q.Name);
+                    list.Add(q);
+                }
+            }
+            catch (Exception ex) { Log("LoadLibraryQuotas failed: " + ex.Message); }
+            return list;
+        }
+
+        private sealed class ChapterItemOption
+        {
+            public long ItemSeq;
+            public string ItemNo;
+            public string Name;
+            public string Norm;
+            public override string ToString() { return (ItemNo ?? "") + "  " + (Name ?? ""); }
+        }
+
+        // 章节表全量条目(条目序号/条目编号/名称)，供候选框下半区"放入条目"搜索。面板会话内缓存。
+        private static List<ChapterItemOption> LoadChapterItemOptions(Form mainForm)
+        {
+            List<ChapterItemOption> list = new List<ChapterItemOption>();
+            try
+            {
+                using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
+                {
+                    EnsureOpen(conn);
+                    using (SqlCommand cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "select 条目序号, 条目编号, 工程或费用项目名称 from 章节表 where 条目编号 is not null and ltrim(rtrim(条目编号))<>''";
+                        using (SqlDataReader r = cmd.ExecuteReader())
+                        {
+                            while (r.Read())
+                            {
+                                ChapterItemOption o = new ChapterItemOption();
+                                o.ItemSeq = r.IsDBNull(0) ? 0L : Convert.ToInt64(r.GetValue(0), CultureInfo.InvariantCulture);
+                                o.ItemNo = r.IsDBNull(1) ? "" : Convert.ToString(r.GetValue(1)).Trim();
+                                o.Name = r.IsDBNull(2) ? "" : Convert.ToString(r.GetValue(2)).Trim();
+                                o.Norm = NormalizeMatchText(o.ItemNo + o.Name);
+                                if (o.ItemSeq > 0 && o.ItemNo.Length > 0) list.Add(o);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) { Log("LoadChapterItemOptions failed: " + ex.Message); }
+            return list;
+        }
+
         private static List<ProjectQuota> RankProjectQuotas(List<ProjectQuota> all, string name)
         {
             string q = NormalizeMatchText(name ?? "");
@@ -662,7 +734,8 @@ namespace RecoNet
         }
 
         // 把手挂结果落到预览：单条=补当前行；多条=当前行为组第一行，其余克隆插入(组内序 GroupOrder)。
-        private static void ApplyManualQuotaPick(List<FillPreviewItem> preview, FillPreviewItem target, List<ProjectQuota> picked)
+        // pickedItem!=null 时用户显式选了放入条目，优先于邻居锚点(ItemNo/ChosenItemSeq/ChosenItemNo)。
+        private static void ApplyManualQuotaPick(List<FillPreviewItem> preview, FillPreviewItem target, List<ProjectQuota> picked, ChapterItemOption pickedItem)
         {
             if (preview == null || target == null || picked == null || picked.Count == 0) return;
             int idx = preview.IndexOf(target);
@@ -673,7 +746,16 @@ namespace RecoNet
             target.SourceName = picked[0].Name;
             target.Unit = picked[0].Unit;
             target.GroupOrder = 0;
-            target.AlignNote = "已手挂 " + picked[0].Code + (picked.Count > 1 ? ("（组 " + picked.Count.ToString(CultureInfo.InvariantCulture) + " 条）") : "");
+            // 库内定额:QuotaSeq=0,走粘贴管线;显式选了条目则优先于邻居锚点。
+            target.IsLibraryQuota = picked[0].IsLibrary;
+            if (pickedItem != null)
+            {
+                target.ChosenItemSeq = pickedItem.ItemSeq;
+                target.ChosenItemNo = pickedItem.ItemNo;
+                target.ItemNo = pickedItem.ItemNo;
+            }
+            target.AlignNote = (picked[0].IsLibrary ? "已手挂〔库〕 " : "已手挂 ") + picked[0].Code +
+                (picked.Count > 1 ? ("（组 " + picked.Count.ToString(CultureInfo.InvariantCulture) + " 条）") : "");
             for (int k = 1; k < picked.Count; k++)
             {
                 FillPreviewItem extra = new FillPreviewItem();
@@ -684,45 +766,78 @@ namespace RecoNet
                 extra.QuotaCode = picked[k].Code; extra.ChosenQuotaSeq = picked[k].QuotaSeq;
                 extra.GroupOrder = k; extra.SourceName = picked[k].Name; extra.Unit = picked[k].Unit; extra.TargetName = "";
                 extra.QuantityText = target.QuantityText;
-                extra.AlignNote = "组件框第 " + (k + 1).ToString(CultureInfo.InvariantCulture) + " 条";
+                extra.IsLibraryQuota = picked[k].IsLibrary;
+                if (pickedItem != null)
+                {
+                    extra.ChosenItemSeq = pickedItem.ItemSeq;
+                    extra.ChosenItemNo = pickedItem.ItemNo;
+                }
+                extra.AlignNote = "组件框第 " + (k + 1).ToString(CultureInfo.InvariantCulture) + " 条" + (picked[k].IsLibrary ? "〔库〕" : "");
                 if (idx >= 0) preview.Insert(idx + k, extra); else preview.Add(extra);
             }
         }
 
+        // 候选定额框(可多选=一量对多) + 放入条目选择。搜索两池同搜(项目内优先、库内排后)；
+        // 库内定额若编号已在项目池中出现则跳过(项目内那条可直接写，优先)。
         private sealed class QuotaPickerDialog : Form
         {
             private readonly TextBox txt = new TextBox();
             private readonly CheckedListBox lst = new CheckedListBox();
+            private readonly TextBox txtItem = new TextBox();
+            private readonly ListBox lstItem = new ListBox();
             private readonly Button ok = new Button();
             private readonly Label lblEmpty = new Label();
-            private readonly List<ProjectQuota> all;
+            private readonly List<ProjectQuota> projectQuotas;
+            private readonly List<ProjectQuota> libraryQuotas;
             private readonly List<ProjectQuota> suggested;
+            private readonly List<ChapterItemOption> chapterItems;
+            private readonly ChapterItemOption defaultItem;
             public List<ProjectQuota> Picked = new List<ProjectQuota>();
+            public ChapterItemOption PickedItem;
 
-            public QuotaPickerDialog(List<ProjectQuota> allq, List<ProjectQuota> sug)
+            public QuotaPickerDialog(List<ProjectQuota> projectQ, List<ProjectQuota> libraryQ, List<ProjectQuota> sug,
+                List<ChapterItemOption> items, string defaultItemNo)
             {
-                all = allq ?? new List<ProjectQuota>();
+                projectQuotas = projectQ ?? new List<ProjectQuota>();
+                libraryQuotas = libraryQ ?? new List<ProjectQuota>();
                 suggested = sug ?? new List<ProjectQuota>();
-                Text = "选择定额（可多选=一量对多）"; StartPosition = FormStartPosition.CenterParent; ClientSize = new Size(520, 430);
-                Label tip = new Label { Text = "搜索定额编号/名称；留空显示推荐；勾选多条=该工程量对应多条定额", AutoSize = false };
+                chapterItems = items ?? new List<ChapterItemOption>();
+                if (!String.IsNullOrEmpty(defaultItemNo))
+                {
+                    defaultItem = chapterItems.FirstOrDefault(o => String.Equals(o.ItemNo, defaultItemNo, StringComparison.OrdinalIgnoreCase));
+                }
+
+                Text = "选择定额（可多选=一量对多）"; StartPosition = FormStartPosition.CenterParent; ClientSize = new Size(520, 640);
+                Label tip = new Label { Text = "搜索定额编号/名称(项目内+全库)；留空显示推荐；勾选多条=该工程量对应多条定额", AutoSize = false };
                 tip.SetBounds(12, 10, 496, 18);
                 txt.SetBounds(12, 32, 496, 23);
-                lst.SetBounds(12, 62, 496, 320); lst.CheckOnClick = true;
-                ok.Text = "确定"; ok.SetBounds(428, 392, 80, 27);
-                lblEmpty.Text = "项目内没有匹配的定额。一期仅支持挂“项目内已有”的定额；\r\n请先在软件定额输入中录入一次该定额，再回来手挂。";
+                lst.SetBounds(12, 62, 496, 290); lst.CheckOnClick = true;
+                lblEmpty.Text = "没有匹配的定额（已搜项目内+全库）。";
                 lblEmpty.ForeColor = Color.Firebrick;
                 lblEmpty.SetBounds(24, 150, 470, 60);
                 lblEmpty.Visible = false;
-                Controls.Add(tip); Controls.Add(txt); Controls.Add(lst); Controls.Add(ok);
-                Controls.Add(lblEmpty);
+
+                Label itemTip = new Label { Text = "放入条目：默认为推断条目，可搜索改选", AutoSize = false };
+                itemTip.SetBounds(12, 362, 496, 18);
+                txtItem.SetBounds(12, 384, 496, 23);
+                lstItem.SetBounds(12, 410, 496, 140);
+
+                ok.Text = "确定"; ok.SetBounds(428, 600, 80, 27);
+
+                Controls.Add(tip); Controls.Add(txt); Controls.Add(lst);
+                Controls.Add(itemTip); Controls.Add(txtItem); Controls.Add(lstItem);
+                Controls.Add(ok); Controls.Add(lblEmpty);
                 lblEmpty.BringToFront();
                 txt.TextChanged += delegate { RefreshList(); };
+                txtItem.TextChanged += delegate { RefreshItems(); };
                 ok.Click += delegate {
                     Picked = lst.CheckedItems.Cast<ProjectQuota>().ToList();
                     if (Picked.Count == 0 && lst.SelectedItem is ProjectQuota) Picked.Add((ProjectQuota)lst.SelectedItem);
+                    PickedItem = lstItem.SelectedItem as ChapterItemOption;
                     DialogResult = DialogResult.OK; Close();
                 };
                 RefreshList();
+                RefreshItems();
             }
 
             private void RefreshList()
@@ -730,12 +845,52 @@ namespace RecoNet
                 string q = NormalizeMatchText(txt.Text);
                 lst.Items.Clear();
                 IEnumerable<ProjectQuota> src;
-                if (q.Length == 0) src = suggested;
-                else src = all.Select(o => new KeyValuePair<int, ProjectQuota>(
-                        o.NormCode.IndexOf(q, StringComparison.Ordinal) >= 0 ? 1000 : MatchNameScore(q, o.NormName), o))
-                    .Where(p => p.Key > 0).OrderByDescending(p => p.Key).Take(60).Select(p => p.Value);
+                if (q.Length == 0)
+                {
+                    src = suggested;
+                }
+                else
+                {
+                    HashSet<string> projectCodes = new HashSet<string>(
+                        projectQuotas.Select(o => o.NormCode), StringComparer.Ordinal);
+                    IEnumerable<ProjectQuota> projectHits = projectQuotas
+                        .Select(o => new KeyValuePair<int, ProjectQuota>(
+                            o.NormCode.IndexOf(q, StringComparison.Ordinal) >= 0 ? 1000 : MatchNameScore(q, o.NormName), o))
+                        .Where(p => p.Key > 0).OrderByDescending(p => p.Key).Select(p => p.Value);
+                    IEnumerable<ProjectQuota> libraryHits = libraryQuotas
+                        .Where(o => !projectCodes.Contains(o.NormCode))
+                        .Select(o => new KeyValuePair<int, ProjectQuota>(
+                            o.NormCode.IndexOf(q, StringComparison.Ordinal) >= 0 ? 1000 : MatchNameScore(q, o.NormName), o))
+                        .Where(p => p.Key > 0).OrderByDescending(p => p.Key).Select(p => p.Value);
+                    src = projectHits.Concat(libraryHits).Take(60);
+                }
                 foreach (ProjectQuota o in src) lst.Items.Add(o);
                 lblEmpty.Visible = lst.Items.Count == 0;
+            }
+
+            private void RefreshItems()
+            {
+                string q = NormalizeMatchText(txtItem.Text);
+                lstItem.Items.Clear();
+                List<ChapterItemOption> src;
+                if (q.Length == 0)
+                {
+                    src = new List<ChapterItemOption>();
+                    if (defaultItem != null) src.Add(defaultItem);
+                    src.AddRange(chapterItems.Where(o => o != defaultItem).Take(Math.Max(0, 100 - src.Count)));
+                }
+                else
+                {
+                    src = chapterItems
+                        .Select(o => new KeyValuePair<int, ChapterItemOption>(
+                            o.Norm.IndexOf(q, StringComparison.Ordinal) >= 0 ? 1000 : MatchNameScore(q, o.Norm), o))
+                        .Where(p => p.Key > 0).OrderByDescending(p => p.Key).Take(100).Select(p => p.Value).ToList();
+                }
+                foreach (ChapterItemOption o in src) lstItem.Items.Add(o);
+                if (q.Length == 0 && defaultItem != null && lstItem.Items.Contains(defaultItem))
+                {
+                    lstItem.SelectedItem = defaultItem;
+                }
             }
         }
 

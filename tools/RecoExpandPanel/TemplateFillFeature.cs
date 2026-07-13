@@ -74,6 +74,9 @@ namespace RecoNet
             public long ChosenQuotaSeq;    // 手挂/命中的可复制源定额行(整行复制来源)；0=无
             public long NeighborSourceQuotaSeq; // 条目落位锚点(上方最近已匹配行的源定额)
             public int GroupOrder;         // 一量对多定额时组内序(第一行承载工程量名)
+            public bool IsLibraryQuota;    // 手挂选中的是库内定额(项目无此编号)，写入走原生粘贴管线
+            public long ChosenItemSeq;     // 用户显式选择的放入条目(条目序号)；0=未选(沿用邻居锚点)
+            public string ChosenItemNo;    // 对应条目编号(显示/粘贴导航用)
         }
 
         private sealed class PreparedFillPreviewItem
@@ -895,7 +898,9 @@ namespace RecoNet
             List<FillPreviewItem> selected = items
                 .Where(i => i.Selected &&
                     (String.IsNullOrEmpty(i.Status) || String.Equals(i.Status, "\u6570\u91cf\u4e3a0", StringComparison.Ordinal)) &&
-                    (i.SourceQuotaSeq > 0 || (i.IsNameDriven && i.ChosenQuotaSeq > 0 && i.NeighborSourceQuotaSeq > 0)))
+                    (i.SourceQuotaSeq > 0 || (i.IsNameDriven && (
+                        (i.ChosenQuotaSeq > 0 && (i.NeighborSourceQuotaSeq > 0 || i.ChosenItemSeq > 0)) ||
+                        (i.IsLibraryQuota && !String.IsNullOrEmpty(i.QuotaCode) && !String.IsNullOrEmpty(i.ChosenItemNo))))))
                 .OrderBy(i => i.ItemNo, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(i => i.OrderInItem)
                 .ToList();
@@ -914,6 +919,7 @@ namespace RecoNet
                 Dictionary<long, int> nextShun = new Dictionary<long, int>();
                 HashSet<long> markerInserted = new HashSet<long>();
                 List<FillPreviewItem> writtenOk = new List<FillPreviewItem>();
+                List<FillPreviewItem> libraryItems = new List<FillPreviewItem>();
 
                 using (SqlTransaction transaction = conn.BeginTransaction())
                 {
@@ -921,10 +927,20 @@ namespace RecoNet
                     {
                         foreach (FillPreviewItem item in selected)
                         {
+                            if (item.IsLibraryQuota)
+                            {
+                                libraryItems.Add(item);
+                                continue;
+                            }
+
                             long copyFrom = item.IsNameDriven ? item.ChosenQuotaSeq : item.SourceQuotaSeq;
                             Dictionary<string, object> row = LoadTemplateFullRow(conn, transaction, copyFrom);
                             if (row == null) { skipped++; continue; }
-                            if (item.IsNameDriven && item.NeighborSourceQuotaSeq > 0 && item.NeighborSourceQuotaSeq != copyFrom)
+                            if (item.IsNameDriven && item.ChosenItemSeq > 0)
+                            {
+                                row["条目序号"] = item.ChosenItemSeq;
+                            }
+                            else if (item.IsNameDriven && item.NeighborSourceQuotaSeq > 0 && item.NeighborSourceQuotaSeq != copyFrom)
                             {
                                 Dictionary<string, object> anchor = LoadTemplateFullRow(conn, transaction, item.NeighborSourceQuotaSeq);
                                 if (anchor != null) row["条目序号"] = anchor["条目序号"];
@@ -987,6 +1003,31 @@ namespace RecoNet
                     {
                         transaction.Rollback();
                         throw;
+                    }
+                }
+
+                if (libraryItems.Count > 0)
+                {
+                    string currentUnit = GetCurrentUnitNo(mainForm);
+                    if (!String.Equals((currentUnit ?? "").Trim(), (targetUnitNo ?? "").Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        skipped += libraryItems.Count;
+                        msg.Append("库内定额 ").Append(libraryItems.Count.ToString(CultureInfo.InvariantCulture))
+                           .Append(" 条未写入：原生粘贴只写软件当前单元，请先切到 ").Append(targetUnitNo).Append(" 再写。");
+                    }
+                    else
+                    {
+                        foreach (IGrouping<string, FillPreviewItem> g in libraryItems.GroupBy(i => i.ChosenItemNo))
+                        {
+                            AgentInsertGroup group = new AgentInsertGroup { ItemNo = g.Key };
+                            foreach (FillPreviewItem li in g)
+                            {
+                                group.Quotas.Add(new AgentQuotaInput { Code = li.QuotaCode, Quantity = li.QuantityText ?? "" });
+                                writtenOk.Add(li);
+                            }
+                            string pasteMsg = ExecuteAgentInsertGroup(mainForm, conn, group, undo);
+                            if (!String.IsNullOrEmpty(pasteMsg)) msg.Append(pasteMsg);
+                        }
                     }
                 }
 
