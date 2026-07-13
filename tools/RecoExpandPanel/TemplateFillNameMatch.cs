@@ -250,6 +250,22 @@ namespace RecoNet
             }
         }
 
+        // 费用/辅助类伪代码(排组件框末尾；真定额排前)。含 *系数 后缀先剥掉再判。
+        private static int PseudoQuotaRank(string code)
+        {
+            string c = (code ?? "").Trim().ToUpperInvariant();
+            int star = c.IndexOf('*');
+            if (star > 0) c = c.Substring(0, star);
+            switch (c)
+            {
+                case "SF": case "SH": case "SQ": case "ZLF": case "LF":
+                case "YF": case "TLF": case "GF": case "JF": case "XGT1":
+                    return 1;
+                default:
+                    return 0;
+            }
+        }
+
         private sealed class BoxCandidate
         {
             public string QuotaCode;
@@ -391,6 +407,32 @@ namespace RecoNet
             HashSet<int> usedTmplIdx = new HashSet<int>();
             Dictionary<int, string> mergedIntoByTargetIdx = new Dictionary<int, string>();
 
+            // 两遍匹配：先“归一化完全相等”精确认领，再模糊。防止近似名(如 -2*1.5 vs -4*1.5)抢走精确归属的模板组。
+            Dictionary<int, int> exactTmplByTarget = new Dictionary<int, int>();
+            HashSet<int> exactClaimedTmpl = new HashSet<int>();
+            for (int t = 0; t < targetRows.Count; t++)
+            {
+                for (int gi = 0; gi < tmplNorms.Count; gi++)
+                {
+                    if (exactClaimedTmpl.Contains(gi) || tmplNorms[gi].Length == 0)
+                    {
+                        continue;
+                    }
+                    if (String.Equals(tmplNorms[gi], targetRows[t].NormName, StringComparison.Ordinal))
+                    {
+                        exactTmplByTarget[t] = gi;
+                        for (int gj = 0; gj < tmplNorms.Count; gj++)
+                        {
+                            if (String.Equals(tmplNorms[gj], tmplNorms[gi], StringComparison.Ordinal))
+                            {
+                                exactClaimedTmpl.Add(gj);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+
             FillPreviewItem lastMatched = null;
             for (int trIdx = 0; trIdx < targetRows.Count; trIdx++)
             {
@@ -404,6 +446,7 @@ namespace RecoNet
                     mergedItem.TemplateName = template.Name;
                     mergedItem.TargetRow = tr.Row;
                     mergedItem.TargetName = tr.DisplayName;
+                    mergedItem.TargetFullName = tr.RawName;
                     mergedItem.QuantityText = tr.QuantityText;
                     mergedItem.AlignNote = mergedNote;
                     mergedItem.Selected = false;
@@ -418,14 +461,27 @@ namespace RecoNet
                 item.TargetRow = tr.Row;
                 item.SourceName = "";
                 item.TargetName = tr.DisplayName;
+                item.TargetFullName = tr.RawName;
                 item.QuantityText = tr.QuantityText;
 
-                int ti = -1, tiScore = NameMatchMinScore - 1;
-                for (int gi = 0; gi < tmplNorms.Count; gi++)
+                int ti;
+                if (!exactTmplByTarget.TryGetValue(trIdx, out ti))
                 {
-                    if (usedTmplIdx.Contains(gi)) continue;
-                    int s = MatchNameScore(tr.NormName, tmplNorms[gi]);
-                    if (s > tiScore) { tiScore = s; ti = gi; }
+                    ti = -1;
+                    int bestScore = NameMatchMinScore - 1;
+                    for (int gi = 0; gi < tmplNorms.Count; gi++)
+                    {
+                        if (usedTmplIdx.Contains(gi) || exactClaimedTmpl.Contains(gi))
+                        {
+                            continue;
+                        }
+                        int s = MatchNameScore(tr.NormName, tmplNorms[gi]);
+                        if (s > bestScore) { bestScore = s; ti = gi; }
+                    }
+                }
+                else if (usedTmplIdx.Contains(ti))
+                {
+                    ti = -1;
                 }
 
                 if (ti >= 0)
@@ -438,7 +494,13 @@ namespace RecoNet
                         if (usedTmplIdx.Contains(gi)) continue;
                         if (String.Equals(tmplNorms[gi], bestNorm, StringComparison.Ordinal)) groupIdx.Add(gi);
                     }
-                    groupIdx.Sort(delegate(int a, int b) { return template.Rows[a].OrderInItem.CompareTo(template.Rows[b].OrderInItem); });
+                    groupIdx.Sort(delegate(int a, int b)
+                    {
+                        int ra = PseudoQuotaRank(template.Rows[a].QuotaCode);
+                        int rb = PseudoQuotaRank(template.Rows[b].QuotaCode);
+                        if (ra != rb) return ra.CompareTo(rb);
+                        return template.Rows[a].OrderInItem.CompareTo(template.Rows[b].OrderInItem);
+                    });
                     foreach (int gi in groupIdx) usedTmplIdx.Add(gi);
 
                     int go = 0;
@@ -457,7 +519,9 @@ namespace RecoNet
                         gitem.NeighborSourceQuotaSeq = trow.SourceQuotaSeq; // 自锚点：模版命中行不依赖上方行也可写入
                         gitem.GroupOrder = go;
                         gitem.SourceName = trow.SourceName;
+                        gitem.Unit = trow.Unit;
                         gitem.TargetName = (go == 0) ? tr.DisplayName : "";
+                        gitem.TargetFullName = tr.RawName;
                         gitem.AlignNote = (go == 0) ? "模版命中" : ("组件框第 " + (go + 1).ToString(CultureInfo.InvariantCulture) + " 条");
 
                         // 数量：多操作数表达式(如 E4+E5)优先按名字把各操作数代入源表达式求值；
@@ -503,6 +567,8 @@ namespace RecoNet
                 {
                     item.QuotaCode = box[0].QuotaCode;
                     item.ChosenQuotaSeq = LoadProjectQuotaSeqByCode(projectQuotas, box[0].QuotaCode);
+                    ProjectQuota boxQuota = projectQuotas.FirstOrDefault(x => String.Equals(x.Code, box[0].QuotaCode, StringComparison.OrdinalIgnoreCase));
+                    item.Unit = boxQuota == null ? "" : boxQuota.Unit;
                     item.ItemNo = lastMatched == null ? "" : lastMatched.ItemNo;
                     item.NeighborSourceQuotaSeq = lastMatched == null ? 0 : lastMatched.ChosenQuotaSeq;
                     item.AlignNote = item.ChosenQuotaSeq > 0
@@ -605,6 +671,7 @@ namespace RecoNet
             target.QuotaCode = picked[0].Code;
             target.ChosenQuotaSeq = picked[0].QuotaSeq;
             target.SourceName = picked[0].Name;
+            target.Unit = picked[0].Unit;
             target.GroupOrder = 0;
             target.AlignNote = "已手挂 " + picked[0].Code + (picked.Count > 1 ? ("（组 " + picked.Count.ToString(CultureInfo.InvariantCulture) + " 条）") : "");
             for (int k = 1; k < picked.Count; k++)
@@ -615,7 +682,7 @@ namespace RecoNet
                 extra.ItemNo = target.ItemNo; extra.OrderInItem = target.OrderInItem;
                 extra.NeighborSourceQuotaSeq = target.NeighborSourceQuotaSeq;
                 extra.QuotaCode = picked[k].Code; extra.ChosenQuotaSeq = picked[k].QuotaSeq;
-                extra.GroupOrder = k; extra.SourceName = picked[k].Name; extra.TargetName = "";
+                extra.GroupOrder = k; extra.SourceName = picked[k].Name; extra.Unit = picked[k].Unit; extra.TargetName = "";
                 extra.QuantityText = target.QuantityText;
                 extra.AlignNote = "组件框第 " + (k + 1).ToString(CultureInfo.InvariantCulture) + " 条";
                 if (idx >= 0) preview.Insert(idx + k, extra); else preview.Add(extra);
@@ -627,6 +694,7 @@ namespace RecoNet
             private readonly TextBox txt = new TextBox();
             private readonly CheckedListBox lst = new CheckedListBox();
             private readonly Button ok = new Button();
+            private readonly Label lblEmpty = new Label();
             private readonly List<ProjectQuota> all;
             private readonly List<ProjectQuota> suggested;
             public List<ProjectQuota> Picked = new List<ProjectQuota>();
@@ -641,7 +709,13 @@ namespace RecoNet
                 txt.SetBounds(12, 32, 496, 23);
                 lst.SetBounds(12, 62, 496, 320); lst.CheckOnClick = true;
                 ok.Text = "确定"; ok.SetBounds(428, 392, 80, 27);
+                lblEmpty.Text = "项目内没有匹配的定额。一期仅支持挂“项目内已有”的定额；\r\n请先在软件定额输入中录入一次该定额，再回来手挂。";
+                lblEmpty.ForeColor = Color.Firebrick;
+                lblEmpty.SetBounds(24, 150, 470, 60);
+                lblEmpty.Visible = false;
                 Controls.Add(tip); Controls.Add(txt); Controls.Add(lst); Controls.Add(ok);
+                Controls.Add(lblEmpty);
+                lblEmpty.BringToFront();
                 txt.TextChanged += delegate { RefreshList(); };
                 ok.Click += delegate {
                     Picked = lst.CheckedItems.Cast<ProjectQuota>().ToList();
@@ -661,6 +735,7 @@ namespace RecoNet
                         o.NormCode.IndexOf(q, StringComparison.Ordinal) >= 0 ? 1000 : MatchNameScore(q, o.NormName), o))
                     .Where(p => p.Key > 0).OrderByDescending(p => p.Key).Take(60).Select(p => p.Value);
                 foreach (ProjectQuota o in src) lst.Items.Add(o);
+                lblEmpty.Visible = lst.Items.Count == 0;
             }
         }
 

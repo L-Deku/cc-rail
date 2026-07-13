@@ -113,9 +113,9 @@ namespace RecoNet
                 grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
                 grid.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
                 grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "选", Name = "sel", FillWeight = 6 });
-                grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "条目", Name = "item", ReadOnly = true, FillWeight = 14, Visible = false });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "定额编号", Name = "code", ReadOnly = true, FillWeight = 16 });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "源行定额", Name = "sname", ReadOnly = true, FillWeight = 20 });
+                grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "单位", Name = "unit", ReadOnly = true, FillWeight = 8 });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "目标行工程量名", Name = "tname", ReadOnly = true, FillWeight = 20 });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "数量", Name = "qty", ReadOnly = true, FillWeight = 10 });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "状态", Name = "st", ReadOnly = true, FillWeight = 14 });
@@ -234,7 +234,6 @@ namespace RecoNet
                 grid.Rows.Clear();
                 string scope = currentTreeScope ?? "";
                 bool nameDriven = preview.Any(p => p.IsNameDriven);
-                grid.Columns["item"].Visible = nameDriven;
                 IEnumerable<FillPreviewItem> ordered = preview
                     .Where(item => String.IsNullOrEmpty(scope) || IsItemNoUnderChapter(item.ItemNo ?? "", scope));
                 ordered = nameDriven
@@ -243,8 +242,8 @@ namespace RecoNet
                 foreach (FillPreviewItem it in ordered)
                 {
                     string statusText = String.IsNullOrEmpty(it.Status) ? (it.AlignNote ?? "") : it.Status;
-                    int idx = grid.Rows.Add(it.Selected, it.ItemNo, it.QuotaCode,
-                        it.SourceName, it.TargetName, it.QuantityText, statusText);
+                    int idx = grid.Rows.Add(it.Selected, it.QuotaCode,
+                        it.SourceName, it.Unit ?? "", it.TargetName, it.QuantityText, statusText);
                     grid.Rows[idx].Tag = it;
                     if (!String.IsNullOrEmpty(it.Status))
                         grid.Rows[idx].DefaultCellStyle.BackColor = Color.MistyRose;
@@ -368,7 +367,7 @@ namespace RecoNet
                 if (it == null || !it.NeedManualQuota) return;
                 if (projectQuotaCache == null) projectQuotaCache = LoadProjectQuotas(mainForm);
                 List<ProjectQuota> all = projectQuotaCache;
-                List<ProjectQuota> sug = RankProjectQuotas(all, it.TargetName);
+                List<ProjectQuota> sug = RankProjectQuotas(all, String.IsNullOrEmpty(it.TargetFullName) ? it.TargetName : it.TargetFullName);
                 using (QuotaPickerDialog dlg = new QuotaPickerDialog(all, sug))
                 {
                     if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Picked.Count == 0) return;

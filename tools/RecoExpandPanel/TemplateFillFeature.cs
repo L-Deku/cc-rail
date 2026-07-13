@@ -21,6 +21,7 @@ namespace RecoNet
             public string ItemNo;        // 条目编号，如 0401-01
             public string ItemName;      // 条目名称（显示/核对）
             public string QuotaCode;     // 定额编号，含 *系数 后缀，原样
+            public string Unit;          // 单位（供预览显示）
             public string Adjust;        // 定额调整整串（可空）
             public int OrderInItem;      // 条目内序号，保持插入先后
             public string SourceWorkbookPath;
@@ -57,9 +58,11 @@ namespace RecoNet
             public string TemplateName;
             public string ItemNo;
             public string QuotaCode;
+            public string Unit;
             public string Adjust;
             public string SourceName;
             public string TargetName;
+            public string TargetFullName;  // 目标行工程量全名(不截断)，供手挂候选排序
             public string QuantityText;
             public string Status;
             public int OrderInItem;
@@ -294,7 +297,7 @@ namespace RecoNet
             {
                 cmd.CommandText =
                     "select DE.定额序号, ZJ.条目编号, DE.定额编号, " +
-                    "cast(DE.定额调整 as nvarchar(max)), DE.顺号, DE.工程或费用项目名称 " +
+                    "cast(DE.定额调整 as nvarchar(max)), DE.顺号, DE.工程或费用项目名称, DE.单位 " +
                     "from 定额输入 DE inner join 章节表 ZJ on DE.条目序号=ZJ.条目序号 " +
                     "where DE.总概算序号=@zgs";
                 cmd.Parameters.AddWithValue("@zgs", zgsSeq);
@@ -311,6 +314,7 @@ namespace RecoNet
                             QuotaCode = Convert.ToString(r.GetValue(2)).Trim(),
                             Adjust = r.IsDBNull(3) ? "" : Convert.ToString(r.GetValue(3)).Trim(),
                             SourceName = r.IsDBNull(5) ? "" : Convert.ToString(r.GetValue(5)).Trim(),
+                            Unit = r.IsDBNull(6) ? "" : Convert.ToString(r.GetValue(6)).Trim(),
                             SourceQuotaSeq = id
                         };
                         int shun;
