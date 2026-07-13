@@ -13,9 +13,6 @@ namespace RecoNet
         {
             private readonly Form mainForm;
             private List<FillPreviewItem> preview = new List<FillPreviewItem>();
-            private List<ProjectQuota> projectQuotaCache;
-            private List<ProjectQuota> libraryQuotaCache;
-            private List<ChapterItemOption> chapterItemCache;
 
             private readonly ComboBox cmbTemplate = new ComboBox();
             private readonly Button btnDeleteTemplate = new Button();
@@ -132,7 +129,6 @@ namespace RecoNet
                         grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
                     }
                 };
-                grid.CellDoubleClick += delegate(object sender, DataGridViewCellEventArgs e) { OnNameGridDoubleClick(e); };
 
                 ContextMenuStrip gridMenu = new ContextMenuStrip();
                 ToolStripMenuItem miBindSelected = new ToolStripMenuItem("绑定软件选中的定额到此行");
@@ -306,9 +302,6 @@ namespace RecoNet
             private void OnPreview()
             {
                 SetBusy(true, "预览中...");
-                projectQuotaCache = null;
-                libraryQuotaCache = null;
-                chapterItemCache = null;
                 try
                 {
                     if (cmbTemplate.SelectedItem == null) { MessageBox.Show(this, "请先选择模板。", "模板铺量"); return; }
@@ -460,24 +453,9 @@ namespace RecoNet
                 }
             }
 
-            private void OnNameGridDoubleClick(DataGridViewCellEventArgs e)
-            {
-                if (e.RowIndex < 0) return;
-                FillPreviewItem it = grid.Rows[e.RowIndex].Tag as FillPreviewItem;
-                if (it == null || !it.NeedManualQuota) return;
-                if (projectQuotaCache == null) projectQuotaCache = LoadProjectQuotas(mainForm);
-                if (libraryQuotaCache == null) libraryQuotaCache = LoadLibraryQuotas();
-                if (chapterItemCache == null) chapterItemCache = LoadChapterItemOptions(mainForm);
-                List<ProjectQuota> sug = RankProjectQuotas(projectQuotaCache, String.IsNullOrEmpty(it.TargetFullName) ? it.TargetName : it.TargetFullName);
-                using (QuotaPickerDialog dlg = new QuotaPickerDialog(projectQuotaCache, libraryQuotaCache, sug, chapterItemCache, it.ItemNo))
-                {
-                    if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Picked.Count == 0) return;
-                    ApplyManualQuotaPick(preview, it, dlg.Picked, dlg.PickedItem);
-                    FillGrid();
-                }
-            }
-
             // 右键：把软件定额输入表当前选中的一行，绑定为该预览行的复制来源（含所在条目）。
+            // 注意：与"绑定Excel工程量"同款用主程序共享连接（克隆连接在部分环境登录失败，
+            // 会导致 ResolveQuotaSequence 查不到序号）；共享连接不得 using 释放。
             private void OnBindSelectedQuotaToRow()
             {
                 try
@@ -488,27 +466,26 @@ namespace RecoNet
                     DataGridView de = GetField<DataGridView>(mainForm, "dataGridViewDE");
                     DataGridViewRow row = GetCurrentQuotaRow(de);
                     if (row == null) { MessageBox.Show(this, "请先在软件定额输入表中选中一条定额行。", "模板铺量"); return; }
-                    using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
+                    SqlConnection conn = GetProjectConnection(mainForm);
+                    if (conn == null) { MessageBox.Show(this, "没有找到当前项目数据库连接。", "模板铺量"); return; }
+                    ExcelQuotaLink link; string err;
+                    if (!TryCreateQuotaLink(mainForm, conn, row, out link, out err)) { MessageBox.Show(this, err, "模板铺量"); return; }
+                    it.ChosenQuotaSeq = link.QuotaSequence;
+                    it.QuotaCode = link.QuotaCode;
+                    it.SourceName = link.QuotaName;
+                    it.IsLibraryQuota = false;
+                    long itemSeq;
+                    if (Int64.TryParse((link.ChapterSeq ?? "").Trim(), out itemSeq) && itemSeq > 0)
                     {
-                        ExcelQuotaLink link; string err;
-                        if (!TryCreateQuotaLink(mainForm, conn, row, out link, out err)) { MessageBox.Show(this, err, "模板铺量"); return; }
-                        it.ChosenQuotaSeq = link.QuotaSequence;
-                        it.QuotaCode = link.QuotaCode;
-                        it.SourceName = link.QuotaName;
-                        it.IsLibraryQuota = false;
-                        long itemSeq;
-                        if (Int64.TryParse((link.ChapterSeq ?? "").Trim(), out itemSeq) && itemSeq > 0)
-                        {
-                            it.ChosenItemSeq = itemSeq;
-                            it.ChosenItemNo = ResolveChapterItemNo(conn, link.ChapterSeq, null);
-                            it.ItemNo = it.ChosenItemNo;
-                        }
-                        it.Unit = GetRowValue(row, "单位", "定额单位");
-                        it.NeedManualQuota = false;
-                        it.Selected = true;
-                        it.Status = "";
-                        it.AlignNote = "已绑定 " + (link.QuotaCode ?? "") + "（软件选中行，含条目）";
+                        it.ChosenItemSeq = itemSeq;
+                        it.ChosenItemNo = ResolveChapterItemNo(conn, link.ChapterSeq, null);
+                        it.ItemNo = it.ChosenItemNo;
                     }
+                    it.Unit = GetRowValue(row, "单位", "定额单位");
+                    it.NeedManualQuota = false;
+                    it.Selected = true;
+                    it.Status = "";
+                    it.AlignNote = "已绑定 " + (link.QuotaCode ?? "") + "（软件选中行，含条目）";
                     FillGrid();
                 }
                 catch (Exception ex) { MessageBox.Show(this, "绑定失败：" + ex.Message, "模板铺量"); }
