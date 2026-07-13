@@ -464,29 +464,76 @@ namespace RecoNet
                     FillPreviewItem it = grid.SelectedRows[0].Tag as FillPreviewItem;
                     if (it == null || !it.IsNameDriven) return;
                     DataGridView de = GetField<DataGridView>(mainForm, "dataGridViewDE");
-                    DataGridViewRow row = GetCurrentQuotaRow(de);
-                    if (row == null) { MessageBox.Show(this, "请先在软件定额输入表中选中一条定额行。", "模板铺量"); return; }
+                    List<DataGridViewRow> rows = GetSelectedQuotaRows(de);
+                    if (rows.Count == 0)
+                    {
+                        DataGridViewRow cur = GetCurrentQuotaRow(de);
+                        if (cur != null) rows.Add(cur);
+                    }
+                    if (rows.Count == 0) { MessageBox.Show(this, "请先在软件定额输入表中选中一条或多条定额行。", "模板铺量"); return; }
                     SqlConnection conn = GetProjectConnection(mainForm);
                     if (conn == null) { MessageBox.Show(this, "没有找到当前项目数据库连接。", "模板铺量"); return; }
-                    ExcelQuotaLink link; string err;
-                    if (!TryCreateQuotaLink(mainForm, conn, row, out link, out err)) { MessageBox.Show(this, err, "模板铺量"); return; }
-                    it.ChosenQuotaSeq = link.QuotaSequence;
-                    it.QuotaCode = link.QuotaCode;
-                    it.SourceName = link.QuotaName;
-                    it.IsLibraryQuota = false;
-                    long itemSeq;
-                    if (Int64.TryParse((link.ChapterSeq ?? "").Trim(), out itemSeq) && itemSeq > 0)
+
+                    // 多选=一量对多：第一行为组长补当前预览行，其余追加为组件框第 N 条。
+                    // 重新绑定视为整组替换：先移除该工程量行原有的组员(GroupOrder>0)。
+                    int baseIdx = preview.IndexOf(it);
+                    if (baseIdx >= 0)
                     {
-                        it.ChosenItemSeq = itemSeq;
-                        it.ChosenItemNo = ResolveChapterItemNo(conn, link.ChapterSeq, null);
-                        it.ItemNo = it.ChosenItemNo;
+                        for (int r = preview.Count - 1; r > baseIdx; r--)
+                        {
+                            FillPreviewItem p = preview[r];
+                            if (p.IsNameDriven && p.TargetRow == it.TargetRow && p.GroupOrder > 0) preview.RemoveAt(r);
+                        }
                     }
-                    it.Unit = GetRowValue(row, "单位", "定额单位");
-                    it.NeedManualQuota = false;
-                    it.Selected = true;
-                    it.Status = "";
-                    it.AlignNote = "已绑定 " + (link.QuotaCode ?? "") + "（软件选中行，含条目）";
-                    FillGrid();
+
+                    int bound = 0;
+                    Dictionary<string, string> itemNoCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (DataGridViewRow row in rows)
+                    {
+                        ExcelQuotaLink link; string err;
+                        if (!TryCreateQuotaLink(mainForm, conn, row, out link, out err))
+                        {
+                            MessageBox.Show(this, (link == null ? "" : link.QuotaCode + "：") + err, "模板铺量");
+                            continue;
+                        }
+
+                        FillPreviewItem target = (bound == 0) ? it : new FillPreviewItem();
+                        target.IsNameDriven = true;
+                        target.ChosenQuotaSeq = link.QuotaSequence;
+                        target.QuotaCode = link.QuotaCode;
+                        target.SourceName = link.QuotaName;
+                        target.IsLibraryQuota = false;
+                        long itemSeq;
+                        if (Int64.TryParse((link.ChapterSeq ?? "").Trim(), out itemSeq) && itemSeq > 0)
+                        {
+                            target.ChosenItemSeq = itemSeq;
+                            target.ChosenItemNo = ResolveChapterItemNo(conn, link.ChapterSeq, itemNoCache);
+                            target.ItemNo = target.ChosenItemNo;
+                        }
+                        target.Unit = GetRowValue(row, "单位", "定额单位");
+                        target.NeedManualQuota = false;
+                        target.Selected = true;
+                        target.Status = "";
+                        if (bound == 0)
+                        {
+                            target.AlignNote = "已绑定 " + (link.QuotaCode ?? "") + (rows.Count > 1 ? "（组 " + rows.Count.ToString() + " 条）" : "（软件选中行，含条目）");
+                        }
+                        else
+                        {
+                            target.TemplateName = it.TemplateName;
+                            target.TargetRow = it.TargetRow;
+                            target.OrderInItem = it.OrderInItem;
+                            target.NeighborSourceQuotaSeq = it.NeighborSourceQuotaSeq;
+                            target.GroupOrder = bound;
+                            target.TargetName = "";
+                            target.QuantityText = it.QuantityText;
+                            target.AlignNote = "组件框第 " + (bound + 1).ToString() + " 条（软件选中行）";
+                            if (baseIdx >= 0) preview.Insert(baseIdx + bound, target); else preview.Add(target);
+                        }
+                        bound++;
+                    }
+
+                    if (bound > 0) FillGrid();
                 }
                 catch (Exception ex) { MessageBox.Show(this, "绑定失败：" + ex.Message, "模板铺量"); }
             }
