@@ -529,6 +529,7 @@ namespace RecoNet
                             target.NeighborSourceQuotaSeq = it.NeighborSourceQuotaSeq;
                             target.GroupOrder = bound;
                             target.TargetName = "";
+                            target.TargetFullName = it.TargetFullName;
                             target.TargetUnit = it.TargetUnit;
                             target.TargetQuantityText = it.TargetQuantityText;
                             target.AlignNote = "组件框第 " + (bound + 1).ToString() + " 条（软件选中行）";

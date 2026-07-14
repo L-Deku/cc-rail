@@ -715,7 +715,8 @@ namespace RecoNet
                 FillTemplate t = LoadFillTemplate(templateName);
                 if (t == null || !String.Equals(t.MatchBy, "name", StringComparison.OrdinalIgnoreCase)) return;
                 bool changed = false;
-                foreach (FillPreviewItem it in written.Where(i => i.IsNameDriven && !String.IsNullOrWhiteSpace(i.QuotaCode) && i.GroupOrder == 0))
+                // 组员(GroupOrder>0)也回写：让组件框整组进模版，下次同名工程量整组带出。
+                foreach (FillPreviewItem it in written.Where(i => i.IsNameDriven && !String.IsNullOrWhiteSpace(i.QuotaCode)))
                 {
                     string nm = String.IsNullOrWhiteSpace(it.TargetFullName) ? (it.TargetName ?? "") : it.TargetFullName;
                     bool exists = t.Rows.Any(r =>
