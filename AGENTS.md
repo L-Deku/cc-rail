@@ -35,6 +35,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\DeployUnifiedPlugins.ps1" -Deploy
 ```
 
+- 每次构建或部署插件后，如果 `release/同事插件分层发布/` 已存在，必须同步更新对应功能的首次安装包和 `90-后续更新文件`，重新生成 `文件清单-SHA256.txt`，并验证发布包 DLL 与 `RecoQuotaRecommend/bin/` 源 DLL 哈希一致。仅更新 `RecoExpandPanel.dll` 时不得重建或复制 `RecoQuotaData`、其他插件 DLL 或同事数据；给已安装插件的同事发送时，只发送 `90-后续更新文件/综合扩展更新/RecoExpandPanel.dll`。
 - 运行构建部署前先确认目标软件主程序已关闭；`RejjNet2020.exe`、`ReJJGSNet2024.exe` 等进程占用插件 DLL 时，`Copy-Item` 会因文件被占用而部署失败。
 - 验证时优先用插件内部检索入口或实际软件界面验证，不只看文本文件搜索结果。
 - 启动 `RejjNet2020.exe`、`ReJJGSNet2024.exe` 做插件加载冒烟验证后，先轮询进程是否已自行退出；需要关闭时优先用窗口关闭/`CloseMainWindow`，不要默认 `Stop-Process` 或 `taskkill /F` 一定有权限结束软件进程。
