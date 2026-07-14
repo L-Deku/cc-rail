@@ -32,6 +32,50 @@ if ($chapter.Invoke($null, @('第一章 路基工程', '第二章 路基工程')
 if ($chapter.Invoke($null, @('', '路基工程'))) { throw '缺章节不应自动兼容' }
 Write-Host "PASS 章节兼容守卫"
 
+$templateType = $type.GetNestedType('FillTemplate', $flags)
+$templateRowType = $type.GetNestedType('FillTemplateRow', $flags)
+$groupBuilder = $type.GetMethod('BuildTemplateNameGroups', $flags)
+$conflict = $type.GetMethod('GetExactNameConflict', $flags)
+$uniqueBest = $type.GetMethod('FindUniqueBestMatchIndex', $flags)
+if ($null -eq $groupBuilder -or $null -eq $conflict -or $null -eq $uniqueBest) {
+    throw '缺少名字组件分组或歧义判定入口'
+}
+
+$groupTemplate = [Activator]::CreateInstance($templateType)
+$templateType.GetField('WorkbookPath', $flags).SetValue($groupTemplate, 'C:\fixture.xlsx')
+function Add-TemplateRow([string]$name, [string]$expr, [string]$chapter, [string]$code) {
+    $row = [Activator]::CreateInstance($templateRowType)
+    $templateRowType.GetField('MatchName', $flags).SetValue($row, $name)
+    $templateRowType.GetField('SourceSheet', $flags).SetValue($row, '测试')
+    $templateRowType.GetField('SourceExpr', $flags).SetValue($row, $expr)
+    $templateRowType.GetField('MatchChapter', $flags).SetValue($row, $chapter)
+    $templateRowType.GetField('QuotaCode', $flags).SetValue($row, $code)
+    $templateType.GetField('Rows', $flags).GetValue($groupTemplate).Add($row)
+}
+Add-TemplateRow '低烟无卤电缆 m' 'D2/100' '' 'DY-519'
+Add-TemplateRow '低烟无卤电缆 m' 'D2' '第二章' 'ZLF*1.01'
+$groups = $groupBuilder.Invoke($null, @($groupTemplate))
+if ($groups.Count -ne 1 -or $groups[0].Indexes.Count -ne 2) { throw '同锚点多定额应组成一个组件组' }
+Add-TemplateRow '低烟无卤电缆 m' 'D30' '' 'DY-520'
+$groups = $groupBuilder.Invoke($null, @($groupTemplate))
+if ($groups.Count -ne 2) { throw '同名不同来源锚点应形成两个组件组' }
+if ($conflict.Invoke($null, @(1, 2)) -ne 'template') { throw '模板同名多来源应判为模板歧义' }
+if ($conflict.Invoke($null, @(2, 1)) -ne 'target') { throw '目标多行同名应判为目标歧义' }
+if ($conflict.Invoke($null, @(1, 1)) -ne '') { throw '唯一同名不应判为歧义' }
+
+$bestArgs = [object[]]@((N '低烟无卤电缆'), '第七章',
+    [string[]]@((N '低烟无卤电缆A'), (N '低烟无卤电缆B')),
+    [string[]]@('', ''), $false)
+$bestIndex = $uniqueBest.Invoke($null, $bestArgs)
+if ($bestIndex -ne -1 -or -not [bool]$bestArgs[4]) { throw '模糊最高分并列应判为黄色歧义' }
+
+$bestArgs = [object[]]@((N '低烟无卤电缆'), '第七章',
+    [string[]]@((N '低烟无卤电缆A'), (N '完全无关')),
+    [string[]]@('第八章', '第七章'), $false)
+$bestIndex = $uniqueBest.Invoke($null, $bestArgs)
+if ($bestIndex -ne 0 -or [bool]$bestArgs[4]) { throw '唯一最佳名称不得被章节不同淘汰' }
+Write-Host 'PASS 名字组件分组与同名歧义判定'
+
 $confirmed = $type.GetMethod('IsInsertGroupFullyConfirmed', $flags)
 if (-not $confirmed.Invoke($null, @(3, 3))) { throw '整组写入完成应确认成功' }
 if ($confirmed.Invoke($null, @(3, 2))) { throw '部分写入不得确认整组成功' }

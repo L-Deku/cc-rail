@@ -68,6 +68,15 @@ namespace RecoNet
             public List<string> Numbers;
         }
 
+        private sealed class TemplateNameGroup
+        {
+            public string NormName;
+            public string Chapter;
+            public string SourceAnchor;
+            public MatchTextFeatures Features;
+            public List<int> Indexes = new List<int>();
+        }
+
         private static MatchTextFeatures BuildMatchTextFeatures(string normalizedText)
         {
             string norm = normalizedText ?? "";
@@ -146,6 +155,93 @@ namespace RecoNet
         private static bool SameTemplateChapter(string left, string right)
         {
             return String.Equals(NormalizeMatchText(left), NormalizeMatchText(right), StringComparison.Ordinal);
+        }
+
+        private static string BuildTemplateSourceAnchor(FillTemplate template, FillTemplateRow row)
+        {
+            string first = ExtractFirstCellAddress(row == null ? "" : row.SourceExpr);
+            if (!String.IsNullOrEmpty(first))
+            {
+                return NormalizeTemplateWorkbookPath(GetTemplateRowWorkbookPath(template, row)) + "|" +
+                    ((row.SourceSheet ?? "").Trim().ToUpperInvariant()) + "|" + first.ToUpperInvariant();
+            }
+            return "legacy|" + NormalizeMatchText(row == null ? "" : row.MatchChapter);
+        }
+
+        private static List<TemplateNameGroup> BuildTemplateNameGroups(FillTemplate template)
+        {
+            List<TemplateNameGroup> result = new List<TemplateNameGroup>();
+            if (template == null || template.Rows == null) return result;
+            Dictionary<string, TemplateNameGroup> byKey = new Dictionary<string, TemplateNameGroup>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < template.Rows.Count; i++)
+            {
+                FillTemplateRow row = template.Rows[i];
+                string norm = NormalizeMatchText(row == null ? "" : (row.MatchName ?? row.SourceName ?? ""));
+                if (norm.Length == 0) continue;
+                string anchor = BuildTemplateSourceAnchor(template, row);
+                string key = norm + "\u001f" + anchor;
+                TemplateNameGroup group;
+                if (!byKey.TryGetValue(key, out group))
+                {
+                    group = new TemplateNameGroup
+                    {
+                        NormName = norm,
+                        Chapter = row.MatchChapter ?? "",
+                        SourceAnchor = anchor,
+                        Features = BuildMatchTextFeatures(norm)
+                    };
+                    byKey[key] = group;
+                    result.Add(group);
+                }
+                group.Indexes.Add(i);
+                if (String.IsNullOrWhiteSpace(group.Chapter) && !String.IsNullOrWhiteSpace(row.MatchChapter))
+                {
+                    group.Chapter = row.MatchChapter;
+                }
+            }
+            return result;
+        }
+
+        internal static string GetExactNameConflict(int targetNameCount, int templateGroupCount)
+        {
+            if (targetNameCount > 1) return "target";
+            if (templateGroupCount > 1) return "template";
+            return "";
+        }
+
+        internal static int FindUniqueBestMatchIndex(string queryNorm, string queryChapter,
+            IList<string> candidateNorms, IList<string> candidateChapters, out bool ambiguous)
+        {
+            List<MatchTextFeatures> features = candidateNorms.Select(BuildMatchTextFeatures).ToList();
+            return FindUniqueBestMatchIndexCached(BuildMatchTextFeatures(queryNorm), queryChapter,
+                features, candidateChapters, out ambiguous);
+        }
+
+        private static int FindUniqueBestMatchIndexCached(MatchTextFeatures queryFeatures, string queryChapter,
+            IList<MatchTextFeatures> candidateFeatures, IList<string> candidateChapters, out bool ambiguous)
+        {
+            ambiguous = false;
+            int best = -1;
+            int bestScore = NameMatchMinScore - 1;
+            int bestChapterRank = -1;
+            for (int i = 0; i < candidateFeatures.Count; i++)
+            {
+                int score = MatchNameScore(queryFeatures, candidateFeatures[i]);
+                if (score < NameMatchMinScore) continue;
+                int chapterRank = AreMatchChaptersCompatible(queryChapter, candidateChapters[i]) ? 1 : 0;
+                if (score > bestScore || (score == bestScore && chapterRank > bestChapterRank))
+                {
+                    best = i;
+                    bestScore = score;
+                    bestChapterRank = chapterRank;
+                    ambiguous = false;
+                }
+                else if (score == bestScore && chapterRank == bestChapterRank)
+                {
+                    ambiguous = true;
+                }
+            }
+            return ambiguous ? -1 : best;
         }
 
         // 从候选名字列表里挑与 query 最匹配的下标；低于阈值返回 -1。sameChapterOnly 交由调用方先过滤候选。
@@ -603,43 +699,30 @@ namespace RecoNet
             List<BoxCandidate> boxIndex = BuildMappingBoxIndex(boxRows);
 
             List<FillPreviewItem> items = new List<FillPreviewItem>();
-            PopulateTemplateMatchChapters(template);
-            List<string> tmplNorms = template.Rows.Select(r => NormalizeMatchText(r.MatchName ?? r.SourceName ?? "")).ToList();
-            List<MatchTextFeatures> tmplFeatures = tmplNorms.Select(BuildMatchTextFeatures).ToList();
-            List<string> tmplChapters = template.Rows.Select(r => r.MatchChapter ?? "").ToList();
+            List<TemplateNameGroup> templateGroups = BuildTemplateNameGroups(template);
+            Dictionary<string, List<TemplateNameGroup>> groupsByNorm = templateGroups
+                .GroupBy(g => g.NormName, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
             List<string> targetNorms = targetRows.Select(x => x.NormName).ToList();
             List<MatchTextFeatures> targetFeatures = targetNorms.Select(BuildMatchTextFeatures).ToList();
+            Dictionary<string, int> targetNameCounts = targetRows
+                .Where(r => !String.IsNullOrEmpty(r.NormName))
+                .GroupBy(r => r.NormName, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
 
-            HashSet<int> usedTmplIdx = new HashSet<int>();
-            Dictionary<int, string> mergedIntoByTargetIdx = new Dictionary<int, string>();
-
-            // 两遍匹配：先“归一化完全相等”精确认领，再模糊。防止近似名(如 -2*1.5 vs -4*1.5)抢走精确归属的模板组。
-            Dictionary<int, int> exactTmplByTarget = new Dictionary<int, int>();
-            HashSet<int> exactClaimedTmpl = new HashSet<int>();
-            for (int t = 0; t < targetRows.Count; t++)
+            // 有精确目标名称的模板组只为该名称保留，避免被前面的近似名行抢走；保留不等于已消费。
+            HashSet<TemplateNameGroup> exactReservedGroups = new HashSet<TemplateNameGroup>();
+            foreach (TargetQtyRow targetRow in targetRows)
             {
-                for (int gi = 0; gi < tmplNorms.Count; gi++)
+                List<TemplateNameGroup> exactGroups;
+                if (groupsByNorm.TryGetValue(targetRow.NormName, out exactGroups))
                 {
-                    if (exactClaimedTmpl.Contains(gi) || tmplNorms[gi].Length == 0)
-                    {
-                        continue;
-                    }
-                    if (AreMatchChaptersCompatible(tmplChapters[gi], targetRows[t].Chapter) &&
-                        String.Equals(tmplNorms[gi], targetRows[t].NormName, StringComparison.Ordinal))
-                    {
-                        exactTmplByTarget[t] = gi;
-                        for (int gj = 0; gj < tmplNorms.Count; gj++)
-                        {
-                            if (AreMatchChaptersCompatible(tmplChapters[gj], targetRows[t].Chapter) &&
-                                String.Equals(tmplNorms[gj], tmplNorms[gi], StringComparison.Ordinal))
-                            {
-                                exactClaimedTmpl.Add(gj);
-                            }
-                        }
-                        break;
-                    }
+                    foreach (TemplateNameGroup group in exactGroups) exactReservedGroups.Add(group);
                 }
             }
+
+            HashSet<TemplateNameGroup> usedGroups = new HashSet<TemplateNameGroup>();
+            Dictionary<int, string> mergedIntoByTargetIdx = new Dictionary<int, string>();
 
             FillPreviewItem lastMatched = null;
             for (int trIdx = 0; trIdx < targetRows.Count; trIdx++)
@@ -678,52 +761,51 @@ namespace RecoNet
                 item.TargetQuantityText = tr.QuantityText;
                 item.QuantityText = tr.QuantityText;
 
-                int ti;
-                bool crossChapterSuggestion = false;
-                if (!exactTmplByTarget.TryGetValue(trIdx, out ti))
+                List<TemplateNameGroup> exactGroups;
+                groupsByNorm.TryGetValue(tr.NormName, out exactGroups);
+                int targetNameCount;
+                targetNameCounts.TryGetValue(tr.NormName, out targetNameCount);
+                string exactConflict = GetExactNameConflict(targetNameCount, exactGroups == null ? 0 : exactGroups.Count);
+                if (exactConflict.Length > 0)
                 {
-                    ti = -1;
-                    int bestScore = NameMatchMinScore - 1;
-                    for (int gi = 0; gi < tmplNorms.Count; gi++)
-                    {
-                        if (usedTmplIdx.Contains(gi) || exactClaimedTmpl.Contains(gi))
-                        {
-                            continue;
-                        }
-                        if (!AreMatchChaptersCompatible(tmplChapters[gi], tr.Chapter)) continue;
-                        int s = MatchNameScore(targetFeatures[trIdx], tmplFeatures[gi]);
-                        if (s > bestScore) { bestScore = s; ti = gi; }
-                    }
-                }
-                else if (usedTmplIdx.Contains(ti))
-                {
-                    ti = -1;
+                    item.Selected = false;
+                    item.NeedManualQuota = false;
+                    item.Status = exactConflict == "target"
+                        ? "目标表存在重复工程量名称，需人工确认"
+                        : "模板存在同名多来源，需人工确认";
+                    items.Add(item);
+                    continue;
                 }
 
-                // 章节缺失或不兼容时只给黄色建议，不消费模板组、不自动勾选。
-                if (ti < 0)
+                TemplateNameGroup matchedGroup = null;
+                if (exactGroups != null && exactGroups.Count == 1 && !usedGroups.Contains(exactGroups[0]))
                 {
-                    int bestScore = NameMatchMinScore - 1;
-                    for (int gi = 0; gi < tmplNorms.Count; gi++)
+                    matchedGroup = exactGroups[0];
+                }
+                else if (exactGroups == null || exactGroups.Count == 0)
+                {
+                    List<TemplateNameGroup> candidates = templateGroups
+                        .Where(g => !usedGroups.Contains(g) && !exactReservedGroups.Contains(g))
+                        .ToList();
+                    bool fuzzyAmbiguous;
+                    int bestGroupIndex = FindUniqueBestMatchIndexCached(targetFeatures[trIdx], tr.Chapter,
+                        candidates.Select(g => g.Features).ToList(),
+                        candidates.Select(g => g.Chapter ?? "").ToList(), out fuzzyAmbiguous);
+                    if (fuzzyAmbiguous)
                     {
-                        if (usedTmplIdx.Contains(gi) || exactClaimedTmpl.Contains(gi)) continue;
-                        int s = MatchNameScore(targetFeatures[trIdx], tmplFeatures[gi]);
-                        if (s > bestScore) { bestScore = s; ti = gi; }
+                        item.Selected = false;
+                        item.NeedManualQuota = true;
+                        item.AlignNote = "名称候选不唯一，需人工确认";
+                        items.Add(item);
+                        continue;
                     }
-                    crossChapterSuggestion = ti >= 0;
+                    if (bestGroupIndex >= 0) matchedGroup = candidates[bestGroupIndex];
                 }
 
-                if (ti >= 0)
+                if (matchedGroup != null)
                 {
-                    // 组件框：目标一行工程量 -> 模版里所有同名(归一化相等)且未被消费过的定额，按条目内序全展开。
-                    string bestNorm = tmplNorms[ti];
-                    List<int> groupIdx = new List<int>();
-                    for (int gi = 0; gi < tmplNorms.Count; gi++)
-                    {
-                        if (usedTmplIdx.Contains(gi)) continue;
-                        if (String.Equals(tmplNorms[gi], bestNorm, StringComparison.Ordinal) &&
-                            SameTemplateChapter(tmplChapters[gi], tmplChapters[ti])) groupIdx.Add(gi);
-                    }
+                    // 同一来源锚点的多条定额是一个组件组；章节不再拆组或过滤唯一名称候选。
+                    List<int> groupIdx = matchedGroup.Indexes.ToList();
                     groupIdx.Sort(delegate(int a, int b)
                     {
                         int ra = PseudoQuotaRank(template.Rows[a].QuotaCode);
@@ -731,10 +813,7 @@ namespace RecoNet
                         if (ra != rb) return ra.CompareTo(rb);
                         return template.Rows[a].OrderInItem.CompareTo(template.Rows[b].OrderInItem);
                     });
-                    if (!crossChapterSuggestion)
-                    {
-                        foreach (int gi in groupIdx) usedTmplIdx.Add(gi);
-                    }
+                    usedGroups.Add(matchedGroup);
 
                     int go = 0;
                     foreach (int gi in groupIdx)
@@ -758,11 +837,9 @@ namespace RecoNet
                         gitem.TargetChapter = tr.Chapter;
                         gitem.TargetUnit = tr.Unit;
                         gitem.TargetQuantityText = tr.QuantityText;
-                        gitem.Selected = !crossChapterSuggestion;
-                        gitem.NeedManualQuota = crossChapterSuggestion;
-                        gitem.AlignNote = crossChapterSuggestion
-                            ? ((go == 0) ? "跨章节建议，需人工确认" : ("跨章节组件建议第 " + (go + 1).ToString(CultureInfo.InvariantCulture) + " 条"))
-                            : ((go == 0) ? "模版命中" : ("组件框第 " + (go + 1).ToString(CultureInfo.InvariantCulture) + " 条"));
+                        gitem.Selected = true;
+                        gitem.NeedManualQuota = false;
+                        gitem.AlignNote = (go == 0) ? "模版命中" : ("组件框第 " + (go + 1).ToString(CultureInfo.InvariantCulture) + " 条");
 
                         // 数量：多操作数表达式(如 E4+E5)优先按名字把各操作数代入源表达式求值；
                         // 否则套用源绑定表达式的换算系数(如 I19/100)；否则直接用目标数量。
@@ -796,7 +873,7 @@ namespace RecoNet
                             }
                         }
 
-                        if (go == 0 && !crossChapterSuggestion) lastMatched = gitem;
+                        if (go == 0) lastMatched = gitem;
                         items.Add(gitem);
                         go++;
                     }
