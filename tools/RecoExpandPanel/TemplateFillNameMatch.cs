@@ -61,20 +61,91 @@ namespace RecoNet
             return grams;
         }
 
+        private sealed class MatchTextFeatures
+        {
+            public string Norm;
+            public HashSet<string> Bigrams;
+            public List<string> Numbers;
+        }
+
+        private static MatchTextFeatures BuildMatchTextFeatures(string normalizedText)
+        {
+            string norm = normalizedText ?? "";
+            return new MatchTextFeatures
+            {
+                Norm = norm,
+                Bigrams = BuildMatchBigrams(norm),
+                Numbers = ExtractMatchNumbers(norm)
+            };
+        }
+
         // 相似度 0-100：字符 bigram Dice；双方都含数字且数字集不相交时重罚(/3)。
         internal static int MatchNameScore(string leftNorm, string rightNorm)
         {
-            if (String.IsNullOrEmpty(leftNorm) || String.IsNullOrEmpty(rightNorm)) return 0;
-            if (String.Equals(leftNorm, rightNorm, StringComparison.Ordinal)) return 100;
-            HashSet<string> l = BuildMatchBigrams(leftNorm);
-            HashSet<string> r = BuildMatchBigrams(rightNorm);
-            if (l.Count == 0 || r.Count == 0) return 0;
-            int common = l.Count(g => r.Contains(g));
-            int score = (int)Math.Round(200.0 * common / (l.Count + r.Count));
-            List<string> ln = ExtractMatchNumbers(leftNorm);
-            List<string> rn = ExtractMatchNumbers(rightNorm);
-            if (ln.Count > 0 && rn.Count > 0 && !ln.Any(n => rn.Contains(n))) score /= 3;
+            return MatchNameScore(BuildMatchTextFeatures(leftNorm), BuildMatchTextFeatures(rightNorm));
+        }
+
+        private static int MatchNameScore(MatchTextFeatures left, MatchTextFeatures right)
+        {
+            if (left == null || right == null || String.IsNullOrEmpty(left.Norm) || String.IsNullOrEmpty(right.Norm)) return 0;
+            if (String.Equals(left.Norm, right.Norm, StringComparison.Ordinal)) return 100;
+            if (left.Bigrams.Count == 0 || right.Bigrams.Count == 0) return 0;
+            int common = left.Bigrams.Count(g => right.Bigrams.Contains(g));
+            int score = (int)Math.Round(200.0 * common / (left.Bigrams.Count + right.Bigrams.Count));
+            if (left.Numbers.Count > 0 && right.Numbers.Count > 0 && !left.Numbers.Any(n => right.Numbers.Contains(n))) score /= 3;
             return score > 100 ? 100 : score;
+        }
+
+        // 章节缺失或不一致时不得自动认领。兼容同义章节标题，但保持保守阈值。
+        internal static bool AreMatchChaptersCompatible(string left, string right)
+        {
+            string l = NormalizeMatchText(left);
+            string r = NormalizeMatchText(right);
+            if (l.Length == 0 || r.Length == 0) return false;
+            int leftOrdinal, rightOrdinal;
+            if (TryGetChapterOrdinal(left, out leftOrdinal) && TryGetChapterOrdinal(right, out rightOrdinal) &&
+                leftOrdinal != rightOrdinal)
+            {
+                return false;
+            }
+            if (String.Equals(l, r, StringComparison.Ordinal)) return true;
+            if (Math.Min(l.Length, r.Length) >= 3 && (l.Contains(r) || r.Contains(l))) return true;
+            return MatchNameScore(l, r) >= 70;
+        }
+
+        private static bool TryGetChapterOrdinal(string text, out int ordinal)
+        {
+            ordinal = 0;
+            if (String.IsNullOrWhiteSpace(text)) return false;
+            System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(text.Trim(),
+                @"^(?:第\s*)?([0-9]+|[一二三四五六七八九十百]+)\s*(?:[、\.．]|章|节|部分)|^[\(（]\s*([0-9]+|[一二三四五六七八九十百]+)\s*[\)）]");
+            if (!match.Success) return false;
+            string raw = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
+            if (Int32.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out ordinal)) return ordinal > 0;
+            ordinal = ParseChineseChapterNumber(raw);
+            return ordinal > 0;
+        }
+
+        private static int ParseChineseChapterNumber(string raw)
+        {
+            if (String.IsNullOrEmpty(raw)) return 0;
+            const string digits = "零一二三四五六七八九";
+            int total = 0;
+            int current = 0;
+            foreach (char c in raw)
+            {
+                int digit = digits.IndexOf(c);
+                if (digit >= 0) { current = digit; continue; }
+                if (c == '十') { total += (current == 0 ? 1 : current) * 10; current = 0; continue; }
+                if (c == '百') { total += (current == 0 ? 1 : current) * 100; current = 0; continue; }
+                return 0;
+            }
+            return total + current;
+        }
+
+        private static bool SameTemplateChapter(string left, string right)
+        {
+            return String.Equals(NormalizeMatchText(left), NormalizeMatchText(right), StringComparison.Ordinal);
         }
 
         // 从候选名字列表里挑与 query 最匹配的下标；低于阈值返回 -1。sameChapterOnly 交由调用方先过滤候选。
@@ -126,7 +197,51 @@ namespace RecoNet
                     row.MatchName = row.Operands.Count > 0 ? row.Operands[0].Name : "";
                 }
             }
+            PopulateTemplateMatchChapters(template);
             return template;
+        }
+
+        // 名字模板记录源 Excel 章节。旧模板预览时也调用本方法临时补读，但不静默保存模板。
+        private static void PopulateTemplateMatchChapters(FillTemplate template)
+        {
+            if (template == null || template.Rows == null) return;
+            Dictionary<string, Dictionary<int, string>> cache = new Dictionary<string, Dictionary<int, string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (FillTemplateRow row in template.Rows)
+            {
+                if (row == null || !String.IsNullOrWhiteSpace(row.MatchChapter)) continue;
+                string workbook = GetTemplateRowWorkbookPath(template, row);
+                string first = ExtractFirstCellAddress(row.SourceExpr);
+                CellRef cr;
+                if (String.IsNullOrWhiteSpace(workbook) || String.IsNullOrWhiteSpace(row.SourceSheet) ||
+                    String.IsNullOrEmpty(first) || !TryParseCellAddress(first, out cr))
+                {
+                    continue;
+                }
+
+                string fullWorkbook;
+                try { fullWorkbook = Path.GetFullPath(workbook); }
+                catch { continue; }
+                if (!File.Exists(fullWorkbook)) continue;
+                string key = fullWorkbook + "|" + row.SourceSheet + "|" + cr.Column.ToString(CultureInfo.InvariantCulture);
+                Dictionary<int, string> chapters;
+                if (!cache.TryGetValue(key, out chapters))
+                {
+                    try
+                    {
+                        Dictionary<int, string> chapterSnapshot;
+                        ReadTargetQtyRowsWithChapters(fullWorkbook, row.SourceSheet, cr.Column, out chapterSnapshot);
+                        chapters = chapterSnapshot;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log("Populate template chapters failed: " + ex.Message);
+                        chapters = new Dictionary<int, string>();
+                    }
+                    cache[key] = chapters;
+                }
+                string chapter;
+                if (chapters.TryGetValue(cr.Row, out chapter)) row.MatchChapter = chapter;
+            }
         }
 
         // 读某表达式首格所在行的【全名】(不截断)。复用绑定阶段的不截断 ReadRowNameAt 重载。
@@ -155,7 +270,15 @@ namespace RecoNet
         // 章节锚点行用于给每个工程量行标 Chapter(取其上方最近锚点)。
         private static List<TargetQtyRow> ReadTargetQtyRows(string workbook, string sheet, int qtyColumn)
         {
+            Dictionary<int, string> ignored;
+            return ReadTargetQtyRowsWithChapters(workbook, sheet, qtyColumn, out ignored);
+        }
+
+        private static List<TargetQtyRow> ReadTargetQtyRowsWithChapters(string workbook, string sheet, int qtyColumn,
+            out Dictionary<int, string> chapterByRow)
+        {
             List<TargetQtyRow> result = new List<TargetQtyRow>();
+            chapterByRow = new Dictionary<int, string>();
             Dictionary<string, HashSet<int>> hiddenCache = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
             Dictionary<string, List<ExcelMergedRegion>> mergedCache = new Dictionary<string, List<ExcelMergedRegion>>(StringComparer.OrdinalIgnoreCase);
 
@@ -177,6 +300,7 @@ namespace RecoNet
                 string qtyAddr = qtyColName + r.ToString(CultureInfo.InvariantCulture);
                 string name = ReadRowNameAt(workbook, sheet, qtyAddr, hiddenCache, mergedCache, ctx, true);
                 if (IsChapterAnchorRaw(name)) { currentChapter = name; continue; }
+                chapterByRow[r] = currentChapter;
 
                 string disp; decimal qty; string err;
                 bool hasQty = TryEvaluateWorkbookExpression(ctx, workbook, sheet, qtyAddr, out disp, out qty, out err, true) && qty != 0m;
@@ -295,9 +419,18 @@ namespace RecoNet
 
         private sealed class BoxCandidate
         {
+            public string BoxId;
+            public int Score;
+            public List<MatchTextFeatures> SampleFeatures = new List<MatchTextFeatures>();
+            public List<BoxCandidateTarget> Targets = new List<BoxCandidateTarget>();
+        }
+
+        private sealed class BoxCandidateTarget
+        {
+            public string Kind;
             public string QuotaCode;
             public string QuotaName;
-            public int Score;
+            public string QuotaUnit;
         }
 
         // 读 mapping-boxes.jsonl 全量行；一次性读入供本次预览多次查询，避免逐行重复打开文件。
@@ -318,25 +451,63 @@ namespace RecoNet
             return rows;
         }
 
-        // 为一个工程量全名返回候选定额(按名字相似度)。一期只吃对应框(绑定飞轮)。boxRows 由调用方预读一次。
-        private static List<BoxCandidate> LookupMappingBox(string queryFullName, List<Dictionary<string, string>> boxRows)
+        // 预先按 box_id 还原组件框并归一化样本，避免每个目标工程量重复分组和归一化。
+        private static List<BoxCandidate> BuildMappingBoxIndex(List<Dictionary<string, string>> boxRows)
+        {
+            List<BoxCandidate> result = new List<BoxCandidate>();
+            foreach (IGrouping<string, Dictionary<string, string>> boxGroup in (boxRows ?? new List<Dictionary<string, string>>())
+                .Where(row => !String.IsNullOrWhiteSpace(GetFlat(row, "box_id")))
+                .GroupBy(row => GetFlat(row, "box_id"), StringComparer.OrdinalIgnoreCase))
+            {
+                BoxCandidate candidate = new BoxCandidate { BoxId = boxGroup.Key };
+                candidate.SampleFeatures = boxGroup
+                    .Select(row => GetFlat(row, "quantity_name"))
+                    .Where(name => !String.IsNullOrWhiteSpace(name))
+                    .Select(NormalizeMatchText)
+                    .Where(name => name.Length > 0)
+                    .Distinct(StringComparer.Ordinal)
+                    .Select(BuildMatchTextFeatures)
+                    .ToList();
+                candidate.Targets = boxGroup
+                    .Where(row => !String.IsNullOrWhiteSpace(GetFlat(row, "target_code")))
+                    .GroupBy(row => BuildMappingTargetKey(GetFlat(row, "target_kind"), GetFlat(row, "target_code")), StringComparer.OrdinalIgnoreCase)
+                    .Select(g => new BoxCandidateTarget
+                    {
+                        Kind = GetFlat(g.First(), "target_kind"),
+                        QuotaCode = GetFlat(g.First(), "target_code"),
+                        QuotaName = GetFlat(g.First(), "target_name"),
+                        QuotaUnit = GetFlat(g.First(), "target_unit")
+                    })
+                    .OrderBy(target => PseudoQuotaRank(target.QuotaCode))
+                    .ThenBy(target => target.QuotaCode, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (candidate.SampleFeatures.Count > 0 && candidate.Targets.Count > 0) result.Add(candidate);
+            }
+            return result;
+        }
+
+        // 为一个工程量全名返回对应框候选；返回完整目标组，不拆散组件框。
+        private static List<BoxCandidate> LookupMappingBox(string queryFullName, List<BoxCandidate> boxIndex)
         {
             List<BoxCandidate> result = new List<BoxCandidate>();
             string norm = NormalizeMatchText(queryFullName);
-            if (norm.Length == 0 || boxRows == null) return result;
-            foreach (Dictionary<string, string> row in boxRows)
+            if (norm.Length == 0 || boxIndex == null) return result;
+            MatchTextFeatures queryFeatures = BuildMatchTextFeatures(norm);
+            foreach (BoxCandidate indexed in boxIndex)
             {
-                string qn = GetFlat(row, "quantity_name");
-                string code = GetFlat(row, "target_code");
-                if (String.IsNullOrWhiteSpace(qn) || String.IsNullOrWhiteSpace(code)) continue;
-                int s = MatchNameScore(norm, NormalizeMatchText(qn));
-                if (s < NameMatchMinScore) continue;
-                result.Add(new BoxCandidate { QuotaCode = code, QuotaName = GetFlat(row, "target_name"), Score = s });
+                int bestScore = indexed.SampleFeatures.Select(sample => MatchNameScore(queryFeatures, sample)).DefaultIfEmpty(0).Max();
+                if (bestScore < NameMatchMinScore) continue;
+                result.Add(new BoxCandidate
+                {
+                    BoxId = indexed.BoxId,
+                    Score = bestScore,
+                    SampleFeatures = indexed.SampleFeatures,
+                    Targets = indexed.Targets
+                });
             }
             return result
-                .GroupBy(c => c.QuotaCode, StringComparer.OrdinalIgnoreCase)
-                .Select(g => g.OrderByDescending(c => c.Score).First())
                 .OrderByDescending(c => c.Score)
+                .ThenBy(c => c.BoxId, StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
 
@@ -425,11 +596,19 @@ namespace RecoNet
             }
 
             List<ProjectQuota> projectQuotas = LoadProjectQuotas(mainForm);
+            Dictionary<string, ProjectQuota> projectQuotaByCode = projectQuotas
+                .GroupBy(q => q.Code, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
             List<Dictionary<string, string>> boxRows = LoadMappingBoxRows();
+            List<BoxCandidate> boxIndex = BuildMappingBoxIndex(boxRows);
 
             List<FillPreviewItem> items = new List<FillPreviewItem>();
+            PopulateTemplateMatchChapters(template);
             List<string> tmplNorms = template.Rows.Select(r => NormalizeMatchText(r.MatchName ?? r.SourceName ?? "")).ToList();
+            List<MatchTextFeatures> tmplFeatures = tmplNorms.Select(BuildMatchTextFeatures).ToList();
+            List<string> tmplChapters = template.Rows.Select(r => r.MatchChapter ?? "").ToList();
             List<string> targetNorms = targetRows.Select(x => x.NormName).ToList();
+            List<MatchTextFeatures> targetFeatures = targetNorms.Select(BuildMatchTextFeatures).ToList();
 
             HashSet<int> usedTmplIdx = new HashSet<int>();
             Dictionary<int, string> mergedIntoByTargetIdx = new Dictionary<int, string>();
@@ -445,12 +624,14 @@ namespace RecoNet
                     {
                         continue;
                     }
-                    if (String.Equals(tmplNorms[gi], targetRows[t].NormName, StringComparison.Ordinal))
+                    if (AreMatchChaptersCompatible(tmplChapters[gi], targetRows[t].Chapter) &&
+                        String.Equals(tmplNorms[gi], targetRows[t].NormName, StringComparison.Ordinal))
                     {
                         exactTmplByTarget[t] = gi;
                         for (int gj = 0; gj < tmplNorms.Count; gj++)
                         {
-                            if (String.Equals(tmplNorms[gj], tmplNorms[gi], StringComparison.Ordinal))
+                            if (AreMatchChaptersCompatible(tmplChapters[gj], targetRows[t].Chapter) &&
+                                String.Equals(tmplNorms[gj], tmplNorms[gi], StringComparison.Ordinal))
                             {
                                 exactClaimedTmpl.Add(gj);
                             }
@@ -474,6 +655,7 @@ namespace RecoNet
                     mergedItem.TargetRow = tr.Row;
                     mergedItem.TargetName = tr.DisplayName;
                     mergedItem.TargetFullName = tr.RawName;
+                    mergedItem.TargetChapter = tr.Chapter;
                     mergedItem.TargetUnit = tr.Unit;
                     mergedItem.TargetQuantityText = tr.QuantityText;
                     mergedItem.QuantityText = tr.QuantityText;
@@ -491,11 +673,13 @@ namespace RecoNet
                 item.SourceName = "";
                 item.TargetName = tr.DisplayName;
                 item.TargetFullName = tr.RawName;
+                item.TargetChapter = tr.Chapter;
                 item.TargetUnit = tr.Unit;
                 item.TargetQuantityText = tr.QuantityText;
                 item.QuantityText = tr.QuantityText;
 
                 int ti;
+                bool crossChapterSuggestion = false;
                 if (!exactTmplByTarget.TryGetValue(trIdx, out ti))
                 {
                     ti = -1;
@@ -506,13 +690,27 @@ namespace RecoNet
                         {
                             continue;
                         }
-                        int s = MatchNameScore(tr.NormName, tmplNorms[gi]);
+                        if (!AreMatchChaptersCompatible(tmplChapters[gi], tr.Chapter)) continue;
+                        int s = MatchNameScore(targetFeatures[trIdx], tmplFeatures[gi]);
                         if (s > bestScore) { bestScore = s; ti = gi; }
                     }
                 }
                 else if (usedTmplIdx.Contains(ti))
                 {
                     ti = -1;
+                }
+
+                // 章节缺失或不兼容时只给黄色建议，不消费模板组、不自动勾选。
+                if (ti < 0)
+                {
+                    int bestScore = NameMatchMinScore - 1;
+                    for (int gi = 0; gi < tmplNorms.Count; gi++)
+                    {
+                        if (usedTmplIdx.Contains(gi) || exactClaimedTmpl.Contains(gi)) continue;
+                        int s = MatchNameScore(targetFeatures[trIdx], tmplFeatures[gi]);
+                        if (s > bestScore) { bestScore = s; ti = gi; }
+                    }
+                    crossChapterSuggestion = ti >= 0;
                 }
 
                 if (ti >= 0)
@@ -523,7 +721,8 @@ namespace RecoNet
                     for (int gi = 0; gi < tmplNorms.Count; gi++)
                     {
                         if (usedTmplIdx.Contains(gi)) continue;
-                        if (String.Equals(tmplNorms[gi], bestNorm, StringComparison.Ordinal)) groupIdx.Add(gi);
+                        if (String.Equals(tmplNorms[gi], bestNorm, StringComparison.Ordinal) &&
+                            SameTemplateChapter(tmplChapters[gi], tmplChapters[ti])) groupIdx.Add(gi);
                     }
                     groupIdx.Sort(delegate(int a, int b)
                     {
@@ -532,7 +731,10 @@ namespace RecoNet
                         if (ra != rb) return ra.CompareTo(rb);
                         return template.Rows[a].OrderInItem.CompareTo(template.Rows[b].OrderInItem);
                     });
-                    foreach (int gi in groupIdx) usedTmplIdx.Add(gi);
+                    if (!crossChapterSuggestion)
+                    {
+                        foreach (int gi in groupIdx) usedTmplIdx.Add(gi);
+                    }
 
                     int go = 0;
                     foreach (int gi in groupIdx)
@@ -553,9 +755,14 @@ namespace RecoNet
                         gitem.Unit = trow.Unit;
                         gitem.TargetName = (go == 0) ? tr.DisplayName : "";
                         gitem.TargetFullName = tr.RawName;
+                        gitem.TargetChapter = tr.Chapter;
                         gitem.TargetUnit = tr.Unit;
                         gitem.TargetQuantityText = tr.QuantityText;
-                        gitem.AlignNote = (go == 0) ? "模版命中" : ("组件框第 " + (go + 1).ToString(CultureInfo.InvariantCulture) + " 条");
+                        gitem.Selected = !crossChapterSuggestion;
+                        gitem.NeedManualQuota = crossChapterSuggestion;
+                        gitem.AlignNote = crossChapterSuggestion
+                            ? ((go == 0) ? "跨章节建议，需人工确认" : ("跨章节组件建议第 " + (go + 1).ToString(CultureInfo.InvariantCulture) + " 条"))
+                            : ((go == 0) ? "模版命中" : ("组件框第 " + (go + 1).ToString(CultureInfo.InvariantCulture) + " 条"));
 
                         // 数量：多操作数表达式(如 E4+E5)优先按名字把各操作数代入源表达式求值；
                         // 否则套用源绑定表达式的换算系数(如 I19/100)；否则直接用目标数量。
@@ -589,36 +796,57 @@ namespace RecoNet
                             }
                         }
 
-                        if (go == 0) lastMatched = gitem;
+                        if (go == 0 && !crossChapterSuggestion) lastMatched = gitem;
                         items.Add(gitem);
                         go++;
                     }
                     continue;
                 }
 
-                List<BoxCandidate> box = LookupMappingBox(tr.RawName, boxRows);
+                List<BoxCandidate> box = LookupMappingBox(tr.RawName, boxIndex);
                 if (box.Count > 0 && box[0].Score >= 70)
                 {
-                    item.QuotaCode = box[0].QuotaCode;
-                    item.ChosenQuotaSeq = LoadProjectQuotaSeqByCode(projectQuotas, box[0].QuotaCode);
-                    ProjectQuota boxQuota = projectQuotas.FirstOrDefault(x => String.Equals(x.Code, box[0].QuotaCode, StringComparison.OrdinalIgnoreCase));
-                    item.Unit = boxQuota == null ? "" : boxQuota.Unit;
-                    if (!String.IsNullOrEmpty(item.Unit))
+                    BoxCandidate bestBox = box[0];
+                    int groupOrder = 0;
+                    foreach (BoxCandidateTarget boxTarget in bestBox.Targets)
                     {
-                        item.QuantityText = BuildNameDrivenQtyText(tr.QuantityText, tr.Unit, item.Unit);
+                        FillPreviewItem boxItem = groupOrder == 0 ? item : new FillPreviewItem();
+                        ProjectQuota boxQuota;
+                        projectQuotaByCode.TryGetValue(boxTarget.QuotaCode ?? "", out boxQuota);
+                        boxItem.IsNameDriven = true;
+                        boxItem.TemplateName = template.Name;
+                        boxItem.TargetRow = tr.Row;
+                        boxItem.TargetChapter = tr.Chapter;
+                        boxItem.TargetFullName = tr.RawName;
+                        boxItem.TargetName = groupOrder == 0 ? tr.DisplayName : "";
+                        boxItem.TargetUnit = tr.Unit;
+                        boxItem.TargetQuantityText = tr.QuantityText;
+                        boxItem.GroupOrder = groupOrder;
+                        boxItem.QuotaCode = boxTarget.QuotaCode;
+                        boxItem.SourceName = boxQuota == null ? boxTarget.QuotaName : boxQuota.Name;
+                        boxItem.ChosenQuotaSeq = boxQuota == null ? 0 : boxQuota.QuotaSeq;
+                        boxItem.Unit = boxQuota == null ? boxTarget.QuotaUnit : boxQuota.Unit;
+                        boxItem.QuantityText = String.IsNullOrEmpty(boxItem.Unit)
+                            ? tr.QuantityText
+                            : BuildNameDrivenQtyText(tr.QuantityText, tr.Unit, boxItem.Unit);
+                        boxItem.ItemNo = lastMatched == null ? "" : lastMatched.ItemNo;
+                        boxItem.NeighborSourceQuotaSeq = lastMatched == null ? 0 : lastMatched.ChosenQuotaSeq;
+                        boxItem.NeedManualQuota = true;
+                        boxItem.Selected = false;
+                        bool supportedQuota = BuildMappingTargetKey(boxTarget.Kind, boxTarget.QuotaCode)
+                            .StartsWith("quota:", StringComparison.OrdinalIgnoreCase) && boxItem.ChosenQuotaSeq > 0;
+                        boxItem.AlignNote = groupOrder == 0
+                            ? ("对应框组件建议 " + bestBox.Targets.Count.ToString(CultureInfo.InvariantCulture) + " 条" +
+                                (supportedQuota ? "，可勾选确认或右键整组重绑" : "，含不可直接写入目标，需右键整组重绑"))
+                            : ("对应框组件建议第 " + (groupOrder + 1).ToString(CultureInfo.InvariantCulture) + " 条");
+                        if (lastMatched == null)
+                        {
+                            boxItem.Status = "无条目锚点（上方无模版命中行），需右键绑定软件选中定额";
+                        }
+                        items.Add(boxItem);
+                        groupOrder++;
                     }
-                    item.ItemNo = lastMatched == null ? "" : lastMatched.ItemNo;
-                    item.NeighborSourceQuotaSeq = lastMatched == null ? 0 : lastMatched.ChosenQuotaSeq;
-                    item.AlignNote = item.ChosenQuotaSeq > 0
-                        ? ("对应框建议 " + box[0].QuotaCode + "，可直接勾选写入，右键可改")
-                        : ("对应框建议 " + box[0].QuotaCode + "（项目内无此定额），右键绑定软件选中定额");
-                    item.NeedManualQuota = true;
-                    item.Selected = false;
-                    if (lastMatched == null)
-                    {
-                        item.Status = "无条目锚点（上方无模版命中行），不可写入";
-                        item.NeedManualQuota = false;
-                    }
+                    continue;
                 }
                 else
                 {
@@ -684,17 +912,26 @@ namespace RecoNet
             return list;
         }
 
-        private static long LoadProjectQuotaSeqByCode(List<ProjectQuota> all, string code)
+        // 右键重绑最终落位只走这一处，保证旧组先完整保留、验证成功后才原子替换。
+        internal static bool ReplacePreviewTargetGroup(List<FillPreviewItem> all, int targetRow, List<FillPreviewItem> replacements)
         {
-            if (String.IsNullOrWhiteSpace(code)) return 0;
-            ProjectQuota q = all.FirstOrDefault(x => String.Equals(x.Code, code.Trim(), StringComparison.OrdinalIgnoreCase));
-            return q == null ? 0 : q.QuotaSeq;
+            if (all == null || replacements == null || replacements.Count == 0) return false;
+            int insertAt = all.FindIndex(item => item != null && item.IsNameDriven && item.TargetRow == targetRow);
+            if (insertAt < 0) return false;
+            all.RemoveAll(item => item != null && item.IsNameDriven && item.TargetRow == targetRow);
+            for (int i = 0; i < replacements.Count; i++)
+            {
+                replacements[i].GroupOrder = i;
+                if (i > 0) replacements[i].TargetName = "";
+            }
+            all.InsertRange(Math.Min(insertAt, all.Count), replacements);
+            return true;
         }
 
         // 回写：把本次名字驱动确认的"工程量名 -> 定额(可多条)"写进对应框 + 当前模版。
         private static void FeedbackNameMatches(string templateName, List<FillPreviewItem> written)
         {
-            List<KeyValuePair<string, string>> pairs = new List<KeyValuePair<string, string>>();
+            List<MappingFeedbackGroup> mappingGroups = new List<MappingFeedbackGroup>();
             foreach (IGrouping<int, FillPreviewItem> g in written
                 .Where(i => i.IsNameDriven && !String.IsNullOrWhiteSpace(i.QuotaCode))
                 .GroupBy(i => i.TargetRow))
@@ -703,12 +940,20 @@ namespace RecoNet
                 string name = g.Select(x => String.IsNullOrWhiteSpace(x.TargetFullName) ? x.TargetName : x.TargetFullName)
                     .FirstOrDefault(n => !String.IsNullOrWhiteSpace(n));
                 if (String.IsNullOrWhiteSpace(name)) continue;
+                MappingFeedbackGroup mappingGroup = new MappingFeedbackGroup { QuantityName = name };
                 foreach (FillPreviewItem it in g)
                 {
-                    pairs.Add(new KeyValuePair<string, string>(it.QuotaCode, name));
+                    mappingGroup.Targets.Add(new MappingFeedbackTarget
+                    {
+                        Kind = "quota",
+                        Code = it.QuotaCode,
+                        Name = it.SourceName,
+                        Unit = it.Unit
+                    });
                 }
+                mappingGroups.Add(mappingGroup);
             }
-            RecordNameMatchesToMappingStore(pairs);
+            RecordNameMatchesToMappingStore(mappingGroups);
 
             try
             {
@@ -721,12 +966,13 @@ namespace RecoNet
                     string nm = String.IsNullOrWhiteSpace(it.TargetFullName) ? (it.TargetName ?? "") : it.TargetFullName;
                     bool exists = t.Rows.Any(r =>
                         String.Equals(NormalizeMatchText(r.MatchName ?? ""), NormalizeMatchText(nm), StringComparison.Ordinal) &&
+                        SameTemplateChapter(r.MatchChapter, it.TargetChapter) &&
                         String.Equals(r.QuotaCode ?? "", it.QuotaCode ?? "", StringComparison.OrdinalIgnoreCase) &&
                         String.Equals(r.ItemNo ?? "", it.ItemNo ?? "", StringComparison.OrdinalIgnoreCase));
                     if (exists) continue;
                     t.Rows.Add(new FillTemplateRow { ItemNo = it.ItemNo, ItemName = it.ItemNo, QuotaCode = it.QuotaCode,
                         MatchName = nm, SourceName = String.IsNullOrEmpty(it.SourceName) ? nm : it.SourceName,
-                        Unit = it.Unit, SourceQuotaSeq = it.ChosenQuotaSeq, OrderInItem = it.OrderInItem });
+                        MatchChapter = it.TargetChapter, Unit = it.Unit, SourceQuotaSeq = it.ChosenQuotaSeq, OrderInItem = it.OrderInItem });
                     changed = true;
                 }
                 if (changed) SaveFillTemplate(t);

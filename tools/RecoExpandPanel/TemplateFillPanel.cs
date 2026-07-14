@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Drawing;
+using System.Globalization;
 using System.Linq;
 using System.Windows.Forms;
 
@@ -463,6 +464,12 @@ namespace RecoNet
                     if (grid.SelectedRows.Count == 0) return;
                     FillPreviewItem it = grid.SelectedRows[0].Tag as FillPreviewItem;
                     if (it == null || !it.IsNameDriven) return;
+                    List<FillPreviewItem> oldGroup = preview
+                        .Where(p => p != null && p.IsNameDriven && p.TargetRow == it.TargetRow)
+                        .OrderBy(p => p.GroupOrder)
+                        .ToList();
+                    FillPreviewItem groupLeader = oldGroup.FirstOrDefault() ?? it;
+
                     DataGridView de = GetField<DataGridView>(mainForm, "dataGridViewDE");
                     List<DataGridViewRow> rows = GetSelectedQuotaRows(de);
                     if (rows.Count == 0)
@@ -474,71 +481,72 @@ namespace RecoNet
                     SqlConnection conn = GetProjectConnection(mainForm);
                     if (conn == null) { MessageBox.Show(this, "没有找到当前项目数据库连接。", "模板铺量"); return; }
 
-                    // 多选=一量对多：第一行为组长补当前预览行，其余追加为组件框第 N 条。
-                    // 重新绑定视为整组替换：先移除该工程量行原有的组员(GroupOrder>0)。
-                    int baseIdx = preview.IndexOf(it);
-                    if (baseIdx >= 0)
-                    {
-                        for (int r = preview.Count - 1; r > baseIdx; r--)
-                        {
-                            FillPreviewItem p = preview[r];
-                            if (p.IsNameDriven && p.TargetRow == it.TargetRow && p.GroupOrder > 0) preview.RemoveAt(r);
-                        }
-                    }
-
-                    int bound = 0;
+                    // 先在临时列表完整验证；任何失败都不修改原组件组。
+                    List<FillPreviewItem> replacements = new List<FillPreviewItem>();
+                    List<string> errors = new List<string>();
                     Dictionary<string, string> itemNoCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                     foreach (DataGridViewRow row in rows)
                     {
                         ExcelQuotaLink link; string err;
                         if (!TryCreateQuotaLink(mainForm, conn, row, out link, out err))
                         {
-                            MessageBox.Show(this, (link == null ? "" : link.QuotaCode + "：") + err, "模板铺量");
+                            errors.Add((link == null ? "" : link.QuotaCode + "：") + err);
                             continue;
                         }
 
-                        FillPreviewItem target = (bound == 0) ? it : new FillPreviewItem();
+                        long itemSeq;
+                        string itemNo = "";
+                        if (Int64.TryParse((link.ChapterSeq ?? "").Trim(), out itemSeq) && itemSeq > 0)
+                        {
+                            itemNo = ResolveChapterItemNo(conn, link.ChapterSeq, itemNoCache);
+                        }
+                        if (itemSeq <= 0 || String.IsNullOrWhiteSpace(itemNo))
+                        {
+                            errors.Add((link.QuotaCode ?? "") + "：无法确认所在条目。");
+                            continue;
+                        }
+
+                        int order = replacements.Count;
+                        FillPreviewItem target = new FillPreviewItem();
                         target.IsNameDriven = true;
+                        target.TemplateName = groupLeader.TemplateName;
+                        target.TargetRow = groupLeader.TargetRow;
+                        target.TargetChapter = groupLeader.TargetChapter;
+                        target.TargetName = order == 0 ? groupLeader.TargetName : "";
+                        target.TargetFullName = groupLeader.TargetFullName;
+                        target.TargetUnit = groupLeader.TargetUnit;
+                        target.TargetQuantityText = groupLeader.TargetQuantityText;
+                        target.OrderInItem = groupLeader.OrderInItem;
+                        target.NeighborSourceQuotaSeq = groupLeader.NeighborSourceQuotaSeq;
+                        target.GroupOrder = order;
                         target.ChosenQuotaSeq = link.QuotaSequence;
                         target.QuotaCode = link.QuotaCode;
                         target.SourceName = link.QuotaName;
                         target.IsLibraryQuota = false;
-                        long itemSeq;
-                        if (Int64.TryParse((link.ChapterSeq ?? "").Trim(), out itemSeq) && itemSeq > 0)
-                        {
-                            target.ChosenItemSeq = itemSeq;
-                            target.ChosenItemNo = ResolveChapterItemNo(conn, link.ChapterSeq, itemNoCache);
-                            target.ItemNo = target.ChosenItemNo;
-                        }
+                        target.ChosenItemSeq = itemSeq;
+                        target.ChosenItemNo = itemNo;
+                        target.ItemNo = itemNo;
                         target.Unit = GetRowValue(row, "单位", "定额单位");
-                        // 单位换算：目标行原始数量 + 换算后缀(如 m3->10m3 得 5/10)。
-                        string qtyBase = String.IsNullOrEmpty(it.TargetQuantityText) ? it.QuantityText : it.TargetQuantityText;
-                        target.QuantityText = BuildNameDrivenQtyText(qtyBase, it.TargetUnit, target.Unit);
+                        string qtyBase = String.IsNullOrEmpty(groupLeader.TargetQuantityText) ? groupLeader.QuantityText : groupLeader.TargetQuantityText;
+                        target.QuantityText = BuildNameDrivenQtyText(qtyBase, groupLeader.TargetUnit, target.Unit);
                         target.NeedManualQuota = false;
                         target.Selected = true;
                         target.Status = "";
-                        if (bound == 0)
-                        {
-                            target.AlignNote = "已绑定 " + (link.QuotaCode ?? "") + (rows.Count > 1 ? "（组 " + rows.Count.ToString() + " 条）" : "（软件选中行，含条目）");
-                        }
-                        else
-                        {
-                            target.TemplateName = it.TemplateName;
-                            target.TargetRow = it.TargetRow;
-                            target.OrderInItem = it.OrderInItem;
-                            target.NeighborSourceQuotaSeq = it.NeighborSourceQuotaSeq;
-                            target.GroupOrder = bound;
-                            target.TargetName = "";
-                            target.TargetFullName = it.TargetFullName;
-                            target.TargetUnit = it.TargetUnit;
-                            target.TargetQuantityText = it.TargetQuantityText;
-                            target.AlignNote = "组件框第 " + (bound + 1).ToString() + " 条（软件选中行）";
-                            if (baseIdx >= 0) preview.Insert(baseIdx + bound, target); else preview.Add(target);
-                        }
-                        bound++;
+                        target.AlignNote = order == 0
+                            ? ("已绑定 " + (link.QuotaCode ?? "") + (rows.Count > 1 ? "（组 " + rows.Count.ToString() + " 条）" : "（软件选中行，含条目）"))
+                            : ("组件框第 " + (order + 1).ToString(CultureInfo.InvariantCulture) + " 条（软件选中行）");
+                        replacements.Add(target);
                     }
 
-                    if (bound > 0) FillGrid();
+                    if (errors.Count > 0)
+                    {
+                        MessageBox.Show(this, "整组重绑未执行，原组件保持不变：\n" + String.Join("\n", errors.ToArray()), "模板铺量");
+                        return;
+                    }
+                    if (replacements.Count == 0) return;
+
+                    if (!ReplacePreviewTargetGroup(preview, groupLeader.TargetRow, replacements)) return;
+                    FillGrid();
                 }
                 catch (Exception ex) { MessageBox.Show(this, "绑定失败：" + ex.Message, "模板铺量"); }
             }

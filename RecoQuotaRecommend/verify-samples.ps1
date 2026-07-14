@@ -13,20 +13,23 @@ foreach ($f in @("quota-index.jsonl", "material-index.jsonl", "mapping-boxes.jso
 }
 
 $asm = [System.Reflection.Assembly]::LoadFrom((Join-Path $work "RecoQuotaRecommend.dll"))
-$flags = [System.Reflection.BindingFlags]"Static,Public,NonPublic"
+$flags = [System.Reflection.BindingFlags]"Static,Instance,Public,NonPublic"
 
 $storeType = $asm.GetType("RecoQuotaRecommend.SearchIndexStore")
 $store = $storeType.GetMethod("LoadOrBuild", $flags).Invoke($null, @())
 $itemType = $asm.GetType("RecoQuotaRecommend.ExcelQuantityItem")
 $rowType = $asm.GetType("RecoQuotaRecommend.RecommendationRow")
-$searchMethod = $storeType.GetMethod("Search")
+$searchMethod = $storeType.GetMethod("SearchQuotaCandidates", $flags)
 
 function New-QuantityItem([string]$name, [string]$unit, [string]$value) {
   $i = [Activator]::CreateInstance($itemType)
   $itemType.GetField("Name").SetValue($i, $name)
+  $itemType.GetField("OriginalName").SetValue($i, $name)
   $itemType.GetField("Unit").SetValue($i, $unit)
   $itemType.GetField("ValueText").SetValue($i, $value)
-  $itemType.GetField("RawRowText").SetValue($i, $name)
+  $itemType.GetField("ContextText").SetValue($i, ($name + " " + $unit + " " + $value))
+  $itemType.GetField("RawRowText").SetValue($i, ($name + " " + $unit + " " + $value))
+  $itemType.GetField("SkipAiNameNormalization").SetValue($i, $true)
   return $i
 }
 
@@ -49,7 +52,7 @@ foreach ($case in @(
     @("HPB300钢筋", "t", "5"),
     @("HRB400钢筋", "t", "5"))) {
   $item = New-QuantityItem $case[0] $case[1] $case[2]
-  $rows = $searchMethod.Invoke($store, @($item, "预算定额"))
+  $rows = $searchMethod.Invoke($store, @($item, "全部", $null, 10))
   Show-Rows $case[0] $rows
 }
 

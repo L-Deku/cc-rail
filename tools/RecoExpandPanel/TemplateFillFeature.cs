@@ -28,6 +28,7 @@ namespace RecoNet
             public string SourceSheet;   // 绑定时所在 sheet
             public string SourceExpr;    // 绑定表达式，如 "E5" 或 "E4+E5"
             public string SourceName;    // 源行项目名（供预览核对）
+            public string MatchChapter;  // 名字模式：源 Excel 行所属章节（用于章节内优先匹配）
             public long SourceQuotaSeq;  // 源定额序号（写入时直接复制该行）
             public string MatchName;      // 名字模式：该定额对应的 Excel 工程量【全名】(不截断)
             public List<FillOperand> Operands;  // 名字模式且为表达式(如 E1+E2)时的操作数；否则 null
@@ -64,6 +65,7 @@ namespace RecoNet
             public string SourceName;
             public string TargetName;
             public string TargetFullName;  // 目标行工程量全名(不截断)，供手挂候选排序
+            public string TargetChapter;   // 目标 Excel 行所属章节（名字驱动回写模板）
             public string TargetUnit;         // 目标行 Excel 侧单位文本(数量列左邻格)，供单位换算
             public string TargetQuantityText; // 目标行原始数量文本(未加换算后缀)，重绑时的换算基数
             public string QuantityText;
@@ -926,7 +928,7 @@ namespace RecoNet
 
                 AgentUndoRecord undo = new AgentUndoRecord { Summary = "模板铺量 -> 单元 " + targetUnitNo, Time = DateTime.Now };
                 StringBuilder msg = new StringBuilder();
-                int inserted = 0, markerRows = 0, skipped = 0;
+                int inserted = 0, markerRows = 0, libraryInserted = 0, skipped = 0;
                 // 每个 (条目序号) 的下一个顺号，写入时递增。
                 Dictionary<long, int> nextShun = new Dictionary<long, int>();
                 HashSet<long> markerInserted = new HashSet<long>();
@@ -1032,13 +1034,24 @@ namespace RecoNet
                         foreach (IGrouping<string, FillPreviewItem> g in libraryItems.GroupBy(i => i.ChosenItemNo))
                         {
                             AgentInsertGroup group = new AgentInsertGroup { ItemNo = g.Key };
-                            foreach (FillPreviewItem li in g)
+                            List<FillPreviewItem> groupItems = g.ToList();
+                            foreach (FillPreviewItem li in groupItems)
                             {
                                 group.Quotas.Add(new AgentQuotaInput { Code = li.QuotaCode, Quantity = li.QuantityText ?? "" });
-                                writtenOk.Add(li);
                             }
+                            int undoCountBefore = undo.Rows.Count;
                             string pasteMsg = ExecuteAgentInsertGroup(mainForm, conn, group, undo);
                             if (!String.IsNullOrEmpty(pasteMsg)) msg.Append(pasteMsg);
+                            int confirmedAdded = undo.Rows.Skip(undoCountBefore).Count(row => row.Kind == "I");
+                            libraryInserted += Math.Min(confirmedAdded, groupItems.Count);
+                            if (IsInsertGroupFullyConfirmed(groupItems.Count, confirmedAdded))
+                            {
+                                writtenOk.AddRange(groupItems);
+                            }
+                            else
+                            {
+                                skipped += Math.Max(0, groupItems.Count - confirmedAdded);
+                            }
                         }
                     }
                 }
@@ -1048,19 +1061,37 @@ namespace RecoNet
                     GetAgentUndoStack(mainForm).Add(undo);
                     GetAgentRedoStack(mainForm).Clear();
                 }
-                if (writtenOk.Any(i => i.IsNameDriven))
+                List<FillPreviewItem> feedbackReady = FilterFullyWrittenNameGroups(selected, writtenOk);
+                if (feedbackReady.Count > 0)
                 {
-                    FeedbackNameMatches(writtenOk[0].TemplateName, writtenOk);
+                    FeedbackNameMatches(feedbackReady[0].TemplateName, feedbackReady);
                 }
                 RefreshCurrentQuotaGrid(mainForm);
 
                 msg.Append("已向单元 ").Append(targetUnitNo).Append(" 追加定额 ")
-                   .Append((inserted - markerRows).ToString(CultureInfo.InvariantCulture)).Append(" 条");
+                   .Append((inserted - markerRows + libraryInserted).ToString(CultureInfo.InvariantCulture)).Append(" 条");
                 if (markerRows > 0) msg.Append("，标记 ").Append(markerRows.ToString(CultureInfo.InvariantCulture)).Append(" 条");
                 if (skipped > 0) msg.Append("，跳过 ").Append(skipped.ToString(CultureInfo.InvariantCulture)).Append(" 条");
                 msg.Append("。请在软件点一次“计算”刷新单价/合价与汇总。");
                 return msg.ToString();
             }
+        }
+
+        internal static bool IsInsertGroupFullyConfirmed(int expectedCount, int confirmedAdded)
+        {
+            return expectedCount > 0 && confirmedAdded >= expectedCount;
+        }
+
+        // 同一工程量本次选中的组件成员必须全部确认成功，避免部分写入被学习成一个错误的新组件框。
+        internal static List<FillPreviewItem> FilterFullyWrittenNameGroups(List<FillPreviewItem> selected, List<FillPreviewItem> written)
+        {
+            List<FillPreviewItem> selectedNames = (selected ?? new List<FillPreviewItem>()).Where(item => item != null && item.IsNameDriven).ToList();
+            List<FillPreviewItem> writtenNames = (written ?? new List<FillPreviewItem>()).Where(item => item != null && item.IsNameDriven).ToList();
+            HashSet<int> completeRows = new HashSet<int>(selectedNames
+                .GroupBy(item => item.TargetRow)
+                .Where(group => writtenNames.Count(item => item.TargetRow == group.Key) == group.Count())
+                .Select(group => group.Key));
+            return writtenNames.Where(item => completeRows.Contains(item.TargetRow)).ToList();
         }
 
         private static void ApplyTemplateFillMarkerFields(Dictionary<string, object> row, long targetSeq, int shun, string templateName)
