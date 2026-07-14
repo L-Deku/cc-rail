@@ -329,6 +329,51 @@ try {
         throw '零数量工程量未丢弃'
     }
     Write-Host "PASS 真实工作簿章节快照与零数量丢弃"
+
+    function New-NamePreviewTemplate([string[]]$codes) {
+        $nameTemplate = [Activator]::CreateInstance($templateType)
+        $templateType.GetField('Name', $flags).SetValue($nameTemplate, '重复名称夹具')
+        $templateType.GetField('MatchBy', $flags).SetValue($nameTemplate, 'name')
+        $templateType.GetField('WorkbookPath', $flags).SetValue($nameTemplate, [string]$fixturePath)
+        for ($index = 0; $index -lt $codes.Count; $index++) {
+            $nameRow = [Activator]::CreateInstance($templateRowType)
+            $templateRowType.GetField('MatchName', $flags).SetValue($nameRow, '挖土方')
+            $templateRowType.GetField('SourceSheet', $flags).SetValue($nameRow, '测试')
+            $templateRowType.GetField('SourceExpr', $flags).SetValue($nameRow, $(if ($index -eq 0) { 'D2' } else { 'D4' }))
+            $templateRowType.GetField('QuotaCode', $flags).SetValue($nameRow, $codes[$index])
+            $templateRowType.GetField('SourceName', $flags).SetValue($nameRow, "定额$($index + 1)")
+            $templateRowType.GetField('Unit', $flags).SetValue($nameRow, 'm3')
+            $templateRowType.GetField('ItemNo', $flags).SetValue($nameRow, '01')
+            $templateRowType.GetField('SourceQuotaSeq', $flags).SetValue($nameRow, [long](100 + $index))
+            $templateRowType.GetField('OrderInItem', $flags).SetValue($nameRow, [int]$index)
+            $templateType.GetField('Rows', $flags).GetValue($nameTemplate).Add($nameRow)
+        }
+        return $nameTemplate
+    }
+
+    $buildPreview = $type.GetMethod('BuildPreview_NameDriven', $flags)
+    $previewMainForm = New-Object System.Windows.Forms.Form
+    try {
+        $reuseArgs = [object[]]@($previewMainForm.PSObject.BaseObject, (New-NamePreviewTemplate @('Q-1')), '测试', 'D', $null)
+        $reusePreview = $buildPreview.Invoke($null, $reuseArgs)
+        if ($reusePreview.Count -ne 2 -or @($reusePreview | Where-Object { $_.QuotaCode -ne 'Q-1' }).Count -ne 0) {
+            throw '重复目标应全部带出唯一绑定 Q-1'
+        }
+        if (@($reusePreview | Where-Object { -not $_.NeedExactNameConfirmation -or $_.Selected }).Count -ne 0) {
+            throw '重复目标唯一绑定应标红并默认不勾选'
+        }
+
+        $choiceArgs = [object[]]@($previewMainForm.PSObject.BaseObject, (New-NamePreviewTemplate @('Q-1', 'Q-2')), '测试', 'D', $null)
+        $choicePreview = $buildPreview.Invoke($null, $choiceArgs)
+        if ($choicePreview.Count -ne 2 -or @($choicePreview | Where-Object { $_.QuotaCode -ne 'Q-1' }).Count -ne 0) {
+            throw '多个绑定初始应带出稳定的第一候选 Q-1'
+        }
+        if (@($choicePreview | Where-Object { $null -eq $_.NameQuotaCandidates -or $_.NameQuotaCandidates.Count -ne 2 }).Count -ne 0) {
+            throw '每个重复目标行都应保留两个独立下拉候选'
+        }
+        Write-Host 'PASS 重复目标唯一绑定复用与多绑定候选预览'
+    }
+    finally { $previewMainForm.Dispose() }
 }
 finally {
     $workbook.Close()
