@@ -55,7 +55,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - Windows PowerShell 中用 `rg` 搜索指定目录文件时，优先写 `rg -n "pattern" -S path` 或用 `rg --files -g "*.cs"` 先列文件；不要把 `目录\*.cs` 当作路径参数传给 `rg`，容易被解析成非法路径。
 - 修改已含中文字符串的 C# 源码时，避免用 PowerShell `Set-Content` 默认编码整文件重写；优先用补丁方式，必要时用 `.NET UTF8Encoding(false)` 并把新增中文字符串写成 `\u` 转义，防止产生无关编码差异。
 - C# 5 代码中不要在 `||`/`&&` 短路条件里依赖 `out` 参数一定赋值；用于错误文案的 `out` 变量先给默认值，避免 `CS0165`。
-- 用 Windows PowerShell 5 反射调用 WinForms 私有构造器做冒烟测试时，先设 `$ErrorActionPreference = 'Stop'`，并把 `New-Object` 返回控件的 `.PSObject.BaseObject` 传给反射 API；泛型 `List<T>`、`HashSet<T>` 等参数也要拆包，否则类型包装错误可能只产生非终止错误并让命令假通过。
+- 用 Windows PowerShell 5 反射调用 WinForms 私有构造器做冒烟测试时，先设 `$ErrorActionPreference = 'Stop'`，并把 `New-Object` 返回控件的 `.PSObject.BaseObject` 传给反射 API；泛型 `List<T>`、`HashSet<T>` 等参数也要拆包，否则类型包装错误可能只产生非终止错误并让命令假通过。反射方法只接收一个泛型集合参数时，不要直接用 `[object[]]@($list)`，应先创建长度为 1 的 `object[]` 再将 `.PSObject.BaseObject` 赋给第 0 项，避免 PowerShell 把集合展开成多个参数。
 - 2024 软件预算项目输入 2020 概算/估算定额时，首要检查 `项目设置 -> 定额选择` 是否勾选了迁移书号，或数据库 `项目信息.标准定额应用` 是否包含对应书号。未勾选时会出现“定额编号无效或费用类型不匹配”、计算单价为 0 或“无法找到定额消耗数据”等现象；勾选后 2024 原生辅助查询、输入和计算即可使用迁移定额。
 - 2020 概算/估算定额迁移到 2024 后，正式方案不需要给 2024 客户端部署兼容插件或 Harmony/Prefix 钩子。不得把钩子部署到 `RecoNet.DEBase.FindDe` 作为正式方案；实测 `FindDe_Patch1` 会影响原预算查询/输入并触发运行时异常。每次发布前必须回归验证 `LY_2024`、`DY_2024` 等原预算定额的查询、输入和计算。
 - 给新下载的 2024 客户端使用已迁移的概算/估算定额时，只要连接同一个已迁移的 `RecoData2024` 数据库，并在项目设置中勾选对应书号即可；插件 DLL 和 `RecoPluginLoader.AutoLoadDomainManager` 只属于推荐定额插件能力，不是概算/估算定额原生查询、输入、计算的必要条件。
