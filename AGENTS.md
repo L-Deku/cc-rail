@@ -50,6 +50,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 清理已迁移的 2020 概算/估算定额时，优先运行 `tools/Migrate2020EstimateTo2024/CleanupMigratedEstimate2024.ps1 -WhatIfOnly` 生成只读报告，再正式执行脚本；补充材料/机械必须按 `applied-manual-decisions.csv` 的真实写入代码删除，并加 `not exists(select 1 from 定额库消耗 where 电算代号=@code)` 保护，不能直接使用旧 `rollback.sql`。
 - Windows PowerShell 5 执行含中文表名/字段名的脚本时，脚本文件必须保存为带 BOM 的 UTF-8，否则可能把中文解析成乱码并导致语法错误。
 - PowerShell 反射验证脚本如果包含中文路径或中文测试文本，优先在当前 shell 直接执行，或保存为 UTF-8 脚本文件后用 `-File` 执行；不要把 here-string 管道给子 `powershell.exe -`，否则中文路径可能被管道编码破坏。
+- 在 PowerShell 中再调用 `powershell.exe -Command` 且子命令包含 `$变量` 时，优先把子命令保存为脚本后用 `-File`，或用单引号整体隔离子命令；不要让父级 PowerShell 提前展开子命令变量。
 - 读取 UTF-8 附件或中文文本时，如 PowerShell `Get-Content` 输出乱码，先设置 `[Console]::OutputEncoding`，并优先用 `[System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes(...))` 按字节解码验证内容。
 - PowerShell 部署/验证脚本需要格式化多段 `foreach` 输出时，优先先收集到数组或 `List[object]` 再统一 `Format-Table`；不要把脚本块闭合后直接接管道，容易触发 `An empty pipe element is not allowed` 解析错误。
 - Windows PowerShell 中用 `rg` 搜索指定目录文件时，优先写 `rg -n "pattern" -S path` 或用 `rg --files -g "*.cs"` 先列文件；不要把 `目录\*.cs` 当作路径参数传给 `rg`，容易被解析成非法路径。
