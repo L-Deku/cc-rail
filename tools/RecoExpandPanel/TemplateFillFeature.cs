@@ -15,15 +15,13 @@ namespace RecoNet
 {
     public partial class FormPanel : Form
     {
-        // 取数模式
-        public enum FillMode { ColumnAnchor = 1, FixedColumn = 2 }
-
         // 模板里的一条定额
         public sealed class FillTemplateRow
         {
             public string ItemNo;        // 条目编号，如 0401-01
             public string ItemName;      // 条目名称（显示/核对）
             public string QuotaCode;     // 定额编号，含 *系数 后缀，原样
+            public string Unit;          // 单位（供预览显示）
             public string Adjust;        // 定额调整整串（可空）
             public int OrderInItem;      // 条目内序号，保持插入先后
             public string SourceWorkbookPath;
@@ -31,6 +29,15 @@ namespace RecoNet
             public string SourceExpr;    // 绑定表达式，如 "E5" 或 "E4+E5"
             public string SourceName;    // 源行项目名（供预览核对）
             public long SourceQuotaSeq;  // 源定额序号（写入时直接复制该行）
+            public string MatchName;      // 名字模式：该定额对应的 Excel 工程量【全名】(不截断)
+            public List<FillOperand> Operands;  // 名字模式且为表达式(如 E1+E2)时的操作数；否则 null
+        }
+
+        public sealed class FillOperand
+        {
+            public string Name;     // 该操作数所在行的工程量全名
+            public string Op;       // 与前一操作数的连接符："+" / "-" / "*" / "/"；首个为 "+"
+            public string Literal;  // 该操作数是纯字面量(如 *1.5 的 1.5)时填此，Name 为空
         }
 
         // 一份模板
@@ -40,7 +47,9 @@ namespace RecoNet
             public string Profession;
             public string SourceUnitNo;
             public string WorkbookPath;
+            public string MatchBy = "position";  // "position"（现有列锚点） | "name"（名字驱动）
             public List<FillTemplateRow> Rows = new List<FillTemplateRow>();
+            public List<string> BuildWarnings;   // 生成时被跳过的绑定提示（不属于源单元等）；null=无
         }
 
         // 预览/写入用的一条结果
@@ -50,13 +59,27 @@ namespace RecoNet
             public string TemplateName;
             public string ItemNo;
             public string QuotaCode;
+            public string Unit;
             public string Adjust;
             public string SourceName;
             public string TargetName;
+            public string TargetFullName;  // 目标行工程量全名(不截断)，供手挂候选排序
+            public string TargetUnit;         // 目标行 Excel 侧单位文本(数量列左邻格)，供单位换算
+            public string TargetQuantityText; // 目标行原始数量文本(未加换算后缀)，重绑时的换算基数
             public string QuantityText;
             public string Status;
             public int OrderInItem;
             public long SourceQuotaSeq;  // 源定额序号（写入时直接复制该行）
+            public int TargetRow;          // 目标 Excel 行号(排序用)
+            public string AlignNote;       // 分诊提示
+            public bool IsNameDriven;      // 名字驱动产生
+            public bool NeedManualQuota;   // 未匹配定额，待手挂
+            public long ChosenQuotaSeq;    // 手挂/命中的可复制源定额行(整行复制来源)；0=无
+            public long NeighborSourceQuotaSeq; // 条目落位锚点(上方最近已匹配行的源定额)
+            public int GroupOrder;         // 一量对多定额时组内序(第一行承载工程量名)
+            public bool IsLibraryQuota;    // 手挂选中的是库内定额(项目无此编号)，写入走原生粘贴管线
+            public long ChosenItemSeq;     // 用户显式选择的放入条目(条目序号)；0=未选(沿用邻居锚点)
+            public string ChosenItemNo;    // 对应条目编号(显示/粘贴导航用)
         }
 
         private sealed class PreparedFillPreviewItem
@@ -280,7 +303,7 @@ namespace RecoNet
             {
                 cmd.CommandText =
                     "select DE.定额序号, ZJ.条目编号, DE.定额编号, " +
-                    "cast(DE.定额调整 as nvarchar(max)), DE.顺号, DE.工程或费用项目名称 " +
+                    "cast(DE.定额调整 as nvarchar(max)), DE.顺号, DE.工程或费用项目名称, DE.单位 " +
                     "from 定额输入 DE inner join 章节表 ZJ on DE.条目序号=ZJ.条目序号 " +
                     "where DE.总概算序号=@zgs";
                 cmd.Parameters.AddWithValue("@zgs", zgsSeq);
@@ -297,6 +320,7 @@ namespace RecoNet
                             QuotaCode = Convert.ToString(r.GetValue(2)).Trim(),
                             Adjust = r.IsDBNull(3) ? "" : Convert.ToString(r.GetValue(3)).Trim(),
                             SourceName = r.IsDBNull(5) ? "" : Convert.ToString(r.GetValue(5)).Trim(),
+                            Unit = r.IsDBNull(6) ? "" : Convert.ToString(r.GetValue(6)).Trim(),
                             SourceQuotaSeq = id
                         };
                         int shun;
@@ -310,7 +334,16 @@ namespace RecoNet
             foreach (ExcelQuotaLink link in picked)
             {
                 FillTemplateRow row;
-                if (!byId.TryGetValue(link.QuotaSequence, out row)) continue; // 定额已删/不在本单元
+                if (!byId.TryGetValue(link.QuotaSequence, out row))
+                {
+                    // 定额已删/不在本单元：不再无声丢弃，收集提示供生成后显式报告。
+                    if (template.BuildWarnings == null) template.BuildWarnings = new List<string>();
+                    if (template.BuildWarnings.Count < 20)
+                    {
+                        template.BuildWarnings.Add((link.QuotaCode ?? "") + " <- " + (link.CellAddress ?? link.Expression ?? "") + "（" + (link.QuantityName ?? "") + "）不属于源单元，已跳过");
+                    }
+                    continue;
+                }
                 row.SourceWorkbookPath = link.ExcelPath;
                 row.SourceSheet = link.WorksheetName;
                 row.SourceExpr = String.IsNullOrEmpty(link.Expression) ? link.CellAddress : link.Expression;
@@ -407,13 +440,6 @@ namespace RecoNet
         {
             return BuildPreview(template, row =>
                 new KeyValuePair<string, string>(targetSheet, RetargetExprColumn(row.SourceExpr, targetColumn)));
-        }
-
-        // 模式二：固定绑定列。直接读模板记录的原 sheet/单元格（用户已把目标单元数量粘进该列）。
-        private static List<FillPreviewItem> BuildPreview_FixedColumn(FillTemplate template)
-        {
-            return BuildPreview(template, row =>
-                new KeyValuePair<string, string>(row.SourceSheet, row.SourceExpr));
         }
 
         // 两种取数模式共用：resolver 给出每行的 (目标sheet, 取数表达式)，其余流程一致。
@@ -518,6 +544,12 @@ namespace RecoNet
         // 取满3段仍不足15字时再补1段，同一合并区域只拼一次。
         private static string ReadRowNameAt(string workbook, string sheet, string expr, Dictionary<string, HashSet<int>> hiddenColumnCache, Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache, ExcelSyncReadContext readContext)
         {
+            return ReadRowNameAt(workbook, sheet, expr, hiddenColumnCache, mergedRegionCache, readContext, false);
+        }
+
+        // fullText=true：不做 15字/3段 截断，取该行数量列左侧全部非数字文本，供机器匹配（绑定写定额对应框）。
+        private static string ReadRowNameAt(string workbook, string sheet, string expr, Dictionary<string, HashSet<int>> hiddenColumnCache, Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache, ExcelSyncReadContext readContext, bool fullText)
+        {
             try
             {
                 HashSet<int> hiddenColumns = GetSavedHiddenColumns(workbook, sheet, hiddenColumnCache);
@@ -555,14 +587,14 @@ namespace RecoNet
                     .OrderBy(f => Math.Abs(f.Key - cr.Column))
                     .ThenBy(f => f.Key))
                 {
-                    if (kept.Count >= RowNameMaxFragments)
+                    if (!fullText && kept.Count >= RowNameMaxFragments)
                     {
                         break;
                     }
 
                     kept.Add(fragment);
                     totalLength += fragment.Value.Length;
-                    if (kept.Count >= RowNameMinFragments && totalLength >= RowNameMinLength)
+                    if (!fullText && kept.Count >= RowNameMinFragments && totalLength >= RowNameMinLength)
                     {
                         break;
                     }
@@ -878,7 +910,9 @@ namespace RecoNet
             List<FillPreviewItem> selected = items
                 .Where(i => i.Selected &&
                     (String.IsNullOrEmpty(i.Status) || String.Equals(i.Status, "\u6570\u91cf\u4e3a0", StringComparison.Ordinal)) &&
-                    i.SourceQuotaSeq > 0)
+                    (i.SourceQuotaSeq > 0 || (i.IsNameDriven && (
+                        (i.ChosenQuotaSeq > 0 && (i.NeighborSourceQuotaSeq > 0 || i.ChosenItemSeq > 0)) ||
+                        (i.IsLibraryQuota && !String.IsNullOrEmpty(i.QuotaCode) && !String.IsNullOrEmpty(i.ChosenItemNo))))))
                 .OrderBy(i => i.ItemNo, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(i => i.OrderInItem)
                 .ToList();
@@ -896,6 +930,8 @@ namespace RecoNet
                 // 每个 (条目序号) 的下一个顺号，写入时递增。
                 Dictionary<long, int> nextShun = new Dictionary<long, int>();
                 HashSet<long> markerInserted = new HashSet<long>();
+                List<FillPreviewItem> writtenOk = new List<FillPreviewItem>();
+                List<FillPreviewItem> libraryItems = new List<FillPreviewItem>();
 
                 using (SqlTransaction transaction = conn.BeginTransaction())
                 {
@@ -903,8 +939,24 @@ namespace RecoNet
                     {
                         foreach (FillPreviewItem item in selected)
                         {
-                            Dictionary<string, object> row = LoadTemplateFullRow(conn, transaction, item.SourceQuotaSeq);
+                            if (item.IsLibraryQuota)
+                            {
+                                libraryItems.Add(item);
+                                continue;
+                            }
+
+                            long copyFrom = item.IsNameDriven ? item.ChosenQuotaSeq : item.SourceQuotaSeq;
+                            Dictionary<string, object> row = LoadTemplateFullRow(conn, transaction, copyFrom);
                             if (row == null) { skipped++; continue; }
+                            if (item.IsNameDriven && item.ChosenItemSeq > 0)
+                            {
+                                row["条目序号"] = item.ChosenItemSeq;
+                            }
+                            else if (item.IsNameDriven && item.NeighborSourceQuotaSeq > 0 && item.NeighborSourceQuotaSeq != copyFrom)
+                            {
+                                Dictionary<string, object> anchor = LoadTemplateFullRow(conn, transaction, item.NeighborSourceQuotaSeq);
+                                if (anchor != null) row["条目序号"] = anchor["条目序号"];
+                            }
 
                             // 条目序号(全局)保持不变 -> 落到目标单元的同一条目。
                             long itemSeq = Convert.ToInt64(row["条目序号"], CultureInfo.InvariantCulture);
@@ -952,6 +1004,7 @@ namespace RecoNet
                                 undo.Rows.Add(new AgentUndoRow { Kind = "I", QuotaSequence = newId });
                                 inserted++;
                                 nextShun[itemSeq] = shun + 1;
+                                writtenOk.Add(item);
                             }
                             else { skipped++; }
                         }
@@ -965,10 +1018,39 @@ namespace RecoNet
                     }
                 }
 
+                if (libraryItems.Count > 0)
+                {
+                    string currentUnit = GetCurrentUnitNo(mainForm);
+                    if (!String.Equals((currentUnit ?? "").Trim(), (targetUnitNo ?? "").Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        skipped += libraryItems.Count;
+                        msg.Append("库内定额 ").Append(libraryItems.Count.ToString(CultureInfo.InvariantCulture))
+                           .Append(" 条未写入：原生粘贴只写软件当前单元，请先切到 ").Append(targetUnitNo).Append(" 再写。");
+                    }
+                    else
+                    {
+                        foreach (IGrouping<string, FillPreviewItem> g in libraryItems.GroupBy(i => i.ChosenItemNo))
+                        {
+                            AgentInsertGroup group = new AgentInsertGroup { ItemNo = g.Key };
+                            foreach (FillPreviewItem li in g)
+                            {
+                                group.Quotas.Add(new AgentQuotaInput { Code = li.QuotaCode, Quantity = li.QuantityText ?? "" });
+                                writtenOk.Add(li);
+                            }
+                            string pasteMsg = ExecuteAgentInsertGroup(mainForm, conn, group, undo);
+                            if (!String.IsNullOrEmpty(pasteMsg)) msg.Append(pasteMsg);
+                        }
+                    }
+                }
+
                 if (undo.Rows.Count > 0)
                 {
                     GetAgentUndoStack(mainForm).Add(undo);
                     GetAgentRedoStack(mainForm).Clear();
+                }
+                if (writtenOk.Any(i => i.IsNameDriven))
+                {
+                    FeedbackNameMatches(writtenOk[0].TemplateName, writtenOk);
                 }
                 RefreshCurrentQuotaGrid(mainForm);
 
