@@ -62,6 +62,12 @@ Add-TemplateRow '低烟无卤电缆 m' 'D2/100' '' 'DY-519'
 Add-TemplateRow '低烟无卤电缆 m' 'D2' '第二章' 'ZLF*1.01'
 $groups = $groupBuilder.Invoke($null, @($groupTemplate))
 if ($groups.Count -ne 1 -or $groups[0].Indexes.Count -ne 2) { throw '同锚点多定额应组成一个组件组' }
+$candidateLabel = $type.GetMethod('BuildTemplateCandidateLabel', $flags)
+if ($null -eq $candidateLabel) { throw '缺少绑定组候选标签入口' }
+$label = [string]$candidateLabel.Invoke($null, @($groupTemplate, $groups[0]))
+if ($label -notmatch 'DY-519' -or $label -notmatch 'ZLF\*1\.01' -or $label -notmatch '组件2条') {
+    throw "组件候选标签不得拆组: $label"
+}
 Add-TemplateRow '低烟无卤电缆 m' 'D30' '' 'DY-520'
 $groups = $groupBuilder.Invoke($null, @($groupTemplate))
 if ($groups.Count -ne 2) { throw '同名不同来源锚点应形成两个组件组' }

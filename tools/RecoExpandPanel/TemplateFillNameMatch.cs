@@ -668,6 +668,139 @@ namespace RecoNet
             return true;
         }
 
+        private static List<int> OrderedTemplateGroupIndexes(FillTemplate template, TemplateNameGroup group)
+        {
+            List<int> indexes = group == null ? new List<int>() : group.Indexes.ToList();
+            indexes.Sort(delegate(int a, int b)
+            {
+                int ra = PseudoQuotaRank(template.Rows[a].QuotaCode);
+                int rb = PseudoQuotaRank(template.Rows[b].QuotaCode);
+                if (ra != rb) return ra.CompareTo(rb);
+                return template.Rows[a].OrderInItem.CompareTo(template.Rows[b].OrderInItem);
+            });
+            return indexes;
+        }
+
+        private static string BuildTemplateCandidateLabel(FillTemplate template, TemplateNameGroup group)
+        {
+            List<FillTemplateRow> rows = OrderedTemplateGroupIndexes(template, group)
+                .Select(index => template.Rows[index])
+                .ToList();
+            if (rows.Count == 0) return "";
+            if (rows.Count == 1)
+            {
+                return (rows[0].QuotaCode ?? "") + "  " + (rows[0].SourceName ?? "");
+            }
+            return String.Join(" + ", rows.Select(row => row.QuotaCode ?? "").ToArray()) +
+                "（组件" + rows.Count.ToString(CultureInfo.InvariantCulture) + "条）";
+        }
+
+        private static List<FillPreviewItem> BuildTemplatePreviewGroup(FillTemplate template, TemplateNameGroup group,
+            TargetQtyRow target, List<TargetQtyRow> targetRows, List<string> targetNorms, int targetIndex,
+            Dictionary<int, string> mergedIntoByTargetIdx)
+        {
+            List<FillPreviewItem> result = new List<FillPreviewItem>();
+            int groupOrder = 0;
+            foreach (int groupIndex in OrderedTemplateGroupIndexes(template, group))
+            {
+                FillTemplateRow trow = template.Rows[groupIndex];
+                FillPreviewItem item = new FillPreviewItem();
+                item.IsNameDriven = true;
+                item.TemplateName = template.Name;
+                item.TargetRow = target.Row;
+                item.ItemNo = trow.ItemNo;
+                item.QuotaCode = trow.QuotaCode;
+                item.Adjust = trow.Adjust;
+                item.OrderInItem = trow.OrderInItem;
+                item.ChosenQuotaSeq = trow.SourceQuotaSeq;
+                item.NeighborSourceQuotaSeq = trow.SourceQuotaSeq;
+                item.GroupOrder = groupOrder;
+                item.SourceName = trow.SourceName;
+                item.Unit = trow.Unit;
+                item.TargetName = groupOrder == 0 ? target.DisplayName : "";
+                item.TargetFullName = target.RawName;
+                item.TargetChapter = target.Chapter;
+                item.TargetUnit = target.Unit;
+                item.TargetQuantityText = target.QuantityText;
+                item.Selected = true;
+                item.NeedManualQuota = false;
+                item.AlignNote = groupOrder == 0
+                    ? "模版命中"
+                    : "组件框第 " + (groupOrder + 1).ToString(CultureInfo.InvariantCulture) + " 条";
+
+                string exprText;
+                List<int> operandIndexes;
+                if (trow.Operands != null && trow.Operands.Count > 1 &&
+                    TrySubstituteOperandQuantities(trow, targetRows, targetNorms, out exprText, out operandIndexes))
+                {
+                    item.QuantityText = exprText;
+                    if (mergedIntoByTargetIdx != null)
+                    {
+                        foreach (int operandIndex in operandIndexes)
+                        {
+                            if (operandIndex != targetIndex && !mergedIntoByTargetIdx.ContainsKey(operandIndex))
+                            {
+                                mergedIntoByTargetIdx[operandIndex] = "已并入第 " +
+                                    target.Row.ToString(CultureInfo.InvariantCulture) + " 行的表达式取数";
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    string display;
+                    decimal quantity;
+                    string error;
+                    string firstCell = ExtractFirstCellAddress(trow.SourceExpr);
+                    if (!String.IsNullOrEmpty(firstCell) &&
+                        TryEvaluateExpressionWithKnownCell(trow.SourceExpr, firstCell, target.QuantityText,
+                            out display, out quantity, out error))
+                    {
+                        item.QuantityText = display;
+                    }
+                    else
+                    {
+                        item.QuantityText = BuildNameDrivenQtyText(target.QuantityText, target.Unit, trow.Unit);
+                    }
+                }
+
+                result.Add(item);
+                groupOrder++;
+            }
+            return result;
+        }
+
+        private static List<NameQuotaCandidateGroup> BuildNameQuotaCandidates(FillTemplate template,
+            List<TemplateNameGroup> groups, TargetQtyRow target, List<TargetQtyRow> targetRows,
+            List<string> targetNorms, int targetIndex)
+        {
+            List<NameQuotaCandidateGroup> result = new List<NameQuotaCandidateGroup>();
+            Dictionary<NameQuotaCandidateGroup, string> sourceExpressions = new Dictionary<NameQuotaCandidateGroup, string>();
+            foreach (TemplateNameGroup group in groups ?? new List<TemplateNameGroup>())
+            {
+                NameQuotaCandidateGroup candidate = new NameQuotaCandidateGroup();
+                candidate.Key = group.SourceAnchor ?? "";
+                candidate.Label = BuildTemplateCandidateLabel(template, group);
+                candidate.Items = BuildTemplatePreviewGroup(template, group, target, targetRows, targetNorms, targetIndex, null);
+                result.Add(candidate);
+                int firstIndex = OrderedTemplateGroupIndexes(template, group).FirstOrDefault();
+                sourceExpressions[candidate] = group.Indexes.Count == 0 ? "" : (template.Rows[firstIndex].SourceExpr ?? "");
+            }
+
+            Dictionary<string, int> labelCounts = result
+                .GroupBy(candidate => candidate.Label ?? "", StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+            foreach (NameQuotaCandidateGroup candidate in result)
+            {
+                int count;
+                if (labelCounts.TryGetValue(candidate.Label ?? "", out count) && count > 1)
+                {
+                    candidate.Label += "（来源 " + sourceExpressions[candidate] + "）";
+                }
+            }
+            return result;
+        }
+
         // 名字驱动套用：以目标 Excel 工程量行为主序，逐行匹配定额。返回 items 已按 Excel 行序。
         private static List<FillPreviewItem> BuildPreview_NameDriven(Form mainForm, FillTemplate template,
             string targetSheet, string targetColumn, out string warning)
@@ -773,24 +906,40 @@ namespace RecoNet
                 groupsByNorm.TryGetValue(tr.NormName, out exactGroups);
                 int targetNameCount;
                 targetNameCounts.TryGetValue(tr.NormName, out targetNameCount);
-                string exactConflict = GetExactNameConflict(targetNameCount, exactGroups == null ? 0 : exactGroups.Count);
-                if (exactConflict.Length > 0)
+                string exactMode = GetExactNameResolutionMode(targetNameCount, exactGroups == null ? 0 : exactGroups.Count);
+                if (exactMode.Length > 0)
                 {
-                    item.Selected = false;
-                    item.NeedManualQuota = false;
-                    item.Status = exactConflict == "target"
-                        ? "目标表存在重复工程量名称，需人工确认"
-                        : "模板存在同名多来源，需人工确认";
-                    items.Add(item);
+                    bool needsReview = exactMode == "reuse" || exactMode == "choice";
+                    List<FillPreviewItem> activeGroup = BuildTemplatePreviewGroup(template, exactGroups[0], tr,
+                        targetRows, targetNorms, trIdx, needsReview ? null : mergedIntoByTargetIdx);
+                    foreach (FillPreviewItem member in activeGroup)
+                    {
+                        member.Selected = !needsReview;
+                        member.NeedExactNameConfirmation = needsReview;
+                    }
+                    if (needsReview && activeGroup.Count > 0)
+                    {
+                        activeGroup[0].Status = exactMode == "choice"
+                            ? "模板存在同名多来源，已带出候选，需下拉确认"
+                            : "目标表存在重复工程量名称，已带出唯一绑定，需确认";
+                    }
+                    if (exactMode == "choice" && activeGroup.Count > 0)
+                    {
+                        activeGroup[0].NameQuotaCandidates = BuildNameQuotaCandidates(template, exactGroups, tr,
+                            targetRows, targetNorms, trIdx);
+                        activeGroup[0].SelectedNameQuotaCandidateKey = exactGroups[0].SourceAnchor;
+                    }
+                    if (!needsReview && activeGroup.Count > 0)
+                    {
+                        usedGroups.Add(exactGroups[0]);
+                        lastMatched = activeGroup[0];
+                    }
+                    items.AddRange(activeGroup);
                     continue;
                 }
 
                 TemplateNameGroup matchedGroup = null;
-                if (exactGroups != null && exactGroups.Count == 1 && !usedGroups.Contains(exactGroups[0]))
-                {
-                    matchedGroup = exactGroups[0];
-                }
-                else if (exactGroups == null || exactGroups.Count == 0)
+                if (exactGroups == null || exactGroups.Count == 0)
                 {
                     List<TemplateNameGroup> candidates = templateGroups
                         .Where(g => !usedGroups.Contains(g) && !exactReservedGroups.Contains(g))
@@ -812,79 +961,11 @@ namespace RecoNet
 
                 if (matchedGroup != null)
                 {
-                    // 同一来源锚点的多条定额是一个组件组；章节不再拆组或过滤唯一名称候选。
-                    List<int> groupIdx = matchedGroup.Indexes.ToList();
-                    groupIdx.Sort(delegate(int a, int b)
-                    {
-                        int ra = PseudoQuotaRank(template.Rows[a].QuotaCode);
-                        int rb = PseudoQuotaRank(template.Rows[b].QuotaCode);
-                        if (ra != rb) return ra.CompareTo(rb);
-                        return template.Rows[a].OrderInItem.CompareTo(template.Rows[b].OrderInItem);
-                    });
                     usedGroups.Add(matchedGroup);
-
-                    int go = 0;
-                    foreach (int gi in groupIdx)
-                    {
-                        FillTemplateRow trow = template.Rows[gi];
-                        FillPreviewItem gitem = (go == 0) ? item : new FillPreviewItem();
-                        gitem.IsNameDriven = true;
-                        gitem.TemplateName = template.Name;
-                        gitem.TargetRow = tr.Row;
-                        gitem.ItemNo = trow.ItemNo;
-                        gitem.QuotaCode = trow.QuotaCode;
-                        gitem.Adjust = trow.Adjust;
-                        gitem.OrderInItem = trow.OrderInItem;
-                        gitem.ChosenQuotaSeq = trow.SourceQuotaSeq;
-                        gitem.NeighborSourceQuotaSeq = trow.SourceQuotaSeq; // 自锚点：模版命中行不依赖上方行也可写入
-                        gitem.GroupOrder = go;
-                        gitem.SourceName = trow.SourceName;
-                        gitem.Unit = trow.Unit;
-                        gitem.TargetName = (go == 0) ? tr.DisplayName : "";
-                        gitem.TargetFullName = tr.RawName;
-                        gitem.TargetChapter = tr.Chapter;
-                        gitem.TargetUnit = tr.Unit;
-                        gitem.TargetQuantityText = tr.QuantityText;
-                        gitem.Selected = true;
-                        gitem.NeedManualQuota = false;
-                        gitem.AlignNote = (go == 0) ? "模版命中" : ("组件框第 " + (go + 1).ToString(CultureInfo.InvariantCulture) + " 条");
-
-                        // 数量：多操作数表达式(如 E4+E5)优先按名字把各操作数代入源表达式求值；
-                        // 否则套用源绑定表达式的换算系数(如 I19/100)；否则直接用目标数量。
-                        string exprText;
-                        List<int> operandIdx;
-                        if (trow.Operands != null && trow.Operands.Count > 1 &&
-                            TrySubstituteOperandQuantities(trow, targetRows, targetNorms, out exprText, out operandIdx))
-                        {
-                            gitem.QuantityText = exprText;
-                            for (int oi = 0; oi < operandIdx.Count; oi++)
-                            {
-                                int oIdx = operandIdx[oi];
-                                if (oIdx != trIdx && !mergedIntoByTargetIdx.ContainsKey(oIdx))
-                                {
-                                    mergedIntoByTargetIdx[oIdx] = "已并入第 " + tr.Row.ToString(CultureInfo.InvariantCulture) + " 行的表达式取数";
-                                }
-                            }
-                        }
-                        else
-                        {
-                            string fdisp; decimal fqty; string ferr;
-                            string fcell = ExtractFirstCellAddress(trow.SourceExpr);
-                            if (!String.IsNullOrEmpty(fcell) && TryEvaluateExpressionWithKnownCell(trow.SourceExpr, fcell, tr.QuantityText, out fdisp, out fqty, out ferr))
-                            {
-                                gitem.QuantityText = fdisp;
-                            }
-                            else
-                            {
-                                // 无表达式系数(如回写进模版的行)：按单位换算兜底(m3 -> 10m3 得 /10)。
-                                gitem.QuantityText = BuildNameDrivenQtyText(tr.QuantityText, tr.Unit, trow.Unit);
-                            }
-                        }
-
-                        if (go == 0) lastMatched = gitem;
-                        items.Add(gitem);
-                        go++;
-                    }
+                    List<FillPreviewItem> fuzzyGroup = BuildTemplatePreviewGroup(template, matchedGroup, tr,
+                        targetRows, targetNorms, trIdx, mergedIntoByTargetIdx);
+                    if (fuzzyGroup.Count > 0) lastMatched = fuzzyGroup[0];
+                    items.AddRange(fuzzyGroup);
                     continue;
                 }
 
