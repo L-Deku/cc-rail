@@ -64,6 +64,8 @@ namespace RecoNet
             public string SourceName;
             public string TargetName;
             public string TargetFullName;  // 目标行工程量全名(不截断)，供手挂候选排序
+            public string TargetUnit;         // 目标行 Excel 侧单位文本(数量列左邻格)，供单位换算
+            public string TargetQuantityText; // 目标行原始数量文本(未加换算后缀)，重绑时的换算基数
             public string QuantityText;
             public string Status;
             public int OrderInItem;

@@ -511,6 +511,9 @@ namespace RecoNet
                             target.ItemNo = target.ChosenItemNo;
                         }
                         target.Unit = GetRowValue(row, "单位", "定额单位");
+                        // 单位换算：目标行原始数量 + 换算后缀(如 m3->10m3 得 5/10)。
+                        string qtyBase = String.IsNullOrEmpty(it.TargetQuantityText) ? it.QuantityText : it.TargetQuantityText;
+                        target.QuantityText = BuildNameDrivenQtyText(qtyBase, it.TargetUnit, target.Unit);
                         target.NeedManualQuota = false;
                         target.Selected = true;
                         target.Status = "";
@@ -526,7 +529,8 @@ namespace RecoNet
                             target.NeighborSourceQuotaSeq = it.NeighborSourceQuotaSeq;
                             target.GroupOrder = bound;
                             target.TargetName = "";
-                            target.QuantityText = it.QuantityText;
+                            target.TargetUnit = it.TargetUnit;
+                            target.TargetQuantityText = it.TargetQuantityText;
                             target.AlignNote = "组件框第 " + (bound + 1).ToString() + " 条（软件选中行）";
                             if (baseIdx >= 0) preview.Insert(baseIdx + bound, target); else preview.Add(target);
                         }

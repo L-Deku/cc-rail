@@ -146,6 +146,7 @@ namespace RecoNet
             public string DisplayName;// 数量列左侧截断显示名(3段/15字)，供 UI 显示
             public string NormName;   // 归一化
             public string Chapter;    // 预留：二期章节内就近约束
+            public string Unit;       // 数量列左邻格的单位文本(供单位换算)，读不到为空
             public decimal Quantity;
             public string QuantityText;
         }
@@ -189,9 +190,35 @@ namespace RecoNet
                 row.Chapter = currentChapter;
                 row.Quantity = qty;
                 row.QuantityText = disp;
+                if (qtyColumn > 1)
+                {
+                    string unitAddr = ColumnNumberToName(qtyColumn - 1) + r.ToString(CultureInfo.InvariantCulture);
+                    string unitText; string unitErr;
+                    if (ctx.TryReadWorkbookCellValue(workbook, sheet, unitAddr, out unitText, out unitErr) && !String.IsNullOrWhiteSpace(unitText))
+                    {
+                        decimal unitNum; string unitNumErr;
+                        if (!TryEvaluateDecimal(unitText, out unitNum, out unitNumErr)) row.Unit = unitText.Trim();
+                    }
+                }
                 result.Add(row);
             }
             return result;
+        }
+
+        // 名字驱动数量文本：按 Excel 单位与定额单位生成换算后缀(如 5 + /10 = "5/10")；
+        // Excel 单位读不到时按定额单位前缀(10m3/100m2)兜底。换算不成立则原样返回。
+        private static string BuildNameDrivenQtyText(string baseQtyText, string excelUnit, string quotaUnit)
+        {
+            string suffix;
+            if (!String.IsNullOrWhiteSpace(excelUnit) && TryBuildExcelLinkUnitScaleSuffix(excelUnit, quotaUnit, out suffix))
+            {
+                return (baseQtyText ?? "") + suffix;
+            }
+            if (TryBuildQuotaUnitFallbackSuffix(quotaUnit, out suffix))
+            {
+                return (baseQtyText ?? "") + suffix;
+            }
+            return baseQtyText;
         }
 
         // “一、/(一)/第X章/第X部分” 视为章节锚点。
@@ -447,6 +474,8 @@ namespace RecoNet
                     mergedItem.TargetRow = tr.Row;
                     mergedItem.TargetName = tr.DisplayName;
                     mergedItem.TargetFullName = tr.RawName;
+                    mergedItem.TargetUnit = tr.Unit;
+                    mergedItem.TargetQuantityText = tr.QuantityText;
                     mergedItem.QuantityText = tr.QuantityText;
                     mergedItem.AlignNote = mergedNote;
                     mergedItem.Selected = false;
@@ -462,6 +491,8 @@ namespace RecoNet
                 item.SourceName = "";
                 item.TargetName = tr.DisplayName;
                 item.TargetFullName = tr.RawName;
+                item.TargetUnit = tr.Unit;
+                item.TargetQuantityText = tr.QuantityText;
                 item.QuantityText = tr.QuantityText;
 
                 int ti;
@@ -522,6 +553,8 @@ namespace RecoNet
                         gitem.Unit = trow.Unit;
                         gitem.TargetName = (go == 0) ? tr.DisplayName : "";
                         gitem.TargetFullName = tr.RawName;
+                        gitem.TargetUnit = tr.Unit;
+                        gitem.TargetQuantityText = tr.QuantityText;
                         gitem.AlignNote = (go == 0) ? "模版命中" : ("组件框第 " + (go + 1).ToString(CultureInfo.InvariantCulture) + " 条");
 
                         // 数量：多操作数表达式(如 E4+E5)优先按名字把各操作数代入源表达式求值；
@@ -551,7 +584,8 @@ namespace RecoNet
                             }
                             else
                             {
-                                gitem.QuantityText = tr.QuantityText;
+                                // 无表达式系数(如回写进模版的行)：按单位换算兜底(m3 -> 10m3 得 /10)。
+                                gitem.QuantityText = BuildNameDrivenQtyText(tr.QuantityText, tr.Unit, trow.Unit);
                             }
                         }
 
@@ -569,6 +603,10 @@ namespace RecoNet
                     item.ChosenQuotaSeq = LoadProjectQuotaSeqByCode(projectQuotas, box[0].QuotaCode);
                     ProjectQuota boxQuota = projectQuotas.FirstOrDefault(x => String.Equals(x.Code, box[0].QuotaCode, StringComparison.OrdinalIgnoreCase));
                     item.Unit = boxQuota == null ? "" : boxQuota.Unit;
+                    if (!String.IsNullOrEmpty(item.Unit))
+                    {
+                        item.QuantityText = BuildNameDrivenQtyText(tr.QuantityText, tr.Unit, item.Unit);
+                    }
                     item.ItemNo = lastMatched == null ? "" : lastMatched.ItemNo;
                     item.NeighborSourceQuotaSeq = lastMatched == null ? 0 : lastMatched.ChosenQuotaSeq;
                     item.AlignNote = item.ChosenQuotaSeq > 0
@@ -661,7 +699,9 @@ namespace RecoNet
                 .Where(i => i.IsNameDriven && !String.IsNullOrWhiteSpace(i.QuotaCode))
                 .GroupBy(i => i.TargetRow))
             {
-                string name = g.Select(x => x.TargetName).FirstOrDefault(n => !String.IsNullOrWhiteSpace(n));
+                // 回写用【全名】(不截断)：截断显示名会削弱下次匹配与对应框命中。
+                string name = g.Select(x => String.IsNullOrWhiteSpace(x.TargetFullName) ? x.TargetName : x.TargetFullName)
+                    .FirstOrDefault(n => !String.IsNullOrWhiteSpace(n));
                 if (String.IsNullOrWhiteSpace(name)) continue;
                 foreach (FillPreviewItem it in g)
                 {
@@ -677,14 +717,15 @@ namespace RecoNet
                 bool changed = false;
                 foreach (FillPreviewItem it in written.Where(i => i.IsNameDriven && !String.IsNullOrWhiteSpace(i.QuotaCode) && i.GroupOrder == 0))
                 {
-                    string nm = it.TargetName ?? "";
+                    string nm = String.IsNullOrWhiteSpace(it.TargetFullName) ? (it.TargetName ?? "") : it.TargetFullName;
                     bool exists = t.Rows.Any(r =>
                         String.Equals(NormalizeMatchText(r.MatchName ?? ""), NormalizeMatchText(nm), StringComparison.Ordinal) &&
                         String.Equals(r.QuotaCode ?? "", it.QuotaCode ?? "", StringComparison.OrdinalIgnoreCase) &&
                         String.Equals(r.ItemNo ?? "", it.ItemNo ?? "", StringComparison.OrdinalIgnoreCase));
                     if (exists) continue;
                     t.Rows.Add(new FillTemplateRow { ItemNo = it.ItemNo, ItemName = it.ItemNo, QuotaCode = it.QuotaCode,
-                        MatchName = nm, SourceName = nm, SourceQuotaSeq = it.ChosenQuotaSeq, OrderInItem = it.OrderInItem });
+                        MatchName = nm, SourceName = String.IsNullOrEmpty(it.SourceName) ? nm : it.SourceName,
+                        Unit = it.Unit, SourceQuotaSeq = it.ChosenQuotaSeq, OrderInItem = it.OrderInItem });
                     changed = true;
                 }
                 if (changed) SaveFillTemplate(t);
