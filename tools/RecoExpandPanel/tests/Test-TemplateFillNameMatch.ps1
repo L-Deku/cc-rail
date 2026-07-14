@@ -154,6 +154,71 @@ if (@($choiceItems | Where-Object { -not $_.Selected -or $_.NeedExactNameConfirm
 }
 Write-Host 'PASS 重复名称唯一确认与候选整组切换'
 
+$panelType = $type.GetNestedType('TemplateFillPanel', $flags)
+$panelCtor = @($panelType.GetConstructors($flags) | Where-Object { $_.GetParameters().Count -eq 1 })[0]
+$mainForm = New-Object System.Windows.Forms.Form
+$panel = $null
+try {
+    $panel = $panelCtor.Invoke([object[]]@($mainForm.PSObject.BaseObject))
+    $panelPreview = $panelType.GetField('preview', $flags).GetValue($panel)
+    $uiLeader = New-PreviewItem 60 0 '重复工程量'
+    $itemType.GetField('QuotaCode', $flags).SetValue($uiLeader, 'DY-959')
+    $itemType.GetField('NeedExactNameConfirmation', $flags).SetValue($uiLeader, $true)
+    $itemType.GetField('Selected', $flags).SetValue($uiLeader, $false)
+
+    $uiCandidates = [Activator]::CreateInstance($itemType.GetField('NameQuotaCandidates', $flags).FieldType)
+    $uiFirst = [Activator]::CreateInstance($candidateType)
+    $candidateType.GetField('Key', $flags).SetValue($uiFirst, 'group-a')
+    $candidateType.GetField('Label', $flags).SetValue($uiFirst, 'DY-959 明配钢管')
+    $candidateType.GetField('Items', $flags).GetValue($uiFirst).Add((New-PreviewItem 60 0 '重复工程量'))
+    $itemType.GetField('QuotaCode', $flags).SetValue($candidateType.GetField('Items', $flags).GetValue($uiFirst)[0], 'DY-959')
+    $uiCandidates.Add($uiFirst)
+
+    $uiSecond = [Activator]::CreateInstance($candidateType)
+    $candidateType.GetField('Key', $flags).SetValue($uiSecond, 'group-b')
+    $candidateType.GetField('Label', $flags).SetValue($uiSecond, 'DY-519 + ZLF*1.01（组件2条）')
+    $uiSecondItems = $candidateType.GetField('Items', $flags).GetValue($uiSecond)
+    $uiSecondItems.Add((New-PreviewItem 60 0 '重复工程量'))
+    $uiSecondItems.Add((New-PreviewItem 60 1 ''))
+    $itemType.GetField('QuotaCode', $flags).SetValue($uiSecondItems[0], 'DY-519')
+    $itemType.GetField('QuotaCode', $flags).SetValue($uiSecondItems[1], 'ZLF*1.01')
+    $uiCandidates.Add($uiSecond)
+    $itemType.GetField('NameQuotaCandidates', $flags).SetValue($uiLeader, $uiCandidates)
+    $itemType.GetField('SelectedNameQuotaCandidateKey', $flags).SetValue($uiLeader, 'group-a')
+    $panelPreview.Add($uiLeader)
+
+    $panelType.GetMethod('FillGrid', $flags).Invoke($panel, $null)
+    $uiGrid = $panelType.GetField('grid', $flags).GetValue($panel)
+    if ($uiGrid.Rows.Count -ne 1 -or -not $uiGrid.Rows[0].Cells['sel'].ReadOnly -or $uiGrid.Rows[0].Cells['code'].ReadOnly) {
+        throw '多候选红色行应锁定勾选框并开放定额下拉'
+    }
+    if ($uiGrid.Rows[0].DefaultCellStyle.BackColor.ToArgb() -ne [System.Drawing.Color]::MistyRose.ToArgb()) {
+        throw '多候选未确认行应标红'
+    }
+    $prepareDropDown = $panelType.GetMethod('PrepareNameQuotaDropDown', $flags)
+    if (-not $prepareDropDown.Invoke($panel, @($uiGrid.Rows[0].PSObject.BaseObject))) { throw '定额下拉应创建成功' }
+    if (-not ($uiGrid.Rows[0].Cells['code'] -is [System.Windows.Forms.DataGridViewComboBoxCell])) {
+        throw '定额编号单元格应切换为下拉框'
+    }
+    $panelType.GetMethod('ApplyNameQuotaOption', $flags).Invoke($panel,
+        @($uiGrid.Rows[0].PSObject.BaseObject, 'DY-519 + ZLF*1.01（组件2条）'))
+    if ($uiGrid.Rows.Count -ne 2 -or $uiGrid.Rows[0].Cells['code'].Value -ne 'DY-519' -or
+        $uiGrid.Rows[1].Cells['code'].Value -ne 'ZLF*1.01') {
+        throw '界面选择组件候选后应展开完整定额组'
+    }
+    if (@($uiGrid.Rows | Where-Object { -not [bool]$_.Cells['sel'].Value }).Count -ne 0) {
+        throw '界面选择组件候选后应整组勾选'
+    }
+    if (@($uiGrid.Rows | Where-Object { $_.DefaultCellStyle.BackColor.ToArgb() -eq [System.Drawing.Color]::MistyRose.ToArgb() }).Count -ne 0) {
+        throw '界面选择组件候选后应取消红色'
+    }
+    Write-Host 'PASS 定额候选下拉与组件组界面确认'
+}
+finally {
+    if ($null -ne $panel) { $panel.Dispose() }
+    $mainForm.Dispose()
+}
+
 $allItems.Add((New-PreviewItem 10 0 '工程量A'))
 $allItems.Add((New-PreviewItem 10 1 ''))
 $allItems.Add((New-PreviewItem 20 0 '工程量B'))

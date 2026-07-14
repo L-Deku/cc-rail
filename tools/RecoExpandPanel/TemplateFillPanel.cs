@@ -35,6 +35,7 @@ namespace RecoNet
             private string currentTreeScope = "";
             private bool updatingTreeChecks;
             private bool rebuildingTree;
+            private bool updatingNameQuotaCell;
 
             public TemplateFillPanel(Form owner)
             {
@@ -117,7 +118,7 @@ namespace RecoNet
                 grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
                 grid.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
                 grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "选", Name = "sel", FillWeight = 6 });
-                grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "定额编号", Name = "code", ReadOnly = true, FillWeight = 16 });
+                grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "定额编号", Name = "code", ReadOnly = false, FillWeight = 16 });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "源行定额", Name = "sname", ReadOnly = true, FillWeight = 20 });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "单位", Name = "unit", ReadOnly = true, FillWeight = 8 });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "目标行工程量名", Name = "tname", ReadOnly = true, FillWeight = 20 });
@@ -129,6 +130,37 @@ namespace RecoNet
                     {
                         grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
                     }
+                };
+                grid.CellClick += delegate(object sender, DataGridViewCellEventArgs e)
+                {
+                    if (e.RowIndex < 0 || e.ColumnIndex < 0 ||
+                        !String.Equals(grid.Columns[e.ColumnIndex].Name, "code", StringComparison.Ordinal)) return;
+                    DataGridViewRow row = grid.Rows[e.RowIndex];
+                    if (!PrepareNameQuotaDropDown(row)) return;
+                    grid.CurrentCell = row.Cells[e.ColumnIndex];
+                    grid.BeginEdit(true);
+                    ComboBox combo = grid.EditingControl as ComboBox;
+                    if (combo != null) combo.DroppedDown = true;
+                };
+                grid.EditingControlShowing += delegate(object sender, DataGridViewEditingControlShowingEventArgs e)
+                {
+                    ComboBox combo = e.Control as ComboBox;
+                    if (combo == null) return;
+                    combo.SelectionChangeCommitted -= OnNameQuotaSelectionCommitted;
+                    combo.SelectionChangeCommitted += OnNameQuotaSelectionCommitted;
+                };
+                grid.CellValueChanged += delegate(object sender, DataGridViewCellEventArgs e)
+                {
+                    if (updatingNameQuotaCell || e.RowIndex < 0 || e.ColumnIndex < 0) return;
+                    if (String.Equals(grid.Columns[e.ColumnIndex].Name, "sel", StringComparison.Ordinal))
+                    {
+                        ConfirmExactNameFromCheck(grid.Rows[e.RowIndex]);
+                    }
+                };
+                grid.DataError += delegate(object sender, DataGridViewDataErrorEventArgs e)
+                {
+                    Log("Template fill grid data error: " + (e.Exception == null ? "unknown" : e.Exception.Message));
+                    e.ThrowException = false;
                 };
 
                 ContextMenuStrip gridMenu = new ContextMenuStrip();
@@ -328,6 +360,10 @@ namespace RecoNet
                 grid.Rows.Clear();
                 string scope = currentTreeScope ?? "";
                 bool nameDriven = preview.Any(p => p.IsNameDriven);
+                Dictionary<int, FillPreviewItem> nameLeaders = preview
+                    .Where(item => item != null && item.IsNameDriven && item.GroupOrder == 0)
+                    .GroupBy(item => item.TargetRow)
+                    .ToDictionary(group => group.Key, group => group.First());
                 IEnumerable<FillPreviewItem> ordered = preview
                     .Where(item => String.IsNullOrEmpty(scope) || IsItemNoUnderChapter(item.ItemNo ?? "", scope));
                 ordered = nameDriven
@@ -338,12 +374,90 @@ namespace RecoNet
                     string statusText = String.IsNullOrEmpty(it.Status) ? (it.AlignNote ?? "") : it.Status;
                     int idx = grid.Rows.Add(it.Selected, it.QuotaCode,
                         it.SourceName, it.Unit ?? "", it.TargetName, it.QuantityText, statusText);
-                    grid.Rows[idx].Tag = it;
-                    if (!String.IsNullOrEmpty(it.Status))
-                        grid.Rows[idx].DefaultCellStyle.BackColor = Color.MistyRose;
+                    DataGridViewRow row = grid.Rows[idx];
+                    row.Tag = it;
+                    FillPreviewItem leader;
+                    nameLeaders.TryGetValue(it.TargetRow, out leader);
+                    bool hasCandidates = it.GroupOrder == 0 && it.NameQuotaCandidates != null && it.NameQuotaCandidates.Count > 1;
+                    bool requiresChoice = leader != null && leader.NeedExactNameConfirmation &&
+                        leader.NameQuotaCandidates != null && leader.NameQuotaCandidates.Count > 1;
+                    row.Cells["code"].ReadOnly = !hasCandidates;
+                    if (hasCandidates)
+                    {
+                        row.Cells["code"].ToolTipText = "点击选择该工程量名称绑定的定额或组件组";
+                    }
+                    if (requiresChoice)
+                    {
+                        row.Cells["sel"].ReadOnly = true;
+                        row.Cells["sel"].ToolTipText = "请先在定额编号列选择绑定组";
+                    }
+                    if (it.NeedExactNameConfirmation || !String.IsNullOrEmpty(it.Status))
+                        row.DefaultCellStyle.BackColor = Color.MistyRose;
                     else if (it.NeedManualQuota)
-                        grid.Rows[idx].DefaultCellStyle.BackColor = Color.FromArgb(255, 246, 196);
+                        row.DefaultCellStyle.BackColor = Color.FromArgb(255, 246, 196);
                 }
+            }
+
+            private bool PrepareNameQuotaDropDown(DataGridViewRow row)
+            {
+                FillPreviewItem item = row == null ? null : row.Tag as FillPreviewItem;
+                if (item == null || item.GroupOrder != 0 || item.NameQuotaCandidates == null ||
+                    item.NameQuotaCandidates.Count <= 1) return false;
+                if (row.Cells["code"] is DataGridViewComboBoxCell) return true;
+
+                DataGridViewComboBoxCell combo = new DataGridViewComboBoxCell();
+                combo.DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton;
+                foreach (NameQuotaCandidateGroup option in item.NameQuotaCandidates)
+                {
+                    combo.Items.Add(option.Label);
+                }
+                NameQuotaCandidateGroup current = item.NameQuotaCandidates.FirstOrDefault(option =>
+                    String.Equals(option.Key, item.SelectedNameQuotaCandidateKey, StringComparison.Ordinal));
+                combo.Value = (current ?? item.NameQuotaCandidates[0]).Label;
+
+                updatingNameQuotaCell = true;
+                try { row.Cells[grid.Columns["code"].Index] = combo; }
+                finally { updatingNameQuotaCell = false; }
+                return true;
+            }
+
+            private void OnNameQuotaSelectionCommitted(object sender, EventArgs e)
+            {
+                ComboBox combo = sender as ComboBox;
+                if (combo == null || grid.CurrentRow == null) return;
+                ApplyNameQuotaOption(grid.CurrentRow, Convert.ToString(combo.SelectedItem));
+            }
+
+            private void ApplyNameQuotaOption(DataGridViewRow row, string label)
+            {
+                if (updatingNameQuotaCell) return;
+                FillPreviewItem item = row == null ? null : row.Tag as FillPreviewItem;
+                if (item == null || item.NameQuotaCandidates == null || item.NameQuotaCandidates.Count <= 1) return;
+                NameQuotaCandidateGroup option = item.NameQuotaCandidates.FirstOrDefault(candidate =>
+                    String.Equals(candidate.Label, label, StringComparison.Ordinal));
+                if (option == null) return;
+
+                updatingNameQuotaCell = true;
+                try
+                {
+                    if (ApplyExactNameCandidate(preview, item.TargetRow, option.Key)) FillGrid();
+                }
+                finally { updatingNameQuotaCell = false; }
+            }
+
+            private void ConfirmExactNameFromCheck(DataGridViewRow row)
+            {
+                FillPreviewItem item = row == null ? null : row.Tag as FillPreviewItem;
+                bool value = row != null && Convert.ToBoolean(row.Cells["sel"].Value ?? false);
+                if (item == null || !value || !item.NeedExactNameConfirmation ||
+                    (item.NameQuotaCandidates != null && item.NameQuotaCandidates.Count > 1)) return;
+
+                updatingNameQuotaCell = true;
+                try
+                {
+                    if (ConfirmSingleExactNameGroup(preview, item.TargetRow)) FillGrid();
+                }
+                finally { updatingNameQuotaCell = false; }
             }
 
             // —— 条目树 ——
