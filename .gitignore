@@ -13,6 +13,7 @@ Desktop.ini
 # Build outputs
 [Bb]in/
 [Oo]bj/
+/release/
 *.exe
 *.dll
 *.pdb
