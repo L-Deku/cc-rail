@@ -53,6 +53,14 @@ namespace RecoNet
             public List<string> BuildWarnings;   // 生成时被跳过的绑定提示（不属于源单元等）；null=无
         }
 
+        // 名字驱动精确同名时的一组候选；只存在于本次预览，不写入模板 JSON。
+        public sealed class NameQuotaCandidateGroup
+        {
+            public string Key;
+            public string Label;
+            public List<FillPreviewItem> Items = new List<FillPreviewItem>();
+        }
+
         // 预览/写入用的一条结果
         public sealed class FillPreviewItem
         {
@@ -82,6 +90,16 @@ namespace RecoNet
             public bool IsLibraryQuota;    // 手挂选中的是库内定额(项目无此编号)，写入走原生粘贴管线
             public long ChosenItemSeq;     // 用户显式选择的放入条目(条目序号)；0=未选(沿用邻居锚点)
             public string ChosenItemNo;    // 对应条目编号(显示/粘贴导航用)
+            public bool NeedExactNameConfirmation; // 精确同名已带出定额，但仍需用户确认
+            public string SelectedNameQuotaCandidateKey;
+            public List<NameQuotaCandidateGroup> NameQuotaCandidates;
+
+            internal FillPreviewItem CloneForNameCandidate()
+            {
+                FillPreviewItem clone = (FillPreviewItem)MemberwiseClone();
+                clone.NameQuotaCandidates = null;
+                return clone;
+            }
         }
 
         private sealed class PreparedFillPreviewItem

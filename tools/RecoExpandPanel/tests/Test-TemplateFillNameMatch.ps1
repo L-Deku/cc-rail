@@ -37,9 +37,15 @@ $templateRowType = $type.GetNestedType('FillTemplateRow', $flags)
 $groupBuilder = $type.GetMethod('BuildTemplateNameGroups', $flags)
 $conflict = $type.GetMethod('GetExactNameConflict', $flags)
 $uniqueBest = $type.GetMethod('FindUniqueBestMatchIndex', $flags)
+$resolutionMode = $type.GetMethod('GetExactNameResolutionMode', $flags)
 if ($null -eq $groupBuilder -or $null -eq $conflict -or $null -eq $uniqueBest) {
     throw '缺少名字组件分组或歧义判定入口'
 }
+if ($null -eq $resolutionMode) { throw '缺少精确同名处理模式入口' }
+if ($resolutionMode.Invoke($null, @(1, 1)) -ne 'single') { throw '唯一目标和唯一绑定应直接命中' }
+if ($resolutionMode.Invoke($null, @(2, 1)) -ne 'reuse') { throw '重复目标和唯一绑定应整组复用' }
+if ($resolutionMode.Invoke($null, @(1, 2)) -ne 'choice') { throw '多个同名绑定应下拉选择' }
+if ($resolutionMode.Invoke($null, @(2, 2)) -ne 'choice') { throw '重复目标和多个绑定应逐行下拉选择' }
 
 $groupTemplate = [Activator]::CreateInstance($templateType)
 $templateType.GetField('WorkbookPath', $flags).SetValue($groupTemplate, 'C:\fixture.xlsx')
@@ -93,6 +99,55 @@ function New-PreviewItem([int]$row, [int]$order, [string]$name) {
     $itemType.GetField('TargetName', $flags).SetValue($item, $name)
     return $item
 }
+
+$candidateType = $type.GetNestedType('NameQuotaCandidateGroup', $flags)
+$confirmExact = $type.GetMethod('ConfirmSingleExactNameGroup', $flags)
+$applyCandidate = $type.GetMethod('ApplyExactNameCandidate', $flags)
+if ($null -eq $candidateType -or $null -eq $confirmExact -or $null -eq $applyCandidate) {
+    throw '缺少重复名称候选或确认入口'
+}
+
+$singleItems = [Activator]::CreateInstance($itemListType)
+$singleItems.Add((New-PreviewItem 40 0 '钢管 SC20 m'))
+$singleItems.Add((New-PreviewItem 40 1 ''))
+foreach ($member in $singleItems) {
+    $itemType.GetField('NeedExactNameConfirmation', $flags).SetValue($member, $true)
+    $itemType.GetField('Selected', $flags).SetValue($member, $false)
+}
+if (-not $confirmExact.Invoke($null, [object[]]@($singleItems.PSObject.BaseObject, 40))) {
+    throw '唯一绑定整组确认应成功'
+}
+if (@($singleItems | Where-Object { -not $_.Selected -or $_.NeedExactNameConfirmation }).Count -ne 0) {
+    throw '唯一绑定确认后应整组勾选并取消红色确认状态'
+}
+
+$choiceItems = [Activator]::CreateInstance($itemListType)
+$choiceLeader = New-PreviewItem 50 0 '重复工程量'
+$itemType.GetField('NeedExactNameConfirmation', $flags).SetValue($choiceLeader, $true)
+$itemType.GetField('Selected', $flags).SetValue($choiceLeader, $false)
+$choiceItems.Add($choiceLeader)
+$candidate = [Activator]::CreateInstance($candidateType)
+$candidateType.GetField('Key', $flags).SetValue($candidate, 'group-b')
+$candidateType.GetField('Label', $flags).SetValue($candidate, 'DY-519 + ZLF*1.01（组件2条）')
+$candidateMembers = $candidateType.GetField('Items', $flags).GetValue($candidate)
+$candidateMembers.Add((New-PreviewItem 50 0 '重复工程量'))
+$candidateMembers.Add((New-PreviewItem 50 1 ''))
+$itemType.GetField('QuotaCode', $flags).SetValue($candidateMembers[0], 'DY-519')
+$itemType.GetField('QuotaCode', $flags).SetValue($candidateMembers[1], 'ZLF*1.01')
+$candidateList = [Activator]::CreateInstance($itemType.GetField('NameQuotaCandidates', $flags).FieldType)
+$candidateList.Add($candidate)
+$itemType.GetField('NameQuotaCandidates', $flags).SetValue($choiceLeader, $candidateList)
+if (-not $applyCandidate.Invoke($null, [object[]]@($choiceItems.PSObject.BaseObject, 50, 'group-b'))) {
+    throw '候选组件整组切换应成功'
+}
+if ($choiceItems.Count -ne 2 -or $choiceItems[0].QuotaCode -ne 'DY-519' -or $choiceItems[1].QuotaCode -ne 'ZLF*1.01') {
+    throw '候选切换必须保留完整组件组'
+}
+if (@($choiceItems | Where-Object { -not $_.Selected -or $_.NeedExactNameConfirmation }).Count -ne 0) {
+    throw '候选选择后应整组勾选并取消红色确认状态'
+}
+Write-Host 'PASS 重复名称唯一确认与候选整组切换'
+
 $allItems.Add((New-PreviewItem 10 0 '工程量A'))
 $allItems.Add((New-PreviewItem 10 1 ''))
 $allItems.Add((New-PreviewItem 20 0 '工程量B'))

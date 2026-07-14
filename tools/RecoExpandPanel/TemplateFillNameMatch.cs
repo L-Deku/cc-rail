@@ -209,6 +209,14 @@ namespace RecoNet
             return "";
         }
 
+        internal static string GetExactNameResolutionMode(int targetNameCount, int templateGroupCount)
+        {
+            if (templateGroupCount > 1) return "choice";
+            if (templateGroupCount == 1 && targetNameCount > 1) return "reuse";
+            if (templateGroupCount == 1) return "single";
+            return "";
+        }
+
         internal static int FindUniqueBestMatchIndex(string queryNorm, string queryChapter,
             IList<string> candidateNorms, IList<string> candidateChapters, out bool ambiguous)
         {
@@ -1003,6 +1011,56 @@ namespace RecoNet
             }
             all.InsertRange(Math.Min(insertAt, all.Count), replacements);
             return true;
+        }
+
+        internal static bool ConfirmSingleExactNameGroup(List<FillPreviewItem> all, int targetRow)
+        {
+            List<FillPreviewItem> group = (all ?? new List<FillPreviewItem>())
+                .Where(item => item != null && item.IsNameDriven && item.TargetRow == targetRow)
+                .OrderBy(item => item.GroupOrder)
+                .ToList();
+            if (group.Count == 0 || (group[0].NameQuotaCandidates != null && group[0].NameQuotaCandidates.Count > 1))
+            {
+                return false;
+            }
+
+            foreach (FillPreviewItem item in group)
+            {
+                item.Selected = true;
+                item.NeedExactNameConfirmation = false;
+                item.Status = "";
+            }
+            group[0].AlignNote = "人工确认重复名称";
+            return true;
+        }
+
+        internal static bool ApplyExactNameCandidate(List<FillPreviewItem> all, int targetRow, string candidateKey)
+        {
+            FillPreviewItem leader = (all ?? new List<FillPreviewItem>())
+                .Where(item => item != null && item.IsNameDriven && item.TargetRow == targetRow)
+                .OrderBy(item => item.GroupOrder)
+                .FirstOrDefault();
+            if (leader == null || leader.NameQuotaCandidates == null) return false;
+
+            NameQuotaCandidateGroup candidate = leader.NameQuotaCandidates
+                .FirstOrDefault(option => String.Equals(option.Key, candidateKey, StringComparison.Ordinal));
+            if (candidate == null || candidate.Items == null || candidate.Items.Count == 0) return false;
+
+            List<FillPreviewItem> replacements = candidate.Items
+                .Where(item => item != null)
+                .Select(item => item.CloneForNameCandidate())
+                .ToList();
+            if (replacements.Count == 0) return false;
+            foreach (FillPreviewItem item in replacements)
+            {
+                item.Selected = true;
+                item.NeedExactNameConfirmation = false;
+                item.Status = "";
+            }
+            replacements[0].NameQuotaCandidates = leader.NameQuotaCandidates;
+            replacements[0].SelectedNameQuotaCandidateKey = candidate.Key;
+            replacements[0].AlignNote = "人工选择同名绑定";
+            return ReplacePreviewTargetGroup(all, targetRow, replacements);
         }
 
         // 回写：把本次名字驱动确认的"工程量名 -> 定额(可多条)"写进对应框 + 当前模版。
