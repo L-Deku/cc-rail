@@ -342,8 +342,8 @@ namespace RecoNet
                     if (t == null) { MessageBox.Show(this, "模板加载失败。", "模板铺量"); return; }
                     string ndWarning = null;
                     preview = cmbMode.SelectedIndex == 0
-                        ? BuildPreview_ColumnAnchor(t, cmbTargetSheet.Text.Trim(), txtColumn.Text.Trim())
-                        : BuildPreview_NameDriven(mainForm, t, cmbTargetSheet.Text.Trim(), txtColumn.Text.Trim(), out ndWarning);
+                        ? BuildPreview_ColumnAnchor(t, t.WorkbookPath, cmbTargetSheet.Text.Trim(), txtColumn.Text.Trim())
+                        : BuildPreview_NameDriven(mainForm, t, t.WorkbookPath, cmbTargetSheet.Text.Trim(), txtColumn.Text.Trim(), out ndWarning);
                     if (!String.IsNullOrEmpty(ndWarning)) MessageBox.Show(this, ndWarning, "模板铺量");
                     RebuildItemTree();
                     FillGrid();

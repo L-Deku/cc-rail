@@ -456,15 +456,16 @@ namespace RecoNet
 
         // 模式一：列锚点。行号不变、列换成目标列，从目标 sheet 取数。
         private static List<FillPreviewItem> BuildPreview_ColumnAnchor(
-            FillTemplate template, string targetSheet, string targetColumn)
+            FillTemplate template, string targetWorkbook, string targetSheet, string targetColumn)
         {
-            return BuildPreview(template, row =>
+            return BuildPreview(template, targetWorkbook, row =>
                 new KeyValuePair<string, string>(targetSheet, RetargetExprColumn(row.SourceExpr, targetColumn)));
         }
 
         // 两种取数模式共用：resolver 给出每行的 (目标sheet, 取数表达式)，其余流程一致。
         private static List<FillPreviewItem> BuildPreview(
-            FillTemplate template, Func<FillTemplateRow, KeyValuePair<string, string>> resolver)
+            FillTemplate template, string targetWorkbook,
+            Func<FillTemplateRow, KeyValuePair<string, string>> resolver)
         {
             List<FillPreviewItem> items = new List<FillPreviewItem>();
             List<PreparedFillPreviewItem> prepared = new List<PreparedFillPreviewItem>();
@@ -488,10 +489,10 @@ namespace RecoNet
 
                 KeyValuePair<string, string> tgt = resolver(row);
                 string sheet = tgt.Key, expr = tgt.Value;
-                string workbook = GetTemplateRowWorkbookPath(template, row);
+                string workbook = targetWorkbook;
                 if (String.IsNullOrWhiteSpace(workbook))
                 {
-                    item.Status = "模板未记录 Excel 文件"; item.Selected = false; items.Add(item); continue;
+                    item.Status = "未选择目标 Excel"; item.Selected = false; items.Add(item); continue;
                 }
 
                 List<ExcelMergedRegion> rowMergedRegions = GetSavedMergedRegionsCached(workbook, sheet, mergedRegionCache);

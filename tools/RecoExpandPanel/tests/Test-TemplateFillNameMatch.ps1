@@ -285,7 +285,9 @@ if ($readTargets.Count -ne 3) { throw "组件框回读应保留3个目标，实�
 Write-Host "PASS 组件框整组回读"
 
 $fixturePath = Join-Path $env:TEMP 'reco-template-chapter-test.xlsx'
+$targetFixturePath = Join-Path $env:TEMP 'reco-template-target-test.xlsx'
 $workbook = New-Object NPOI.XSSF.UserModel.XSSFWorkbook
+$targetWorkbook = New-Object NPOI.XSSF.UserModel.XSSFWorkbook
 try {
     $sheet = $workbook.CreateSheet('测试')
     $fixtureRows = @(
@@ -304,6 +306,24 @@ try {
     }
     $stream = [System.IO.File]::Open($fixturePath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write)
     try { $workbook.Write($stream) } finally { $stream.Dispose() }
+
+    $targetSheet = $targetWorkbook.CreateSheet('测试')
+    $targetRows = @(
+        @('第一章 路基工程', $null),
+        @('挖土方', 22),
+        @('第二章 站场工程', $null),
+        @('挖土方', 33),
+        @('零数量工程量', 0)
+    )
+    for ($i = 0; $i -lt $targetRows.Count; $i++) {
+        $targetExcelRow = $targetSheet.CreateRow($i)
+        $targetExcelRow.CreateCell(0).SetCellValue([string]$targetRows[$i][0])
+        if ($null -ne $targetRows[$i][1]) {
+            $targetExcelRow.CreateCell(3).SetCellValue([double]$targetRows[$i][1])
+        }
+    }
+    $targetStream = [System.IO.File]::Open($targetFixturePath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write)
+    try { $targetWorkbook.Write($targetStream) } finally { $targetStream.Dispose() }
 
     $templateType = $type.GetNestedType('FillTemplate', $flags)
     $templateRowType = $type.GetNestedType('FillTemplateRow', $flags)
@@ -354,16 +374,19 @@ try {
     $buildPreview = $type.GetMethod('BuildPreview_NameDriven', $flags)
     $previewMainForm = New-Object System.Windows.Forms.Form
     try {
-        $reuseArgs = [object[]]@($previewMainForm.PSObject.BaseObject, (New-NamePreviewTemplate @('Q-1')), '测试', 'D', $null)
+        $reuseArgs = [object[]]@($previewMainForm.PSObject.BaseObject, (New-NamePreviewTemplate @('Q-1')), [string]$targetFixturePath, '测试', 'D', $null)
         $reusePreview = $buildPreview.Invoke($null, $reuseArgs)
         if ($reusePreview.Count -ne 2 -or @($reusePreview | Where-Object { $_.QuotaCode -ne 'Q-1' }).Count -ne 0) {
             throw '重复目标应全部带出唯一绑定 Q-1'
+        }
+        if ($reusePreview[0].QuantityText -ne '22' -or $reusePreview[1].QuantityText -ne '33') {
+            throw "名字驱动没有读取目标工作簿数量: '$($reusePreview[0].QuantityText)' / '$($reusePreview[1].QuantityText)'"
         }
         if (@($reusePreview | Where-Object { -not $_.NeedExactNameConfirmation -or $_.Selected }).Count -ne 0) {
             throw '重复目标唯一绑定应标红并默认不勾选'
         }
 
-        $choiceArgs = [object[]]@($previewMainForm.PSObject.BaseObject, (New-NamePreviewTemplate @('Q-1', 'Q-2')), '测试', 'D', $null)
+        $choiceArgs = [object[]]@($previewMainForm.PSObject.BaseObject, (New-NamePreviewTemplate @('Q-1', 'Q-2')), [string]$targetFixturePath, '测试', 'D', $null)
         $choicePreview = $buildPreview.Invoke($null, $choiceArgs)
         if ($choicePreview.Count -ne 2 -or @($choicePreview | Where-Object { $_.QuotaCode -ne 'Q-1' }).Count -ne 0) {
             throw '多个绑定初始应带出稳定的第一候选 Q-1'
@@ -371,12 +394,22 @@ try {
         if (@($choicePreview | Where-Object { $null -eq $_.NameQuotaCandidates -or $_.NameQuotaCandidates.Count -ne 2 }).Count -ne 0) {
             throw '每个重复目标行都应保留两个独立下拉候选'
         }
-        Write-Host 'PASS 重复目标唯一绑定复用与多绑定候选预览'
+
+        $buildColumnPreview = $type.GetMethod('BuildPreview_ColumnAnchor', $flags)
+        $columnTemplate = New-NamePreviewTemplate @('Q-1')
+        $columnPreview = $buildColumnPreview.Invoke($null,
+            [object[]]@($columnTemplate, [string]$targetFixturePath, '测试', 'D'))
+        if ($columnPreview.Count -ne 1 -or $columnPreview[0].QuantityText -ne '22') {
+            throw "列锚点没有读取目标工作簿数量: '$($columnPreview[0].QuantityText)'"
+        }
+        Write-Host 'PASS 跨工作簿取数、重复目标唯一绑定复用与多绑定候选预览'
     }
     finally { $previewMainForm.Dispose() }
 }
 finally {
     $workbook.Close()
+    $targetWorkbook.Close()
     if (Test-Path -LiteralPath $fixturePath) { Remove-Item -LiteralPath $fixturePath -Force }
+    if (Test-Path -LiteralPath $targetFixturePath) { Remove-Item -LiteralPath $targetFixturePath -Force }
 }
 Write-Host "全部通过"

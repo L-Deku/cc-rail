@@ -803,7 +803,7 @@ namespace RecoNet
 
         // 名字驱动套用：以目标 Excel 工程量行为主序，逐行匹配定额。返回 items 已按 Excel 行序。
         private static List<FillPreviewItem> BuildPreview_NameDriven(Form mainForm, FillTemplate template,
-            string targetSheet, string targetColumn, out string warning)
+            string targetWorkbook, string targetSheet, string targetColumn, out string warning)
         {
             warning = null;
             if (!String.Equals(template.MatchBy, "name", StringComparison.OrdinalIgnoreCase))
@@ -818,17 +818,22 @@ namespace RecoNet
                 warning = "目标列无效。";
                 return new List<FillPreviewItem>();
             }
-            string workbook = template.WorkbookPath;
+            string workbook = (targetWorkbook ?? "").Trim();
             if (String.IsNullOrWhiteSpace(workbook))
             {
-                warning = "模版未记录 Excel 文件。";
+                warning = "未选择目标 Excel。";
+                return new List<FillPreviewItem>();
+            }
+            if (!File.Exists(workbook))
+            {
+                warning = "目标 Excel 未保存或文件不存在，请先保存后重试。";
                 return new List<FillPreviewItem>();
             }
 
             List<TargetQtyRow> targetRows = ReadTargetQtyRows(workbook, targetSheet, colRef.Column);
             if (targetRows.Count == 0)
             {
-                warning = "目标 sheet 未读到工程量行（检查目标列是否为数量列，Excel 是否已保存）。";
+                warning = "目标 Excel「" + Path.GetFileName(workbook) + "」的目标 sheet 未读到工程量行（检查目标列是否为数量列，Excel 是否已保存）。";
                 return new List<FillPreviewItem>();
             }
 
