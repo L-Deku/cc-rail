@@ -1126,6 +1126,171 @@ namespace RecoNet
             return builder.ToString();
         }
 
+        private sealed class OpenSpreadsheetWorkbookInfo
+        {
+            public string FullName;
+            public string DisplayName;
+            public List<string> SheetNames = new List<string>();
+            public string ActiveSheetName;
+            public bool IsActive;
+            public bool IsTemplateSource;
+
+            public override string ToString()
+            {
+                return DisplayName ?? FullName ?? "";
+            }
+        }
+
+        private static string BuildOpenWorkbookDisplayName(string fullName, bool isTemplateSource)
+        {
+            string name = Path.GetFileName(fullName ?? "");
+            string directory = Path.GetDirectoryName(fullName ?? "");
+            string prefix = isTemplateSource ? "[模板源] " : "";
+            return prefix + name + (String.IsNullOrWhiteSpace(directory) ? "" : " — " + directory);
+        }
+
+        private static bool TryListOpenSpreadsheetWorkbooks(
+            out List<OpenSpreadsheetWorkbookInfo> workbooks, out string error)
+        {
+            workbooks = new List<OpenSpreadsheetWorkbookInfo>();
+            error = null;
+            Dictionary<string, OpenSpreadsheetWorkbookInfo> byPath =
+                new Dictionary<string, OpenSpreadsheetWorkbookInfo>(StringComparer.OrdinalIgnoreCase);
+            List<string> diagnostics = new List<string>();
+
+            object activeApplication = GetActiveSpreadsheetApplication();
+            if (activeApplication != null)
+            {
+                CollectOpenWorkbooksFromApplication(activeApplication, true, byPath, diagnostics);
+            }
+
+            List<IntPtr> spreadsheetWindows = new List<IntPtr>();
+            try
+            {
+                EnumWindows(delegate(IntPtr hWnd, IntPtr lParam)
+                {
+                    CollectExcelChildWindows(hWnd, spreadsheetWindows);
+                    return true;
+                }, IntPtr.Zero);
+            }
+            catch (Exception ex)
+            {
+                diagnostics.Add("EnumWindows: " + ex.Message);
+            }
+
+            foreach (IntPtr childWindow in spreadsheetWindows)
+            {
+                try
+                {
+                    Guid dispatchGuid = new Guid("00020400-0000-0000-C000-000000000046");
+                    object nativeObject;
+                    int hr = AccessibleObjectFromWindow(childWindow, ObjIdNativeOm, ref dispatchGuid, out nativeObject);
+                    if (hr != 0 || nativeObject == null) continue;
+                    dynamic window = nativeObject;
+                    object application = window.Application;
+                    if (application != null)
+                    {
+                        CollectOpenWorkbooksFromApplication(application, false, byPath, diagnostics);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    diagnostics.Add("WindowObject " + childWindow.ToString("X") + ": " + ex.Message);
+                }
+            }
+
+            workbooks = byPath.Values
+                .OrderByDescending(item => item.IsActive)
+                .ThenBy(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+                .ToList();
+            if (workbooks.Count == 0)
+            {
+                error = diagnostics.Count == 0
+                    ? "没有找到已打开并保存的 Excel/WPS 工作簿。"
+                    : "没有找到已打开并保存的 Excel/WPS 工作簿：" + diagnostics[0];
+                return false;
+            }
+            return true;
+        }
+
+        private static void CollectOpenWorkbooksFromApplication(object application, bool markActiveWorkbook,
+            Dictionary<string, OpenSpreadsheetWorkbookInfo> byPath, List<string> diagnostics)
+        {
+            if (application == null) return;
+            try
+            {
+                dynamic excel = application;
+                string activeWorkbookPath = "";
+                try
+                {
+                    dynamic activeWorkbook = excel.ActiveWorkbook;
+                    if (activeWorkbook != null)
+                    {
+                        activeWorkbookPath = NormalizeTemplateWorkbookPath(
+                            Convert.ToString(activeWorkbook.FullName, CultureInfo.InvariantCulture));
+                    }
+                }
+                catch
+                {
+                }
+
+                dynamic books = excel.Workbooks;
+                int count = Convert.ToInt32(books.Count, CultureInfo.InvariantCulture);
+                for (int i = 1; i <= count; i++)
+                {
+                    try
+                    {
+                        dynamic workbook = books.Item(i);
+                        string fullName = Convert.ToString(workbook.FullName, CultureInfo.InvariantCulture);
+                        if (String.IsNullOrWhiteSpace(fullName) || !File.Exists(fullName)) continue;
+                        fullName = Path.GetFullPath(fullName);
+
+                        OpenSpreadsheetWorkbookInfo info;
+                        if (!byPath.TryGetValue(fullName, out info))
+                        {
+                            info = new OpenSpreadsheetWorkbookInfo();
+                            info.FullName = fullName;
+                            info.DisplayName = BuildOpenWorkbookDisplayName(fullName, false);
+                            try
+                            {
+                                dynamic sheets = workbook.Worksheets;
+                                int sheetCount = Convert.ToInt32(sheets.Count, CultureInfo.InvariantCulture);
+                                for (int sheetIndex = 1; sheetIndex <= sheetCount; sheetIndex++)
+                                {
+                                    dynamic sheet = sheets.Item(sheetIndex);
+                                    info.SheetNames.Add(Convert.ToString(sheet.Name, CultureInfo.InvariantCulture));
+                                }
+                                dynamic activeSheet = workbook.ActiveSheet;
+                                if (activeSheet != null)
+                                {
+                                    info.ActiveSheetName = Convert.ToString(activeSheet.Name, CultureInfo.InvariantCulture);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                diagnostics.Add(Path.GetFileName(fullName) + " sheets: " + ex.Message);
+                            }
+                            byPath[fullName] = info;
+                        }
+
+                        if (markActiveWorkbook && String.Equals(NormalizeTemplateWorkbookPath(fullName), activeWorkbookPath,
+                            StringComparison.OrdinalIgnoreCase))
+                        {
+                            info.IsActive = true;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        diagnostics.Add("Workbook " + i.ToString(CultureInfo.InvariantCulture) + ": " + ex.Message);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                diagnostics.Add("Workbooks: " + ex.Message);
+            }
+        }
+
         private static bool TryListActiveWorkbookSheets(out List<string> sheetNames, out string activeSheetName, out string error)
         {
             sheetNames = new List<string>();

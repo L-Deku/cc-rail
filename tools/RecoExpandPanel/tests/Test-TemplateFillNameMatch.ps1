@@ -160,6 +160,28 @@ $mainForm = New-Object System.Windows.Forms.Form
 $panel = $null
 try {
     $panel = $panelCtor.Invoke([object[]]@($mainForm.PSObject.BaseObject))
+    if ($null -eq $panelType.GetField('cmbTargetWorkbook', $flags)) {
+        throw '模板铺量面板缺少目标 Excel 下拉框'
+    }
+    $workbookInfoType = $type.GetNestedType('OpenSpreadsheetWorkbookInfo', $flags)
+    if ($null -eq $workbookInfoType) { throw '缺少打开工作簿描述类型' }
+    $workbookInfo = [Activator]::CreateInstance($workbookInfoType)
+    $workbookInfoType.GetField('FullName', $flags).SetValue($workbookInfo, 'C:\目标目录\目标文件.xlsx')
+    $workbookInfoType.GetField('DisplayName', $flags).SetValue($workbookInfo, '目标文件.xlsx')
+    $workbookInfoType.GetField('ActiveSheetName', $flags).SetValue($workbookInfo, '目标表2')
+    $workbookSheets = $workbookInfoType.GetField('SheetNames', $flags).GetValue($workbookInfo)
+    $workbookSheets.Add('目标表1')
+    $workbookSheets.Add('目标表2')
+    $targetWorkbookBox = $panelType.GetField('cmbTargetWorkbook', $flags).GetValue($panel)
+    $targetWorkbookBox.Items.Clear()
+    [void]$targetWorkbookBox.Items.Add($workbookInfo)
+    $targetWorkbookBox.SelectedItem = $workbookInfo
+    $selectedPath = $panelType.GetMethod('GetSelectedTargetWorkbookPath', $flags).Invoke($panel, $null)
+    $targetSheetBox = $panelType.GetField('cmbTargetSheet', $flags).GetValue($panel)
+    if ($selectedPath -ne 'C:\目标目录\目标文件.xlsx' -or $targetSheetBox.Text -ne '目标表2') {
+        throw "目标 Excel 与目标 sheet 联动失败: '$selectedPath' / '$($targetSheetBox.Text)'"
+    }
+    Write-Host 'PASS 目标 Excel 与目标 sheet 面板联动'
     $panelPreview = $panelType.GetField('preview', $flags).GetValue($panel)
     $uiLeader = New-PreviewItem 60 0 '重复工程量'
     $itemType.GetField('QuotaCode', $flags).SetValue($uiLeader, 'DY-959')

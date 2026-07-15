@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Drawing;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 
@@ -22,12 +23,14 @@ namespace RecoNet
             private readonly TextBox txtName = new TextBox();
             private readonly Button btnBuild = new Button();
             private readonly ComboBox cmbMode = new ComboBox();
+            private readonly ComboBox cmbTargetWorkbook = new ComboBox();
             private readonly ComboBox cmbTargetSheet = new ComboBox();
             private readonly TextBox txtColumn = new TextBox();
             private readonly ComboBox cmbTargetUnit = new ComboBox();
             private readonly Button btnPreview = new Button();
             private readonly Button btnApply = new Button();
             private readonly CheckBox chkNameMode = new CheckBox();
+            private readonly ToolTip targetWorkbookToolTip = new ToolTip();
             private readonly SplitContainer split = new SplitContainer();
             private readonly TreeView itemTree = new TreeView();
             private readonly DataGridView grid = new DataGridView();
@@ -36,6 +39,7 @@ namespace RecoNet
             private bool updatingTreeChecks;
             private bool rebuildingTree;
             private bool updatingNameQuotaCell;
+            private bool reloadingTargetWorkbooks;
 
             public TemplateFillPanel(Form owner)
             {
@@ -46,6 +50,7 @@ namespace RecoNet
                 BuildLayout();
                 ReloadTemplateList();
                 ReloadSourceSheets();
+                ReloadTargetWorkbooks();
                 string cur = GetCurrentUnitNo(mainForm);
                 if (!String.IsNullOrEmpty(cur)) txtUnit.Text = cur;
             }
@@ -69,25 +74,31 @@ namespace RecoNet
                 // —— 套用配置 ——
                 AddLabel("模板", 12, 50, 36);
                 cmbTemplate.SetBounds(50, 47, 185, 23); cmbTemplate.DropDownStyle = ComboBoxStyle.DropDownList;
+                cmbTemplate.SelectedIndexChanged += delegate { ReloadTargetWorkbooks(); };
                 btnDeleteTemplate.SetBounds(240, 46, 70, 25); btnDeleteTemplate.Text = "删除模板";
                 btnDeleteTemplate.Click += delegate { OnDeleteTemplate(); };
                 AddLabel("取数模式", 320, 50, 60);
                 cmbMode.SetBounds(385, 47, 150, 23); cmbMode.DropDownStyle = ComboBoxStyle.DropDownList;
                 cmbMode.Items.AddRange(new object[] { "一·列锚点", "二·名字驱动" });
                 cmbMode.SelectedIndex = 0;
-                AddLabel("目标sheet", 12, 82, 60);
-                cmbTargetSheet.SetBounds(75, 79, 120, 23); cmbTargetSheet.Text = "";
+                AddLabel("目标Excel", 12, 82, 60);
+                cmbTargetWorkbook.SetBounds(75, 79, 190, 23);
+                cmbTargetWorkbook.DropDownStyle = ComboBoxStyle.DropDownList;
+                cmbTargetWorkbook.DropDown += delegate { ReloadTargetWorkbooks(); };
+                cmbTargetWorkbook.SelectedIndexChanged += delegate { if (!reloadingTargetWorkbooks) ReloadTargetSheets(); };
+                AddLabel("目标sheet", 275, 82, 60);
+                cmbTargetSheet.SetBounds(340, 79, 105, 23); cmbTargetSheet.Text = "";
                 cmbTargetSheet.DropDownStyle = ComboBoxStyle.DropDown; // 可选可填
                 cmbTargetSheet.DropDown += delegate { ReloadTargetSheets(); };
-                AddLabel("目标列", 205, 82, 50);
-                txtColumn.SetBounds(255, 79, 50, 23); txtColumn.Text = "";
-                AddLabel("目标单元", 315, 82, 60);
-                cmbTargetUnit.SetBounds(380, 79, 90, 23); cmbTargetUnit.Text = "_ZGS_02";
+                AddLabel("目标列", 455, 82, 50);
+                txtColumn.SetBounds(505, 79, 40, 23); txtColumn.Text = "";
+                AddLabel("目标单元", 555, 82, 60);
+                cmbTargetUnit.SetBounds(620, 79, 80, 23); cmbTargetUnit.Text = "_ZGS_02";
                 cmbTargetUnit.DropDownStyle = ComboBoxStyle.DropDown; // 可选可填
                 cmbTargetUnit.DropDown += delegate { ReloadTargetUnits(); };
-                btnPreview.SetBounds(480, 78, 70, 25); btnPreview.Text = "预览";
+                btnPreview.SetBounds(710, 78, 60, 25); btnPreview.Text = "预览";
                 btnPreview.Click += delegate { OnPreview(); };
-                btnApply.SetBounds(560, 78, 150, 25); btnApply.Text = "写入目标单元";
+                btnApply.SetBounds(780, 78, 108, 25); btnApply.Text = "写入目标单元";
                 btnApply.Click += delegate { OnApply(); };
 
                 Label reminder = new Label
@@ -184,7 +195,7 @@ namespace RecoNet
                 split.Panel2.Controls.Add(grid);
 
                 Controls.Add(txtUnit); Controls.Add(cmbSourceSheet); Controls.Add(txtName); Controls.Add(btnBuild);
-                Controls.Add(cmbTemplate); Controls.Add(btnDeleteTemplate); Controls.Add(cmbMode); Controls.Add(cmbTargetSheet); Controls.Add(txtColumn);
+                Controls.Add(cmbTemplate); Controls.Add(btnDeleteTemplate); Controls.Add(cmbMode); Controls.Add(cmbTargetWorkbook); Controls.Add(cmbTargetSheet); Controls.Add(txtColumn);
                 Controls.Add(cmbTargetUnit);
                 Controls.Add(btnPreview); Controls.Add(btnApply); Controls.Add(reminder); Controls.Add(split);
             }
@@ -219,30 +230,114 @@ namespace RecoNet
                 catch { /* 取不到绑定时留空，用户可手填 */ }
             }
 
-            // 目标sheet 下拉展开时刷新：优先读当前打开的 Excel/WPS 工作簿的全部工作表名；
-            // 读不到（Excel 未开）时回退绑定库里出现过的 sheet 名。
-            private void ReloadTargetSheets()
+            private string GetSelectedTargetWorkbookPath()
             {
+                OpenSpreadsheetWorkbookInfo selected = cmbTargetWorkbook.SelectedItem as OpenSpreadsheetWorkbookInfo;
+                return selected == null ? "" : selected.FullName ?? "";
+            }
+
+            private void AddTemplateSourceWorkbook(List<OpenSpreadsheetWorkbookInfo> workbooks)
+            {
+                if (cmbTemplate.SelectedItem == null) return;
+                FillTemplate template;
+                try { template = LoadFillTemplate(Convert.ToString(cmbTemplate.SelectedItem)); }
+                catch { return; }
+                if (template == null || String.IsNullOrWhiteSpace(template.WorkbookPath) || !File.Exists(template.WorkbookPath)) return;
+
+                string fullName;
+                try { fullName = Path.GetFullPath(template.WorkbookPath); }
+                catch { return; }
+                OpenSpreadsheetWorkbookInfo info = workbooks.FirstOrDefault(item =>
+                    String.Equals(item.FullName, fullName, StringComparison.OrdinalIgnoreCase));
+                if (info == null)
+                {
+                    info = new OpenSpreadsheetWorkbookInfo();
+                    info.FullName = fullName;
+                    string sheetError;
+                    info.SheetNames = GetSheetNamesByNpoi(fullName, out sheetError).ToList();
+                    workbooks.Add(info);
+                }
+                info.IsTemplateSource = true;
+                info.DisplayName = BuildOpenWorkbookDisplayName(fullName, true);
+            }
+
+            private void ReloadTargetWorkbooks()
+            {
+                if (reloadingTargetWorkbooks) return;
+                string keepSheet = cmbTargetSheet.Text;
+                reloadingTargetWorkbooks = true;
                 try
                 {
-                    string keep = cmbTargetSheet.Text;
-                    List<string> sheetNames; string activeSheetName; string error;
-                    if (TryListActiveWorkbookSheets(out sheetNames, out activeSheetName, out error) && sheetNames.Count > 0)
+                    string keepPath = GetSelectedTargetWorkbookPath();
+                    List<OpenSpreadsheetWorkbookInfo> workbooks;
+                    string error;
+                    TryListOpenSpreadsheetWorkbooks(out workbooks, out error);
+                    AddTemplateSourceWorkbook(workbooks);
+
+                    cmbTargetWorkbook.Items.Clear();
+                    foreach (OpenSpreadsheetWorkbookInfo workbook in workbooks)
                     {
-                        cmbTargetSheet.Items.Clear();
-                        foreach (string s in sheetNames) cmbTargetSheet.Items.Add(s);
+                        cmbTargetWorkbook.Items.Add(workbook);
                     }
+
+                    OpenSpreadsheetWorkbookInfo selected = workbooks.FirstOrDefault(item =>
+                        String.Equals(item.FullName, keepPath, StringComparison.OrdinalIgnoreCase));
+                    if (selected == null) selected = workbooks.FirstOrDefault(item => item.IsActive);
+                    if (selected == null) selected = workbooks.FirstOrDefault(item => item.IsTemplateSource);
+                    if (selected == null) selected = workbooks.FirstOrDefault();
+                    if (selected != null) cmbTargetWorkbook.SelectedItem = selected;
                     else
                     {
                         cmbTargetSheet.Items.Clear();
-                        using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
-                        {
-                            foreach (string s in ListBoundSheetNames(conn)) cmbTargetSheet.Items.Add(s);
-                        }
+                        cmbTargetSheet.Text = "";
+                        targetWorkbookToolTip.SetToolTip(cmbTargetWorkbook, error ?? "");
                     }
-                    cmbTargetSheet.Text = keep;
                 }
-                catch { /* 取不到时留空，用户可手填 */ }
+                catch { /* 取不到时留空，预览时给出明确提示 */ }
+                finally
+                {
+                    reloadingTargetWorkbooks = false;
+                    ReloadTargetSheets(keepSheet);
+                }
+            }
+
+            // 目标 sheet 只跟随当前明确选中的目标 Excel，不再根据活动工作簿猜测。
+            private void ReloadTargetSheets()
+            {
+                ReloadTargetSheets(cmbTargetSheet.Text);
+            }
+
+            private void ReloadTargetSheets(string keep)
+            {
+                try
+                {
+                    OpenSpreadsheetWorkbookInfo selected = cmbTargetWorkbook.SelectedItem as OpenSpreadsheetWorkbookInfo;
+                    cmbTargetSheet.Items.Clear();
+                    if (selected == null)
+                    {
+                        cmbTargetSheet.Text = "";
+                        return;
+                    }
+
+                    if (selected.SheetNames == null || selected.SheetNames.Count == 0)
+                    {
+                        string sheetError;
+                        selected.SheetNames = GetSheetNamesByNpoi(selected.FullName, out sheetError).ToList();
+                    }
+                    foreach (string sheetName in selected.SheetNames) cmbTargetSheet.Items.Add(sheetName);
+                    targetWorkbookToolTip.SetToolTip(cmbTargetWorkbook, selected.FullName ?? "");
+
+                    string target = selected.SheetNames.FirstOrDefault(sheetName =>
+                        String.Equals(sheetName, keep, StringComparison.OrdinalIgnoreCase));
+                    if (String.IsNullOrWhiteSpace(target) && !String.IsNullOrWhiteSpace(selected.ActiveSheetName))
+                    {
+                        target = selected.SheetNames.FirstOrDefault(sheetName =>
+                            String.Equals(sheetName, selected.ActiveSheetName, StringComparison.OrdinalIgnoreCase));
+                    }
+                    if (String.IsNullOrWhiteSpace(target)) target = selected.SheetNames.FirstOrDefault();
+                    cmbTargetSheet.Text = target ?? "";
+                }
+                catch { /* 取不到时留空，预览时给出明确提示 */ }
             }
 
             // 目标单元 下拉展开时刷新：列出项目全部单元（_ZGS_ 编号，纯编号，供 ResolveAgentUnitIdSimple 精确匹配）。
@@ -340,10 +435,16 @@ namespace RecoNet
                     if (cmbTemplate.SelectedItem == null) { MessageBox.Show(this, "请先选择模板。", "模板铺量"); return; }
                     FillTemplate t = LoadFillTemplate(Convert.ToString(cmbTemplate.SelectedItem));
                     if (t == null) { MessageBox.Show(this, "模板加载失败。", "模板铺量"); return; }
+                    string targetWorkbook = GetSelectedTargetWorkbookPath();
+                    if (String.IsNullOrWhiteSpace(targetWorkbook) || !File.Exists(targetWorkbook))
+                    {
+                        MessageBox.Show(this, "没有可用的目标 Excel，请先打开并保存工作簿。", "模板铺量");
+                        return;
+                    }
                     string ndWarning = null;
                     preview = cmbMode.SelectedIndex == 0
-                        ? BuildPreview_ColumnAnchor(t, t.WorkbookPath, cmbTargetSheet.Text.Trim(), txtColumn.Text.Trim())
-                        : BuildPreview_NameDriven(mainForm, t, t.WorkbookPath, cmbTargetSheet.Text.Trim(), txtColumn.Text.Trim(), out ndWarning);
+                        ? BuildPreview_ColumnAnchor(t, targetWorkbook, cmbTargetSheet.Text.Trim(), txtColumn.Text.Trim())
+                        : BuildPreview_NameDriven(mainForm, t, targetWorkbook, cmbTargetSheet.Text.Trim(), txtColumn.Text.Trim(), out ndWarning);
                     if (!String.IsNullOrEmpty(ndWarning)) MessageBox.Show(this, ndWarning, "模板铺量");
                     RebuildItemTree();
                     FillGrid();
