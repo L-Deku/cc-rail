@@ -165,6 +165,12 @@ try {
     }
     $workbookInfoType = $type.GetNestedType('OpenSpreadsheetWorkbookInfo', $flags)
     if ($null -eq $workbookInfoType) { throw '缺少打开工作簿描述类型' }
+    $displayNameBuilder = $type.GetMethod('BuildOpenWorkbookDisplayName', $flags)
+    $normalDisplay = $displayNameBuilder.Invoke($null, @('C:\目标目录\目标文件.xlsx', $false))
+    $sourceDisplay = $displayNameBuilder.Invoke($null, @('C:\目标目录\目标文件.xlsx', $true))
+    if ($normalDisplay -ne '目标文件.xlsx' -or $sourceDisplay -ne '目标文件.xlsx') {
+        throw "目标 Excel 列表应只显示文件名: '$normalDisplay' / '$sourceDisplay'"
+    }
     $workbookInfo = [Activator]::CreateInstance($workbookInfoType)
     $workbookInfoType.GetField('FullName', $flags).SetValue($workbookInfo, 'C:\目标目录\目标文件.xlsx')
     $workbookInfoType.GetField('DisplayName', $flags).SetValue($workbookInfo, '目标文件.xlsx')

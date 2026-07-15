@@ -1143,10 +1143,7 @@ namespace RecoNet
 
         private static string BuildOpenWorkbookDisplayName(string fullName, bool isTemplateSource)
         {
-            string name = Path.GetFileName(fullName ?? "");
-            string directory = Path.GetDirectoryName(fullName ?? "");
-            string prefix = isTemplateSource ? "[模板源] " : "";
-            return prefix + name + (String.IsNullOrWhiteSpace(directory) ? "" : " — " + directory);
+            return Path.GetFileName(fullName ?? "");
         }
 
         private static bool TryListOpenSpreadsheetWorkbooks(
