@@ -27,6 +27,7 @@ namespace RecoNet
             public bool IncludeChildren = true;
             public List<string> QuotaFilter = new List<string>();
             public List<string> Units = new List<string>();   // 单元(总概算)过滤：名称/_ZGS_编号/序号；空=当前单元
+            public string QuotaName;                          // set_unit_price_by_name 用：定额输入.工程或费用项目名称
             public string Operator = "*";
             public string Factor;
             public string SourceItem;
@@ -81,6 +82,8 @@ namespace RecoNet
                             (String.IsNullOrEmpty(TransportParam) ? "" : "（参数 " + TransportParam + "）") + filter;
                     case "set_material_scheme":
                         return "把单元 " + String.Join(",", Units.ToArray()) + " 的" + SchemeKind + "费方案设为 \"" + SchemeName + "\"";
+                    case "set_unit_price_by_name":
+                        return "把名称为 \"" + QuotaName + "\" 的补充定额单价设为 " + Value + filter;
                     case "multiply_quantity":
                         return "条目 " + String.Join(",", Items.ToArray()) + " 的" + TargetLabel + " " + Operator + Factor + filter;
                     case "clear_quantity":
@@ -420,6 +423,45 @@ namespace RecoNet
                     return true;
                 }
 
+                result.Commands.Add(command);
+                return true;
+            }
+
+            if (keyword == "改单价" || keyword == "设单价")
+            {
+                command.Type = "set_unit_price_by_name";
+                command.Target = "unit_price";
+                if (command.Units.Count == 0)
+                {
+                    result.Error = "用法：改单价 精确定额名称 数字 单元=单元名称，或 单元=所有。为避免误改，必须明确指定单元。";
+                    return true;
+                }
+
+                if (tokens.Count < 2)
+                {
+                    result.Error = "用法：改单价 精确定额名称 数字 单元=单元名称，例如：改单价 ≤25t自卸汽车运土 增运1km 615.98 单元=南江路泵房。";
+                    return true;
+                }
+
+                string priceText = tokens[tokens.Count - 1].Trim();
+                tokens.RemoveAt(tokens.Count - 1);
+                decimal price;
+                if ((!Decimal.TryParse(priceText, NumberStyles.Float, CultureInfo.InvariantCulture, out price) &&
+                        !Decimal.TryParse(priceText, NumberStyles.Float, CultureInfo.CurrentCulture, out price)) ||
+                    price < 0m)
+                {
+                    result.Error = "改单价的新单价必须是非负数字：" + priceText;
+                    return true;
+                }
+
+                command.QuotaName = String.Join(" ", tokens.ToArray()).Trim();
+                if (command.QuotaName.Length == 0)
+                {
+                    result.Error = "改单价缺少精确定额名称。";
+                    return true;
+                }
+
+                command.Value = price.ToString(CultureInfo.InvariantCulture);
                 result.Commands.Add(command);
                 return true;
             }
@@ -875,6 +917,7 @@ namespace RecoNet
                 command.SourceItem = ReadJsonString(dict, "source_item", "").Trim();
                 command.TargetItems = ReadAgentJsonStringList(dict, "target_items");
                 command.Units = ReadAgentJsonStringList(dict, "units");
+                command.QuotaName = ReadJsonString(dict, "quota_name", "").Trim();
                 command.NewName = ReadJsonString(dict, "new_name", "").Trim();
                 string op = ReadJsonString(dict, "operator", "*").Trim();
                 command.Operator = op == "/" ? "/" : "*";
@@ -963,6 +1006,29 @@ namespace RecoNet
         {
             switch (command.Type)
             {
+                case "set_unit_price_by_name":
+                {
+                    if (String.IsNullOrEmpty(command.QuotaName))
+                    {
+                        return "按名称改单价命令缺少精确定额名称。";
+                    }
+
+                    if (command.Units.Count == 0)
+                    {
+                        return "按名称改单价命令必须指定单元=单元名称，或 单元=所有。";
+                    }
+
+                    decimal price;
+                    if (String.IsNullOrEmpty(command.Value) ||
+                        ((!Decimal.TryParse(command.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out price) &&
+                            !Decimal.TryParse(command.Value, NumberStyles.Float, CultureInfo.CurrentCulture, out price)) ||
+                            price < 0m))
+                    {
+                        return "按名称改单价命令缺少有效的新单价。";
+                    }
+
+                    return null;
+                }
                 case "multiply_quantity":
                     if (command.Items.Count == 0)
                     {

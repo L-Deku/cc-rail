@@ -183,6 +183,7 @@ namespace RecoNet
             body["commands_schema"] = new string[]
             {
                 "multiply_quantity：{\"type\":\"multiply_quantity\",\"items\":[\"条目编号\"],\"include_children\":true,\"quota_filter\":[],\"units\":[],\"target\":\"quantity\",\"operator\":\"*\",\"factor\":0.85} 把条目下定额按系数缩放。target=\"quantity\"乘工程数量(默认)，=\"quota_code\"乘定额编号(追加*系数,软件原生缩放,推荐)，=\"unit_price\"直接乘单价列。operator=\"/\"表示除。",
+                "set_unit_price_by_name：{\"type\":\"set_unit_price_by_name\",\"quota_name\":\"精确定额名称\",\"units\":[\"单元或所有\"],\"value\":\"615.98\"} 按定额输入表的工程或费用项目名称完全匹配，把 SH/SQ/ZLF/LF/SF 手填单价行的单价设为指定值；units必填。",
                 "set_quantity：{\"type\":\"set_quantity\",\"items\":[\"条目编号\"],\"include_children\":true,\"quota_filter\":[],\"units\":[],\"value\":\"100\"} 把条目下定额的工程数量直接设为某值(可为表达式)。",
                 "remove_text：{\"type\":\"remove_text\",\"items\":[\"条目编号\"],\"include_children\":true,\"quota_filter\":[],\"units\":[],\"target\":\"quantity\",\"remove_text\":\"/100\"} 从字段里去掉指定子串。target=\"quantity\"去工程数量里的(如/100,会重算)，=\"quota_code\"去定额编号里的(如*9)，=\"adjustment\"去定额调整里的(如/XG1)。",
                 "set_adjustment：{\"type\":\"set_adjustment\",\"items\":[\"条目编号\"],\"include_children\":true,\"quota_filter\":[],\"units\":[],\"mode\":\"append\",\"value\":\"/XG1\"} 设定额调整字段(如/XG1、/1294861,,1)。mode=\"append\"追加到现有调整后，=\"set\"替换整个调整串。",
@@ -204,6 +205,7 @@ namespace RecoNet
                 "用户没有指明任何条目编号/条目名称、也没说单元时，默认 items 用 [\"@selected\"]（作用于当前选中的条目或定额），不要因为缺少条目就反问。",
                 "用户用条目名称指代时，在 item_tree 里找到名称匹配的行并使用其编号；多个候选无法确定时不要猜，放进 need_clarification 提问。",
                 "quota_filter 填用户点名的定额编号（如 LY-21）；用户没限定就留空数组。",
+                "用户要求按定额名称直接改单价时，使用 set_unit_price_by_name；quota_name 必须取用户给出的完整名称，不要改写；用户说所有单元时 units 填 [\"所有\"]，否则必须填写具体单元。",
                 "factor 必须是数字。用户说\"除以2\"时 operator 用 \"/\"，factor 用 2。",
                 "create_unit 的 source_item 用 unit_list 里的名称/_ZGS_编号/序号；new_name 是用户给的新名称，用户没给名称时放进 need_clarification 问。",
                 "用户意图不明确、或超出以上命令能力（例如修改材料价、改运输方案、改取费）时，commands 留空数组，并在 need_clarification 里用中文简短说明或反问。",
