@@ -282,10 +282,12 @@ $binDir = Join-Path $sourceDir "bin"
 $aiRoot = Split-Path -Parent $repoRoot
 
 $specialLineName = New-UString @(0x81EA, 0x52A8, 0x9884, 0x7B97, 0x4E13, 0x7528, 0x7EBF)
-$xuName = (New-UString @(0x94C1, 0x8DEF, 0x5DE5, 0x7A0B, 0x4E91, 0x8BA1, 0x4EF7, 0x7CFB, 0x7EDF, 0x7F51, 0x7EDC, 0x7248)) + "V1.0-" + (New-UString @(0x5F90, 0x603B))
+$cloudName = (New-UString @(0x94C1, 0x8DEF, 0x5DE5, 0x7A0B, 0x4E91, 0x8BA1, 0x4EF7, 0x7CFB, 0x7EDF, 0x7F51, 0x7EDC, 0x7248)) + "V1.0"
+$xuName = $cloudName + "-" + (New-UString @(0x5F90, 0x603B))
 
 $managedRoots = @(
   [pscustomobject]@{ Group = "source-auto"; Path = $repoRoot },
+  [pscustomobject]@{ Group = "ai-root"; Path = (Join-Path $aiRoot $cloudName) },
   [pscustomobject]@{ Group = "special-line"; Path = (Join-Path $aiRoot $specialLineName) },
   [pscustomobject]@{ Group = "xu"; Path = (Join-Path $aiRoot $xuName) }
 )

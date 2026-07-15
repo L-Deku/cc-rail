@@ -10,7 +10,7 @@
 - 构建脚本是 `RecoQuotaRecommend/build.ps1`。
 - 插件部署目标目录是 `铁路基本建设工程投资控制系统2020网络版V0503021201/`。
 - 本地定额与学习数据缓存放在软件目录下的 `RecoQuotaData/`。
-- 三个运行目录统一部署时，只允许以当前仓库 `main` 的 `RecoQuotaRecommend/bin/` 为插件 DLL 源头，使用 `tools/DeployUnifiedPlugins.ps1`；不要从 `自动预算专用线` 或 `徐总` 目录反向覆盖当前仓库输出。
+- 所有运行目录统一部署时，只允许以当前仓库 `main` 的 `RecoQuotaRecommend/bin/` 为插件 DLL 源头，使用 `tools/DeployUnifiedPlugins.ps1`；目标包括当前仓库内运行目录、`D:\AI文件\铁路工程云计价系统网络版V1.0`，以及实际存在的 `自动预算专用线`、`铁路工程云计价系统网络版V1.0-徐总`，不要从这些目标目录反向覆盖当前仓库输出。
 - Claude Code 可能在 `.claude/worktrees/` 下并行修改；除非用户明确要求，不要主动把当前主工作区改动合入 Claude worktree，也不要从 Claude worktree 部署覆盖当前软件目录。
 
 ## 构建与验证
@@ -23,7 +23,7 @@ powershell.exe -ExecutionPolicy Bypass -File "C:\Users\谢刚\Desktop\自动预�
 
 - 构建成功后，脚本会生成并部署 `RecoQuotaRecommend.dll` 到软件目录。
 - 修改 `tools/RecoExpandPanel/` 后，如果因为目标软件正在运行只编译了 `RecoQuotaRecommend/bin/RecoExpandPanel.dll` 而未部署，必须明确说明运行目录仍是旧 DLL；现场验证前先用 DLL 时间戳或 marker 确认运行目录 `RecoExpandPanel.dll` 已更新。
-- 需要同步 `自动预算`、`自动预算专用线`、`铁路工程云计价系统网络版V1.0-徐总` 三个运行目录时，先运行统一部署脚本干跑检查：
+- 需要同步当前仓库运行目录、`D:\AI文件\铁路工程云计价系统网络版V1.0`、`自动预算专用线`、`铁路工程云计价系统网络版V1.0-徐总` 等运行目录时，先运行统一部署脚本干跑检查：
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\DeployUnifiedPlugins.ps1" -SkipBuild
