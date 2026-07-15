@@ -83,6 +83,7 @@ namespace RecoNet
                 cmbMode.SelectedIndex = 0;
                 AddLabel("目标Excel", 12, 82, 60);
                 cmbTargetWorkbook.SetBounds(75, 79, 190, 23);
+                cmbTargetWorkbook.DropDownWidth = 600;
                 cmbTargetWorkbook.DropDownStyle = ComboBoxStyle.DropDownList;
                 cmbTargetWorkbook.DropDown += delegate { ReloadTargetWorkbooks(); };
                 cmbTargetWorkbook.SelectedIndexChanged += delegate { if (!reloadingTargetWorkbooks) ReloadTargetSheets(); };
