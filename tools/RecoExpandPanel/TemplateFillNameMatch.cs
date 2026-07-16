@@ -505,8 +505,9 @@ namespace RecoNet
             }
         }
 
-        // 费用/辅助类伪代码(排组件框末尾；真定额排前)。含 *系数 后缀先剥掉再判。
-        private static int PseudoQuotaRank(string code)
+        // 模板/对应框组内顺序：真定额、数字材料、费用或辅助类伪代码。
+        // 数字材料允许带 *系数 后缀；五位以下纯数字不在这里判为材料。
+        private static int TemplateTargetRank(string code)
         {
             string c = (code ?? "").Trim().ToUpperInvariant();
             int star = c.IndexOf('*');
@@ -515,10 +516,10 @@ namespace RecoNet
             {
                 case "SF": case "SH": case "SQ": case "ZLF": case "LF":
                 case "YF": case "TLF": case "GF": case "JF": case "XGT1":
-                    return 1;
-                default:
-                    return 0;
+                    return 2;
             }
+            if (c.Length >= 5 && c.All(Char.IsDigit)) return 1;
+            return 0;
         }
 
         private sealed class BoxCandidate
@@ -582,7 +583,7 @@ namespace RecoNet
                         QuotaName = GetFlat(g.First(), "target_name"),
                         QuotaUnit = GetFlat(g.First(), "target_unit")
                     })
-                    .OrderBy(target => PseudoQuotaRank(target.QuotaCode))
+                    .OrderBy(target => TemplateTargetRank(target.QuotaCode))
                     .ThenBy(target => target.QuotaCode, StringComparer.OrdinalIgnoreCase)
                     .ToList();
                 if (candidate.SampleFeatures.Count > 0 && candidate.Targets.Count > 0) result.Add(candidate);
@@ -673,10 +674,12 @@ namespace RecoNet
             List<int> indexes = group == null ? new List<int>() : group.Indexes.ToList();
             indexes.Sort(delegate(int a, int b)
             {
-                int ra = PseudoQuotaRank(template.Rows[a].QuotaCode);
-                int rb = PseudoQuotaRank(template.Rows[b].QuotaCode);
+                int ra = TemplateTargetRank(template.Rows[a].QuotaCode);
+                int rb = TemplateTargetRank(template.Rows[b].QuotaCode);
                 if (ra != rb) return ra.CompareTo(rb);
-                return template.Rows[a].OrderInItem.CompareTo(template.Rows[b].OrderInItem);
+                int order = template.Rows[a].OrderInItem.CompareTo(template.Rows[b].OrderInItem);
+                if (order != 0) return order;
+                return a.CompareTo(b);
             });
             return indexes;
         }

@@ -88,6 +88,40 @@ $bestIndex = $uniqueBest.Invoke($null, $bestArgs)
 if ($bestIndex -ne 0 -or [bool]$bestArgs[4]) { throw '唯一最佳名称不得被章节不同淘汰' }
 Write-Host 'PASS 名字组件分组与同名歧义判定'
 
+$targetRank = $type.GetMethod('TemplateTargetRank', $flags)
+if ($null -eq $targetRank) { throw '缺少模板目标类别排序入口' }
+if ($targetRank.Invoke($null, @('FY-842')) -ne 0) { throw '普通定额应排第一类' }
+if ($targetRank.Invoke($null, @('109001003*1.02')) -ne 1) { throw '带系数数字材料应排第二类' }
+if ($targetRank.Invoke($null, @('SH')) -ne 2) { throw '辅助代码应排第三类' }
+
+$orderTemplate = [Activator]::CreateInstance($templateType)
+function Add-OrderTestRow([string]$code) {
+    $row = [Activator]::CreateInstance($templateRowType)
+    $templateRowType.GetField('MatchName', $flags).SetValue($row, '圈梁 10m3')
+    $templateRowType.GetField('MatchChapter', $flags).SetValue($row, '第八章 房屋')
+    $templateRowType.GetField('QuotaCode', $flags).SetValue($row, $code)
+    $templateRowType.GetField('OrderInItem', $flags).SetValue($row, 0)
+    $templateType.GetField('Rows', $flags).GetValue($orderTemplate).Add($row)
+}
+Add-OrderTestRow '109001003*1.02'
+Add-OrderTestRow 'FY-842'
+Add-OrderTestRow 'FY-841'
+Add-OrderTestRow 'SH'
+$orderGroups = $groupBuilder.Invoke($null, @($orderTemplate))
+$orderedGroupIndexes = $type.GetMethod('OrderedTemplateGroupIndexes', $flags)
+if ($null -eq $orderedGroupIndexes -or $orderGroups.Count -ne 1) {
+    throw '缺少模板组件稳定排序入口'
+}
+$orderedIndexes = $orderedGroupIndexes.Invoke($null, [object[]]@($orderTemplate, $orderGroups[0]))
+$orderedCodes = @($orderedIndexes | ForEach-Object {
+    $templateType.GetField('Rows', $flags).GetValue($orderTemplate)[$_].QuotaCode
+})
+$expectedOrder = @('FY-842', 'FY-841', '109001003*1.02', 'SH')
+if (($orderedCodes -join '|') -ne ($expectedOrder -join '|')) {
+    throw "模板组件顺序错误: $($orderedCodes -join ' -> ')"
+}
+Write-Host 'PASS 模板组件按定额、材料、辅助代码稳定排序'
+
 $confirmed = $type.GetMethod('IsInsertGroupFullyConfirmed', $flags)
 if (-not $confirmed.Invoke($null, @(3, 3))) { throw '整组写入完成应确认成功' }
 if ($confirmed.Invoke($null, @(3, 2))) { throw '部分写入不得确认整组成功' }
