@@ -450,6 +450,13 @@ try {
         $mergedExcelRow.CreateCell(0).SetCellValue([string]$mergedRows[$i][0])
         $mergedExcelRow.CreateCell(3).SetCellValue([double]$mergedRows[$i][1])
     }
+    $unitSheet = $targetWorkbook.CreateSheet('单位')
+    $unitRow = $unitSheet.CreateRow(0)
+    $unitRow.CreateCell(1).SetCellValue('热镀锌钢管')
+    $unitRow.CreateCell(2).SetCellValue('SC20')
+    $unitRow.CreateCell(3).SetCellValue('m')
+    $unitRow.CreateCell(4).SetCellValue([double]8000)
+    $unitRow.CreateCell(5).SetCellValue([double]1400)
     $targetStream = [System.IO.File]::Open($targetFixturePath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write)
     try { $targetWorkbook.Write($targetStream) } finally { $targetStream.Dispose() }
 
@@ -477,6 +484,18 @@ try {
         throw '零数量工程量未丢弃'
     }
     Write-Host "PASS 真实工作簿章节快照与零数量丢弃"
+
+    $unitRows = $readRows.Invoke($null,
+        [object[]]@([string]$targetFixturePath, [string]'单位', [int]6))
+    if ($unitRows.Count -ne 1 -or $unitRows[0].Unit -ne 'm') {
+        $actualUnit = if ($unitRows.Count -eq 0) { '' } else { $unitRows[0].Unit }
+        throw "数量 F 列应越过数值 E 列读取 D 列单位 m: '$actualUnit'"
+    }
+    $buildQty = $type.GetMethod('BuildNameDrivenQtyText', $flags)
+    if ($buildQty.Invoke($null, @('1400', $unitRows[0].Unit, 'hm')) -ne '1400/100') {
+        throw '无模板表达式时 m 到 hm 必须生成 1400/100'
+    }
+    Write-Host 'PASS 数量列向左越过数值列读取单位并生成 1400/100'
 
     function New-NamePreviewTemplate([string[]]$codes) {
         $nameTemplate = [Activator]::CreateInstance($templateType)

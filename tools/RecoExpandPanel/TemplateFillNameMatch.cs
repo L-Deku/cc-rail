@@ -378,6 +378,27 @@ namespace RecoNet
             return ReadTargetQtyRowsWithChapters(workbook, sheet, qtyColumn, out ignored);
         }
 
+        private static string ReadTargetUnitNearQuantity(string workbook, string sheet, int row, int qtyColumn,
+            Dictionary<string, HashSet<int>> hiddenCache, ExcelSyncReadContext ctx)
+        {
+            if (ctx == null || row <= 0 || qtyColumn <= 1) return "";
+
+            HashSet<int> hiddenColumns = GetSavedHiddenColumns(workbook, sheet, hiddenCache);
+            int visibleChecked = 0;
+            for (int col = qtyColumn - 1; col >= 1 && visibleChecked < 6; col--)
+            {
+                if (hiddenColumns.Contains(col)) continue;
+                visibleChecked++;
+
+                string address = BuildExcelCellAddress(col, row);
+                string text;
+                string error;
+                if (!ctx.TryReadWorkbookCellValue(workbook, sheet, address, out text, out error)) continue;
+                if (LooksLikeExcelLinkUnit(text)) return (text ?? "").Trim();
+            }
+            return "";
+        }
+
         private static List<TargetQtyRow> ReadTargetQtyRowsWithChapters(string workbook, string sheet, int qtyColumn,
             out Dictionary<int, string> chapterByRow)
         {
@@ -418,16 +439,7 @@ namespace RecoNet
                 row.Chapter = currentChapter;
                 row.Quantity = qty;
                 row.QuantityText = disp;
-                if (qtyColumn > 1)
-                {
-                    string unitAddr = ColumnNumberToName(qtyColumn - 1) + r.ToString(CultureInfo.InvariantCulture);
-                    string unitText; string unitErr;
-                    if (ctx.TryReadWorkbookCellValue(workbook, sheet, unitAddr, out unitText, out unitErr) && !String.IsNullOrWhiteSpace(unitText))
-                    {
-                        decimal unitNum; string unitNumErr;
-                        if (!TryEvaluateDecimal(unitText, out unitNum, out unitNumErr)) row.Unit = unitText.Trim();
-                    }
-                }
+                row.Unit = ReadTargetUnitNearQuantity(workbook, sheet, r, qtyColumn, hiddenCache, ctx);
                 result.Add(row);
             }
             return result;
