@@ -330,6 +330,17 @@ namespace RecoNet
             else
             {
                 snapshot.CurrentUnitCode = ReadAgentCurrentUnitText(mainForm);   // 兜底：直接读当前下拉框文本
+                if (snapshot.CurrentUnitId == 0 && !String.IsNullOrEmpty(snapshot.CurrentUnitCode))
+                {
+                    foreach (KeyValuePair<long, string> pair in snapshot.UnitCodeMap)
+                    {
+                        if (String.Equals(pair.Value, snapshot.CurrentUnitCode, StringComparison.OrdinalIgnoreCase))
+                        {
+                            snapshot.CurrentUnitId = pair.Key;
+                            break;
+                        }
+                    }
+                }
             }
 
             return snapshot;
