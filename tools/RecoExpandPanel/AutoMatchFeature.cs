@@ -1892,6 +1892,7 @@ namespace RecoNet
                 foreach (DataGridViewColumn column in grid.Columns)
                 {
                     column.ReadOnly = true;
+                    column.SortMode = DataGridViewColumnSortMode.NotSortable;
                 }
 
                 grid.Columns["Checked"].ReadOnly = false;
