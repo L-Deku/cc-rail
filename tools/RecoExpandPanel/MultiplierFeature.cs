@@ -719,9 +719,16 @@ namespace RecoNet
                 return;
             }
 
-            int changed = ApplyFactorByChapterNo(conn, itemNo, factor, target);
+            long unitId = ResolveMultiplierCurrentUnitId(mainForm);
+            if (unitId <= 0)
+            {
+                MessageBox.Show(mainForm, "无法识别当前单元。为避免误改其他单元，请先切换到目标单元后再试。", "乘系数", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            int changed = ApplyFactorByChapterNo(conn, itemNo, factor, target, unitId);
             RefreshCurrentQuotaGrid(mainForm);
-            Log("Tree factor applied. ChapterNo=" + itemNo + ", Target=" + target + ", Factor=" + factor.Suffix + ", Changed=" + changed.ToString(CultureInfo.InvariantCulture));
+            Log("Tree factor applied. UnitId=" + unitId.ToString(CultureInfo.InvariantCulture) + ", ChapterNo=" + itemNo + ", Target=" + target + ", Factor=" + factor.Suffix + ", Changed=" + changed.ToString(CultureInfo.InvariantCulture));
             MessageBox.Show(mainForm, "已处理 " + changed.ToString(CultureInfo.InvariantCulture) + " 条定额。", "乘系数", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
@@ -870,15 +877,66 @@ namespace RecoNet
             return true;
         }
 
-        private static int ApplyFactorByChapterNo(SqlConnection conn, string chapterNo, FactorInfo factor, string target)
+        private static long ResolveMultiplierCurrentUnitId(Form mainForm)
+        {
+            try
+            {
+                DataGridView grid = GetField<DataGridView>(mainForm, "dataGridViewDE");
+                if (grid != null)
+                {
+                    foreach (DataGridViewRow row in grid.Rows)
+                    {
+                        if (row.IsNewRow)
+                        {
+                            continue;
+                        }
+
+                        string text = GetRowValue(row, "总概算序号de", "总概算序号");
+                        long unitId;
+                        if (Int64.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out unitId) && unitId > 0)
+                        {
+                            return unitId;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Resolve multiplier unit from grid failed: " + ex.Message);
+            }
+
+            try
+            {
+                TreeView tree = GetField<TreeView>(mainForm, "Tv_tree");
+                TreeNode node = tree != null ? tree.SelectedNode : GetField<TreeNode>(mainForm, "CurrNode");
+                if (node != null)
+                {
+                    string text = TryGetValue(node.Tag, "总概算序号");
+                    long unitId;
+                    if (Int64.TryParse(text ?? "", NumberStyles.Integer, CultureInfo.InvariantCulture, out unitId) && unitId > 0)
+                    {
+                        return unitId;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Resolve multiplier unit from tree failed: " + ex.Message);
+            }
+
+            return 0;
+        }
+
+        private static int ApplyFactorByChapterNo(SqlConnection conn, string chapterNo, FactorInfo factor, string target, long unitId)
         {
             EnsureOpen(conn);
             DataTable table = new DataTable();
             using (SqlCommand cmd = conn.CreateCommand())
             {
                 cmd.CommandText = String.Equals(target, "quotaCode", StringComparison.OrdinalIgnoreCase)
-                    ? "select 定额序号, 定额编号 from 定额输入 where 条目序号 in (select 条目序号 from 章节表 where 条目编号 like @bh) order by 定额序号"
-                    : "select 定额序号, 工程数量输入 from 定额输入 where 条目序号 in (select 条目序号 from 章节表 where 条目编号 like @bh) order by 定额序号";
+                    ? "select 定额序号, 定额编号 from 定额输入 where 总概算序号=@zgs and 条目序号 in (select 条目序号 from 章节表 where 条目编号 like @bh) order by 定额序号"
+                    : "select 定额序号, 工程数量输入 from 定额输入 where 总概算序号=@zgs and 条目序号 in (select 条目序号 from 章节表 where 条目编号 like @bh) order by 定额序号";
+                cmd.Parameters.AddWithValue("@zgs", unitId);
                 cmd.Parameters.AddWithValue("@bh", chapterNo + "%");
                 using (SqlDataAdapter adapter = new SqlDataAdapter(cmd))
                 {

@@ -519,8 +519,7 @@ namespace RecoNet
                     return new List<long> { selection.CurrentUnitId };
                 }
 
-                warnings.Add("未能识别当前单元，本次会匹配所有单元里的同名条目，请在预览里核对\"单元\"列！");
-                return null;
+                throw new AgentPlanException("未能识别当前单元。为避免误改所有单元，请在指令里明确写 单元=具体单元；确实要跨全部单元时写 单元=所有。");
             }
 
             List<long> ids = new List<long>();

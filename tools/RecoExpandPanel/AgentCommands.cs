@@ -142,7 +142,10 @@ namespace RecoNet
         private static List<string> SplitAgentList(string text)
         {
             List<string> values = new List<string>();
-            foreach (string part in (text ?? "").Split(new char[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
+            string normalized = (text ?? "")
+                .Replace('，', ',')
+                .Replace('、', ',');
+            foreach (string part in normalized.Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
             {
                 string trimmed = part.Trim();
                 if (trimmed.Length == 0)
@@ -221,9 +224,9 @@ namespace RecoNet
             return new List<string> { AgentSelectedToken };
         }
 
-        // 像条目编号吗：纯数字且带"-"（如 0101-01）。
-        // 材料编号没有"-"（如 1294861）；定额编号含字母（含 LY-21 及 ZLF/TLF/SH/SQ 等特殊编号）。
-        // 两类都不是条目编号，单写时按定额过滤（作用于当前条目下该编号）。
+        // 像条目编号吗：带"-"的章节编号（如 0101-01），或 1~4 位纯数字（如 0305）。
+        // 材料编号是超过 4 位的纯数字（如 1294861）；定额编号含字母（含 LY-21 及 ZLF/TLF/SH/SQ 等特殊编号）。
+        // 材料编号和定额编号都不是条目编号，单写时按定额过滤（作用于当前条目下该编号）。
         private static bool LooksLikeAgentItemNo(string token)
         {
             if (String.IsNullOrEmpty(token))
@@ -250,7 +253,7 @@ namespace RecoNet
                 }
             }
 
-            return hasDigit && hasDash;   // 纯数字且带"-" -> 条目编号；纯数字无"-" -> 材料编号（当定额过滤）
+            return hasDigit && (hasDash || IsAgentShortNumericItemNo(token));
         }
 
         // 把"操作/内容"之前的位置参数解析成 条目/定额 过滤。四个字段命令与定额调整共用同一规则：
@@ -269,7 +272,7 @@ namespace RecoNet
             }
             else if (lead.Count == 1)
             {
-                if (command.QuotaFilter.Count > 0 || LooksLikeAgentItemNo(lead[0]))
+                if (command.QuotaFilter.Count > 0 || LooksLikeAgentItemNo(lead[0]) || LooksLikeAgentRemoveItemList(lead[0]))
                 {
                     command.Items = SplitAgentList(lead[0]);
                 }
@@ -303,6 +306,11 @@ namespace RecoNet
             return true;
         }
 
+        private static bool IsAgentShortNumericItemNo(string token)
+        {
+            return IsAgentDigits(token) && token.Length <= 4;
+        }
+
         private static bool LooksLikeAgentRemoveItemList(string token)
         {
             List<string> values = SplitAgentList(token);
@@ -318,7 +326,7 @@ namespace RecoNet
                     continue;
                 }
 
-                if (!LooksLikeAgentItemNo(value) && !IsAgentDigits(value))
+                if (!LooksLikeAgentItemNo(value) && !IsAgentShortNumericItemNo(value))
                 {
                     return false;
                 }
@@ -354,9 +362,11 @@ namespace RecoNet
                 AgentParseResult segResult;
                 if (!TryParseAgentFallback(segTrim, out segResult))
                 {
-                    // 含分号但某段不是确定性命令 -> 整体交给 AI 处理。
+                    combined.Error = "第 " + index.ToString(CultureInfo.InvariantCulture) + " 段不是可识别的确定性语法：" + segTrim +
+                        "。列表请用顿号\"、\"分隔（如 0305、0306）；分号\"；\"只用于分隔多条完整命令。";
+                    combined.Commands.Clear();
                     result = combined;
-                    return false;
+                    return true;
                 }
 
                 if (!String.IsNullOrEmpty(segResult.Error))
