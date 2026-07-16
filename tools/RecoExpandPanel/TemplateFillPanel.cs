@@ -463,52 +463,199 @@ namespace RecoNet
             // 右侧表格：当前树节点范围内的定额平铺（“调整”列不显示，写入时仍随源行完整复制）。
             private void FillGrid()
             {
-                grid.Rows.Clear();
-                string scope = currentTreeScope ?? "";
-                bool nameDriven = preview.Any(p => p.IsNameDriven);
-                Dictionary<int, FillPreviewItem> nameLeaders = preview
-                    .Where(item => item != null && item.IsNameDriven && item.GroupOrder == 0)
-                    .GroupBy(item => item.TargetRow)
-                    .ToDictionary(group => group.Key, group => group.First());
-                IEnumerable<FillPreviewItem> ordered = preview
-                    .Where(item => String.IsNullOrEmpty(scope) || IsItemNoUnderChapter(item.ItemNo ?? "", scope));
-                ordered = nameDriven
-                    ? ordered.OrderBy(item => item.TargetRow).ThenBy(item => item.GroupOrder)
-                    : ordered.OrderBy(item => item.ItemNo ?? "", StringComparer.OrdinalIgnoreCase).ThenBy(item => item.OrderInItem);
-                foreach (FillPreviewItem it in ordered)
+                bool previousUpdating = updatingNameQuotaCell;
+                updatingNameQuotaCell = true;
+                try
                 {
-                    string statusText = String.IsNullOrEmpty(it.Status) ? (it.AlignNote ?? "") : it.Status;
-                    int idx = grid.Rows.Add(it.Selected, it.QuotaCode,
-                        it.SourceName, it.Unit ?? "", it.TargetName, it.QuantityText, statusText);
-                    DataGridViewRow row = grid.Rows[idx];
-                    row.Tag = it;
-                    FillPreviewItem leader;
-                    nameLeaders.TryGetValue(it.TargetRow, out leader);
-                    bool hasCandidates = it.GroupOrder == 0 && it.NameQuotaCandidates != null && it.NameQuotaCandidates.Count > 1;
-                    bool requiresChoice = leader != null && leader.NeedExactNameConfirmation &&
-                        leader.NameQuotaCandidates != null && leader.NameQuotaCandidates.Count > 1;
-                    row.Cells["code"].ReadOnly = !hasCandidates;
-                    if (hasCandidates)
+                    grid.Rows.Clear();
+                    string scope = currentTreeScope ?? "";
+                    bool nameDriven = preview.Any(p => p.IsNameDriven);
+                    Dictionary<int, FillPreviewItem> nameLeaders = preview
+                        .Where(item => item != null && item.IsNameDriven && item.GroupOrder == 0)
+                        .GroupBy(item => item.TargetRow)
+                        .ToDictionary(group => group.Key, group => group.First());
+                    IEnumerable<FillPreviewItem> ordered = preview
+                        .Where(item => String.IsNullOrEmpty(scope) || IsItemNoUnderChapter(item.ItemNo ?? "", scope));
+                    ordered = nameDriven
+                        ? ordered.OrderBy(item => item.TargetRow).ThenBy(item => item.GroupOrder)
+                        : ordered.OrderBy(item => item.ItemNo ?? "", StringComparer.OrdinalIgnoreCase).ThenBy(item => item.OrderInItem);
+                    foreach (FillPreviewItem item in ordered)
                     {
-                        row.Cells["code"].ToolTipText = "点击选择该工程量名称绑定的定额或组件组";
+                        int index = grid.Rows.Add();
+                        FillPreviewItem leader;
+                        nameLeaders.TryGetValue(item.TargetRow, out leader);
+                        SetGridRow(grid.Rows[index], item, leader);
                     }
-                    if (requiresChoice)
-                    {
-                        if (it.GroupOrder > 0)
-                        {
-                            row.Cells["sel"].ReadOnly = true;
-                            row.Cells["sel"].ToolTipText = "请在组首勾选接受当前候选，或在定额编号列切换绑定组";
-                        }
-                        else
-                        {
-                            row.Cells["sel"].ToolTipText = "勾选接受当前候选；点击定额编号可切换绑定组";
-                        }
-                    }
-                    if (it.NeedExactNameConfirmation || !String.IsNullOrEmpty(it.Status))
-                        row.DefaultCellStyle.BackColor = Color.MistyRose;
-                    else if (it.NeedManualQuota)
-                        row.DefaultCellStyle.BackColor = Color.FromArgb(255, 246, 196);
                 }
+                finally
+                {
+                    updatingNameQuotaCell = previousUpdating;
+                }
+            }
+
+            private void SetGridRow(DataGridViewRow row, FillPreviewItem item, FillPreviewItem leader)
+            {
+                int codeIndex = grid.Columns["code"].Index;
+                if (row.Cells[codeIndex] is DataGridViewComboBoxCell)
+                {
+                    row.Cells[codeIndex] = new DataGridViewTextBoxCell();
+                }
+
+                string statusText = String.IsNullOrEmpty(item.Status) ? (item.AlignNote ?? "") : item.Status;
+                row.SetValues(item.Selected, item.QuotaCode, item.SourceName, item.Unit ?? "",
+                    item.TargetName, item.QuantityText, statusText);
+                row.Tag = item;
+                row.Cells["sel"].ReadOnly = false;
+                row.Cells["sel"].ToolTipText = "";
+                row.Cells["code"].ToolTipText = "";
+                row.DefaultCellStyle.BackColor = Color.Empty;
+
+                bool hasCandidates = item.GroupOrder == 0 && item.NameQuotaCandidates != null &&
+                    item.NameQuotaCandidates.Count > 1;
+                bool requiresChoice = leader != null && leader.NeedExactNameConfirmation &&
+                    leader.NameQuotaCandidates != null && leader.NameQuotaCandidates.Count > 1;
+                row.Cells["code"].ReadOnly = !hasCandidates;
+                if (hasCandidates)
+                {
+                    row.Cells["code"].ToolTipText = "点击选择该工程量名称绑定的定额或组件组";
+                }
+                if (requiresChoice)
+                {
+                    if (item.GroupOrder > 0)
+                    {
+                        row.Cells["sel"].ReadOnly = true;
+                        row.Cells["sel"].ToolTipText = "请在组首勾选接受当前候选，或在定额编号列切换绑定组";
+                    }
+                    else
+                    {
+                        row.Cells["sel"].ToolTipText = "勾选接受当前候选；点击定额编号可切换绑定组";
+                    }
+                }
+                if (item.NeedExactNameConfirmation || !String.IsNullOrEmpty(item.Status))
+                    row.DefaultCellStyle.BackColor = Color.MistyRose;
+                else if (item.NeedManualQuota)
+                    row.DefaultCellStyle.BackColor = Color.FromArgb(255, 246, 196);
+            }
+
+            private sealed class TemplateFillGridViewState
+            {
+                public int FirstDisplayedIndex = -1;
+                public bool HasTopKey;
+                public int TopTargetRow;
+                public int TopGroupOrder;
+                public bool HasCurrentKey;
+                public int CurrentTargetRow;
+                public int CurrentGroupOrder;
+                public int CurrentColumnIndex = -1;
+                public int HorizontalOffset;
+            }
+
+            private TemplateFillGridViewState CaptureGridViewState()
+            {
+                TemplateFillGridViewState state = new TemplateFillGridViewState();
+                state.HorizontalOffset = grid.HorizontalScrollingOffset;
+                if (grid.Rows.Count == 0) return state;
+
+                try { state.FirstDisplayedIndex = grid.FirstDisplayedScrollingRowIndex; }
+                catch { state.FirstDisplayedIndex = -1; }
+                if (state.FirstDisplayedIndex >= 0 && state.FirstDisplayedIndex < grid.Rows.Count)
+                {
+                    FillPreviewItem top = grid.Rows[state.FirstDisplayedIndex].Tag as FillPreviewItem;
+                    if (top != null)
+                    {
+                        state.HasTopKey = true;
+                        state.TopTargetRow = top.TargetRow;
+                        state.TopGroupOrder = top.GroupOrder;
+                    }
+                }
+                if (grid.CurrentCell != null && grid.CurrentCell.RowIndex >= 0)
+                {
+                    FillPreviewItem current = grid.Rows[grid.CurrentCell.RowIndex].Tag as FillPreviewItem;
+                    if (current != null)
+                    {
+                        state.HasCurrentKey = true;
+                        state.CurrentTargetRow = current.TargetRow;
+                        state.CurrentGroupOrder = current.GroupOrder;
+                        state.CurrentColumnIndex = grid.CurrentCell.ColumnIndex;
+                    }
+                }
+                return state;
+            }
+
+            private int FindGridRowIndex(int targetRow, int groupOrder)
+            {
+                foreach (DataGridViewRow row in grid.Rows)
+                {
+                    FillPreviewItem item = row.Tag as FillPreviewItem;
+                    if (item != null && item.TargetRow == targetRow && item.GroupOrder == groupOrder)
+                        return row.Index;
+                }
+                return -1;
+            }
+
+            private void RestoreGridViewState(TemplateFillGridViewState state)
+            {
+                if (state == null || grid.Rows.Count == 0) return;
+
+                int currentIndex = state.HasCurrentKey
+                    ? FindGridRowIndex(state.CurrentTargetRow, state.CurrentGroupOrder) : -1;
+                if (currentIndex < 0 && state.HasCurrentKey)
+                    currentIndex = FindGridRowIndex(state.CurrentTargetRow, 0);
+                if (currentIndex >= 0 && state.CurrentColumnIndex >= 0 &&
+                    state.CurrentColumnIndex < grid.Columns.Count)
+                    grid.CurrentCell = grid.Rows[currentIndex].Cells[state.CurrentColumnIndex];
+
+                int topIndex = state.HasTopKey ? FindGridRowIndex(state.TopTargetRow, state.TopGroupOrder) : -1;
+                if (topIndex < 0 && state.FirstDisplayedIndex >= 0)
+                    topIndex = Math.Min(state.FirstDisplayedIndex, grid.Rows.Count - 1);
+                if (topIndex >= 0)
+                {
+                    try { grid.FirstDisplayedScrollingRowIndex = topIndex; }
+                    catch { }
+                }
+                try { grid.HorizontalScrollingOffset = Math.Max(0, state.HorizontalOffset); }
+                catch { }
+            }
+
+            private bool RefreshTargetGroupInGrid(int targetRow)
+            {
+                List<DataGridViewRow> existing = grid.Rows.Cast<DataGridViewRow>()
+                    .Where(row =>
+                    {
+                        FillPreviewItem item = row.Tag as FillPreviewItem;
+                        return item != null && item.IsNameDriven && item.TargetRow == targetRow;
+                    })
+                    .OrderBy(row => row.Index)
+                    .ToList();
+                List<FillPreviewItem> desired = preview
+                    .Where(item => item != null && item.IsNameDriven && item.TargetRow == targetRow &&
+                        (String.IsNullOrEmpty(currentTreeScope) || IsItemNoUnderChapter(item.ItemNo ?? "", currentTreeScope)))
+                    .OrderBy(item => item.GroupOrder)
+                    .ToList();
+                if (existing.Count == 0 || desired.Count == 0) return false;
+
+                TemplateFillGridViewState state = CaptureGridViewState();
+                int insertAt = existing[0].Index;
+                bool previousUpdating = updatingNameQuotaCell;
+                updatingNameQuotaCell = true;
+                try
+                {
+                    grid.EndEdit();
+                    for (int i = existing.Count - 1; i >= desired.Count; i--)
+                        grid.Rows.RemoveAt(insertAt + i);
+                    for (int i = existing.Count; i < desired.Count; i++)
+                        grid.Rows.Insert(insertAt + i, false, "", "", "", "", "", "");
+
+                    FillPreviewItem leader = desired.FirstOrDefault(item => item.GroupOrder == 0) ?? desired[0];
+                    for (int i = 0; i < desired.Count; i++)
+                        SetGridRow(grid.Rows[insertAt + i], desired[i], leader);
+                }
+                finally
+                {
+                    updatingNameQuotaCell = previousUpdating;
+                }
+                RestoreGridViewState(state);
+                return true;
             }
 
             private bool PrepareNameQuotaDropDown(DataGridViewRow row)
@@ -553,7 +700,9 @@ namespace RecoNet
                 updatingNameQuotaCell = true;
                 try
                 {
-                    if (ApplyExactNameCandidate(preview, item.TargetRow, option.Key)) FillGrid();
+                    int targetRow = item.TargetRow;
+                    if (ApplyExactNameCandidate(preview, targetRow, option.Key))
+                        RefreshTargetGroupInGrid(targetRow);
                 }
                 finally { updatingNameQuotaCell = false; }
             }
@@ -567,7 +716,9 @@ namespace RecoNet
                 updatingNameQuotaCell = true;
                 try
                 {
-                    if (ConfirmCurrentExactNameGroup(preview, item.TargetRow)) FillGrid();
+                    int targetRow = item.TargetRow;
+                    if (ConfirmCurrentExactNameGroup(preview, targetRow))
+                        RefreshTargetGroupInGrid(targetRow);
                 }
                 finally { updatingNameQuotaCell = false; }
             }
@@ -796,7 +947,7 @@ namespace RecoNet
                     if (replacements.Count == 0) return;
 
                     if (!ReplacePreviewTargetGroup(preview, groupLeader.TargetRow, replacements)) return;
-                    FillGrid();
+                    RefreshTargetGroupInGrid(groupLeader.TargetRow);
                 }
                 catch (Exception ex) { MessageBox.Show(this, "绑定失败：" + ex.Message, "模板铺量"); }
             }

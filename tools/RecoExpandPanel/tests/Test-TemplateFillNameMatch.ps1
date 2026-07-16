@@ -330,6 +330,84 @@ try {
         throw '界面选择组件候选后应取消红色'
     }
     Write-Host 'PASS 定额候选下拉与组件组界面确认'
+
+    $scrollPanel = $panelCtor.Invoke([object[]]@($mainForm.PSObject.BaseObject))
+    try {
+        $scrollPreview = $panelType.GetField('preview', $flags).GetValue($scrollPanel)
+        for ($rowNo = 1; $rowNo -le 40; $rowNo++) {
+            $filler = New-PreviewItem $rowNo 0 "工程量$rowNo"
+            $itemType.GetField('QuotaCode', $flags).SetValue($filler, "Q-$rowNo")
+            $scrollPreview.Add($filler)
+        }
+
+        $scrollLeader = $scrollPreview[29]
+        $itemType.GetField('QuotaCode', $flags).SetValue($scrollLeader, 'Q-A')
+        $itemType.GetField('NeedExactNameConfirmation', $flags).SetValue($scrollLeader, $true)
+        $itemType.GetField('Selected', $flags).SetValue($scrollLeader, $false)
+        $scrollCandidates = [Activator]::CreateInstance($itemType.GetField('NameQuotaCandidates', $flags).FieldType)
+
+        $scrollCandidateA = [Activator]::CreateInstance($candidateType)
+        $candidateType.GetField('Key', $flags).SetValue($scrollCandidateA, 'group-a')
+        $candidateType.GetField('Label', $flags).SetValue($scrollCandidateA, 'Q-A')
+        $scrollCandidateAItem = New-PreviewItem 30 0 '工程量30'
+        $itemType.GetField('QuotaCode', $flags).SetValue($scrollCandidateAItem, 'Q-A')
+        $candidateType.GetField('Items', $flags).GetValue($scrollCandidateA).Add($scrollCandidateAItem)
+        $scrollCandidates.Add($scrollCandidateA)
+
+        $scrollCandidateB = [Activator]::CreateInstance($candidateType)
+        $candidateType.GetField('Key', $flags).SetValue($scrollCandidateB, 'group-b')
+        $candidateType.GetField('Label', $flags).SetValue($scrollCandidateB, 'Q-B + M-B（组件2条）')
+        foreach ($definition in @(@('Q-B', '工程量30'), @('M-B', ''))) {
+            $order = $candidateType.GetField('Items', $flags).GetValue($scrollCandidateB).Count
+            $member = New-PreviewItem 30 $order $definition[1]
+            $itemType.GetField('QuotaCode', $flags).SetValue($member, $definition[0])
+            $candidateType.GetField('Items', $flags).GetValue($scrollCandidateB).Add($member)
+        }
+        $scrollCandidates.Add($scrollCandidateB)
+        $itemType.GetField('NameQuotaCandidates', $flags).SetValue($scrollLeader, $scrollCandidates)
+        $itemType.GetField('SelectedNameQuotaCandidateKey', $flags).SetValue($scrollLeader, 'group-a')
+
+        $panelType.GetMethod('FillGrid', $flags).Invoke($scrollPanel, $null)
+        $scrollPanel.Show()
+        [System.Windows.Forms.Application]::DoEvents()
+        $scrollGrid = $panelType.GetField('grid', $flags).GetValue($scrollPanel)
+        $scrollGrid.CurrentCell = $scrollGrid.Rows[29].Cells['sel']
+        $scrollGrid.FirstDisplayedScrollingRowIndex = 15
+        [System.Windows.Forms.Application]::DoEvents()
+        $topTargetBefore = ($scrollGrid.Rows[$scrollGrid.FirstDisplayedScrollingRowIndex].Tag).TargetRow
+        $unaffectedRow = $scrollGrid.Rows[5]
+
+        $updatingField = $panelType.GetField('updatingNameQuotaCell', $flags)
+        $updatingField.SetValue($scrollPanel, $true)
+        try { $scrollGrid.Rows[29].Cells['sel'].Value = $true }
+        finally { $updatingField.SetValue($scrollPanel, $false) }
+        $panelType.GetMethod('ConfirmExactNameFromCheck', $flags).Invoke(
+            $scrollPanel, @($scrollGrid.Rows[29].PSObject.BaseObject))
+
+        $topTargetAfterCheck = ($scrollGrid.Rows[$scrollGrid.FirstDisplayedScrollingRowIndex].Tag).TargetRow
+        if ($topTargetAfterCheck -ne $topTargetBefore -or
+            -not [Object]::ReferenceEquals($unaffectedRow, $scrollGrid.Rows[5])) {
+            throw '勾选确认不得整表刷新或改变顶部可见工程量'
+        }
+
+        $scrollLeaderRow = @($scrollGrid.Rows | Where-Object {
+            $_.Tag.TargetRow -eq 30 -and $_.Tag.GroupOrder -eq 0
+        })[0]
+        $panelType.GetMethod('ApplyNameQuotaOption', $flags).Invoke(
+            $scrollPanel, @($scrollLeaderRow.PSObject.BaseObject, 'Q-B + M-B（组件2条）'))
+        $scrollTargetRows = @($scrollGrid.Rows | Where-Object { $_.Tag.TargetRow -eq 30 })
+        $topTargetAfterChoice = ($scrollGrid.Rows[$scrollGrid.FirstDisplayedScrollingRowIndex].Tag).TargetRow
+        if ($scrollTargetRows.Count -ne 2 -or $scrollTargetRows[0].Cells['code'].Value -ne 'Q-B' -or
+            $scrollTargetRows[1].Cells['code'].Value -ne 'M-B' -or $topTargetAfterChoice -ne $topTargetBefore -or
+            -not [Object]::ReferenceEquals($unaffectedRow, $scrollGrid.Rows[5])) {
+            throw '候选切换必须只增删当前组并保持滚动视口'
+        }
+        Write-Host 'PASS 勾选和候选切换仅局部刷新并保持滚动视口'
+    }
+    finally {
+        $scrollPanel.Close()
+        $scrollPanel.Dispose()
+    }
 }
 finally {
     if ($null -ne $panel) { $panel.Dispose() }
