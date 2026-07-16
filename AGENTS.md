@@ -54,11 +54,13 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - PowerShell 反射验证脚本如果包含中文路径或中文测试文本，优先在当前 shell 直接执行，或保存为 UTF-8 脚本文件后用 `-File` 执行；不要把 here-string 管道给子 `powershell.exe -`，否则中文路径可能被管道编码破坏。
 - 在 PowerShell 中再调用 `powershell.exe -Command` 且子命令包含 `$变量` 时，优先把子命令保存为脚本后用 `-File`，或用单引号整体隔离子命令；不要让父级 PowerShell 提前展开子命令变量。
 - PowerShell 直接调用 `csc.exe` 时，先把输出和引用文件路径赋给变量，再传 `/out:$变量`、`/reference:$变量`；不要写 `/out:(Join-Path ...)` 或 `/reference:(Join-Path ...)`，否则 `csc` 会收到空路径参数。
+- `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 默认加载 `RecoQuotaRecommend/bin/RecoExpandPanel.dll`，不会自动编译当前源码；做源码级红绿回归时，应先把当前 14 个 C# 文件编译到工作区 `obj` 验证目录并设置 `RECO_EXPAND_DLL`，避免把旧 DLL 的结果误判为新代码结果。
 - 读取 UTF-8 附件或中文文本时，如 PowerShell `Get-Content` 输出乱码，先设置 `[Console]::OutputEncoding`，并优先用 `[System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes(...))` 按字节解码验证内容。
 - PowerShell 部署/验证脚本需要格式化多段 `foreach` 输出时，优先先收集到数组或 `List[object]` 再统一 `Format-Table`；不要把脚本块闭合后直接接管道，容易触发 `An empty pipe element is not allowed` 解析错误。
 - Windows PowerShell 中用 `rg` 搜索指定目录文件时，优先写 `rg -n "pattern" -S path` 或用 `rg --files -g "*.cs"` 先列文件；不要把 `目录\*.cs` 当作路径参数传给 `rg`，容易被解析成非法路径。
 - GitHub 推送报 `Failed to connect ... via 127.0.0.1` 时，先分别检查 Git `http.proxy`/`https.proxy` 与 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 环境变量；若本地代理端口失效或不一致，先在单次命令中临时清空环境代理并用 `git -c http.proxy= -c https.proxy=` 做 `ls-remote` 直连验证；不要未经用户确认修改全局代理配置。
 - Git 暂存范围包含中文或其他非 ASCII 路径时，使用 `git -c core.quotepath=false diff --cached --name-only` 获取可比较的真实路径；不要直接比较默认的八进制转义输出。
+- PowerShell 接收原生命令输出后需要使用 `.Count` 或 `[0]` 校验时，应写成 `[string[]]$items = @(...)`；单行输出若保留为普通字符串，`[0]` 只会得到首字符，可能造成错误的范围校验失败。
 - Windows 上用 `git archive` + `tar` 生成干净构建快照时，如果仓库包含大量中文文件名，应把归档范围限制为实际参与构建的源码子树（如 `tools/RecoExpandPanel`），并核对源码文件数量；不要无条件归档整个仓库，避免 `tar` 因中文路径解码失败。
 - 修改已含中文字符串的 C# 源码时，避免用 PowerShell `Set-Content` 默认编码整文件重写；优先用补丁方式，必要时用 `.NET UTF8Encoding(false)` 并把新增中文字符串写成 `\u` 转义，防止产生无关编码差异。
 - C# 5 代码中不要在 `||`/`&&` 短路条件里依赖 `out` 参数一定赋值；用于错误文案的 `out` 变量先给默认值，避免 `CS0165`。
