@@ -680,6 +680,30 @@ namespace RecoNet
                 }
             }
 
+            private static string ResolveTemplateFillQuotaUnit(SqlConnection conn, DataGridViewRow row, long quotaSequence)
+            {
+                string unit = GetRowValue(row, "单位", "定额单位", "计量单位").Trim();
+                if (!String.IsNullOrWhiteSpace(unit)) return unit;
+                if (conn == null || quotaSequence <= 0) return "";
+
+                try
+                {
+                    EnsureOpen(conn);
+                    using (SqlCommand cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "select top 1 单位 from 定额输入 where 定额序号=@seq";
+                        cmd.Parameters.AddWithValue("@seq", quotaSequence);
+                        object value = cmd.ExecuteScalar();
+                        return value == null || value == DBNull.Value ? "" : Convert.ToString(value).Trim();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log("ResolveTemplateFillQuotaUnit failed: " + ex.Message);
+                    return "";
+                }
+            }
+
             // 右键：把软件定额输入表当前选中的一行，绑定为该预览行的复制来源（含所在条目）。
             // 注意：与"绑定Excel工程量"同款用主程序共享连接（克隆连接在部分环境登录失败，
             // 会导致 ResolveQuotaSequence 查不到序号）；共享连接不得 using 释放。
@@ -752,7 +776,7 @@ namespace RecoNet
                         target.ChosenItemSeq = itemSeq;
                         target.ChosenItemNo = itemNo;
                         target.ItemNo = itemNo;
-                        target.Unit = GetRowValue(row, "单位", "定额单位");
+                        target.Unit = ResolveTemplateFillQuotaUnit(conn, row, link.QuotaSequence);
                         string qtyBase = String.IsNullOrEmpty(groupLeader.TargetQuantityText) ? groupLeader.QuantityText : groupLeader.TargetQuantityText;
                         target.QuantityText = BuildNameDrivenQtyText(qtyBase, groupLeader.TargetUnit, target.Unit);
                         target.NeedManualQuota = false;

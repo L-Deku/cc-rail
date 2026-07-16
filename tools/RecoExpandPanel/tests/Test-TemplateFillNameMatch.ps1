@@ -249,6 +249,25 @@ try {
         throw "目标 Excel 与目标 sheet 联动失败: '$selectedPath' / '$($targetSheetBox.Text)'"
     }
     Write-Host 'PASS 目标 Excel 与目标 sheet 面板联动'
+
+    $resolveUnit = $panelType.GetMethod('ResolveTemplateFillQuotaUnit', $flags)
+    if ($null -eq $resolveUnit) { throw '缺少模板铺量临时绑定单位解析入口' }
+    $unitGrid = New-Object System.Windows.Forms.DataGridView
+    try {
+        [void]$unitGrid.Columns.Add('计量单位', '计量单位')
+        [void]$unitGrid.Rows.Add('hm')
+        $resolvedUnit = $resolveUnit.Invoke($null,
+            [object[]]@($null, $unitGrid.Rows[0].PSObject.BaseObject, [long]0))
+        if ($resolvedUnit -ne 'hm') { throw "临时绑定没有读取计量单位: '$resolvedUnit'" }
+    }
+    finally { $unitGrid.Dispose() }
+
+    $buildQty = $type.GetMethod('BuildNameDrivenQtyText', $flags)
+    if ($buildQty.Invoke($null, @('1400', 'm', 'hm')) -ne '1400/100') {
+        throw '右键临时绑定 m 到 hm 应生成 1400/100'
+    }
+    Write-Host 'PASS 临时绑定读取计量单位并按 m 到 hm 生成 1400/100'
+
     $panelPreview = $panelType.GetField('preview', $flags).GetValue($panel)
     $uiLeader = New-PreviewItem 60 0 '重复工程量'
     $itemType.GetField('QuotaCode', $flags).SetValue($uiLeader, 'DY-959')
