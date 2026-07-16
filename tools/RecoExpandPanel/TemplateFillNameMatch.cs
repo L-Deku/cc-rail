@@ -740,7 +740,7 @@ namespace RecoNet
                         {
                             if (operandIndex != targetIndex && !mergedIntoByTargetIdx.ContainsKey(operandIndex))
                             {
-                                mergedIntoByTargetIdx[operandIndex] = "已并入第 " +
+                                mergedIntoByTargetIdx[operandIndex] = "同时参与第 " +
                                     target.Row.ToString(CultureInfo.InvariantCulture) + " 行的表达式取数";
                             }
                         }
@@ -799,6 +799,50 @@ namespace RecoNet
                 }
             }
             return result;
+        }
+
+        private static string AppendPreviewNote(string current, string note)
+        {
+            if (String.IsNullOrWhiteSpace(note)) return current ?? "";
+            if (String.IsNullOrWhiteSpace(current)) return note;
+            if (current.IndexOf(note, StringComparison.Ordinal) >= 0) return current;
+            return current + "；" + note;
+        }
+
+        private static void ApplyMergedExpressionNotes(List<FillPreviewItem> items,
+            List<TargetQtyRow> targetRows, Dictionary<int, string> notesByTargetIndex)
+        {
+            if (items == null || targetRows == null || notesByTargetIndex == null) return;
+            foreach (KeyValuePair<int, string> pair in notesByTargetIndex)
+            {
+                if (pair.Key < 0 || pair.Key >= targetRows.Count) continue;
+                int targetRow = targetRows[pair.Key].Row;
+                List<FillPreviewItem> group = items
+                    .Where(item => item != null && item.IsNameDriven && item.TargetRow == targetRow)
+                    .OrderBy(item => item.GroupOrder)
+                    .ToList();
+                if (group.Count == 0) continue;
+
+                FillPreviewItem leader = group[0];
+                bool hasIndependentQuota = group.Any(item => !String.IsNullOrWhiteSpace(item.QuotaCode));
+                if (hasIndependentQuota)
+                {
+                    if (!String.IsNullOrWhiteSpace(leader.Status))
+                    {
+                        leader.Status = AppendPreviewNote(leader.Status, pair.Value);
+                    }
+                    else
+                    {
+                        leader.AlignNote = AppendPreviewNote(leader.AlignNote, pair.Value);
+                    }
+                    continue;
+                }
+
+                leader.Status = "";
+                leader.AlignNote = pair.Value + "，无独立定额匹配";
+                leader.Selected = false;
+                leader.NeedManualQuota = false;
+            }
         }
 
         // 名字驱动套用：以目标 Excel 工程量行为主序，逐行匹配定额。返回 items 已按 Excel 行序。
@@ -874,26 +918,6 @@ namespace RecoNet
             for (int trIdx = 0; trIdx < targetRows.Count; trIdx++)
             {
                 TargetQtyRow tr = targetRows[trIdx];
-
-                string mergedNote;
-                if (mergedIntoByTargetIdx.TryGetValue(trIdx, out mergedNote))
-                {
-                    FillPreviewItem mergedItem = new FillPreviewItem();
-                    mergedItem.IsNameDriven = true;
-                    mergedItem.TemplateName = template.Name;
-                    mergedItem.TargetRow = tr.Row;
-                    mergedItem.TargetName = tr.DisplayName;
-                    mergedItem.TargetFullName = tr.RawName;
-                    mergedItem.TargetChapter = tr.Chapter;
-                    mergedItem.TargetUnit = tr.Unit;
-                    mergedItem.TargetQuantityText = tr.QuantityText;
-                    mergedItem.QuantityText = tr.QuantityText;
-                    mergedItem.AlignNote = mergedNote;
-                    mergedItem.Selected = false;
-                    mergedItem.NeedManualQuota = false;
-                    items.Add(mergedItem);
-                    continue;
-                }
 
                 FillPreviewItem item = new FillPreviewItem();
                 item.IsNameDriven = true;
@@ -1034,6 +1058,7 @@ namespace RecoNet
                 }
                 items.Add(item);
             }
+            ApplyMergedExpressionNotes(items, targetRows, mergedIntoByTargetIdx);
             return items;
         }
 
