@@ -142,8 +142,9 @@ function New-PreviewItem([int]$row, [int]$order, [string]$name) {
 
 $candidateType = $type.GetNestedType('NameQuotaCandidateGroup', $flags)
 $confirmExact = $type.GetMethod('ConfirmSingleExactNameGroup', $flags)
+$confirmCurrent = $type.GetMethod('ConfirmCurrentExactNameGroup', $flags)
 $applyCandidate = $type.GetMethod('ApplyExactNameCandidate', $flags)
-if ($null -eq $candidateType -or $null -eq $confirmExact -or $null -eq $applyCandidate) {
+if ($null -eq $candidateType -or $null -eq $confirmExact -or $null -eq $confirmCurrent -or $null -eq $applyCandidate) {
     throw '缺少重复名称候选或确认入口'
 }
 
@@ -186,7 +187,33 @@ if ($choiceItems.Count -ne 2 -or $choiceItems[0].QuotaCode -ne 'DY-519' -or $cho
 if (@($choiceItems | Where-Object { -not $_.Selected -or $_.NeedExactNameConfirmation }).Count -ne 0) {
     throw '候选选择后应整组勾选并取消红色确认状态'
 }
-Write-Host 'PASS 重复名称唯一确认与候选整组切换'
+
+$defaultItems = [Activator]::CreateInstance($itemListType)
+$defaultLeader = New-PreviewItem 55 0 '默认候选工程量'
+$itemType.GetField('QuotaCode', $flags).SetValue($defaultLeader, 'DY-959')
+$itemType.GetField('NeedExactNameConfirmation', $flags).SetValue($defaultLeader, $true)
+$itemType.GetField('Selected', $flags).SetValue($defaultLeader, $false)
+$defaultCandidates = [Activator]::CreateInstance($itemType.GetField('NameQuotaCandidates', $flags).FieldType)
+foreach ($definition in @(@('group-a', 'DY-959'), @('group-b', 'DY-942'))) {
+    $option = [Activator]::CreateInstance($candidateType)
+    $candidateType.GetField('Key', $flags).SetValue($option, $definition[0])
+    $candidateType.GetField('Label', $flags).SetValue($option, $definition[1])
+    $optionItem = New-PreviewItem 55 0 '默认候选工程量'
+    $itemType.GetField('QuotaCode', $flags).SetValue($optionItem, $definition[1])
+    $candidateType.GetField('Items', $flags).GetValue($option).Add($optionItem)
+    $defaultCandidates.Add($option)
+}
+$itemType.GetField('NameQuotaCandidates', $flags).SetValue($defaultLeader, $defaultCandidates)
+$itemType.GetField('SelectedNameQuotaCandidateKey', $flags).SetValue($defaultLeader, 'group-a')
+$defaultItems.Add($defaultLeader)
+if (-not $confirmCurrent.Invoke($null, [object[]]@($defaultItems.PSObject.BaseObject, 55))) {
+    throw '当前默认候选应允许直接确认'
+}
+if ($defaultItems.Count -ne 1 -or $defaultItems[0].QuotaCode -ne 'DY-959' -or
+    -not $defaultItems[0].Selected -or $defaultItems[0].NeedExactNameConfirmation) {
+    throw '直接确认必须接受当前显示候选并取消确认状态'
+}
+Write-Host 'PASS 重复名称唯一确认、默认候选确认与候选整组切换'
 
 $panelType = $type.GetNestedType('TemplateFillPanel', $flags)
 $panelCtor = @($panelType.GetConstructors($flags) | Where-Object { $_.GetParameters().Count -eq 1 })[0]
@@ -231,9 +258,12 @@ try {
     $uiCandidates = [Activator]::CreateInstance($itemType.GetField('NameQuotaCandidates', $flags).FieldType)
     $uiFirst = [Activator]::CreateInstance($candidateType)
     $candidateType.GetField('Key', $flags).SetValue($uiFirst, 'group-a')
-    $candidateType.GetField('Label', $flags).SetValue($uiFirst, 'DY-959 明配钢管')
-    $candidateType.GetField('Items', $flags).GetValue($uiFirst).Add((New-PreviewItem 60 0 '重复工程量'))
-    $itemType.GetField('QuotaCode', $flags).SetValue($candidateType.GetField('Items', $flags).GetValue($uiFirst)[0], 'DY-959')
+    $candidateType.GetField('Label', $flags).SetValue($uiFirst, 'DY-959 + ZLF*1.01（组件2条）')
+    $uiFirstItems = $candidateType.GetField('Items', $flags).GetValue($uiFirst)
+    $uiFirstItems.Add((New-PreviewItem 60 0 '重复工程量'))
+    $uiFirstItems.Add((New-PreviewItem 60 1 ''))
+    $itemType.GetField('QuotaCode', $flags).SetValue($uiFirstItems[0], 'DY-959')
+    $itemType.GetField('QuotaCode', $flags).SetValue($uiFirstItems[1], 'ZLF*1.01')
     $uiCandidates.Add($uiFirst)
 
     $uiSecond = [Activator]::CreateInstance($candidateType)
@@ -248,11 +278,17 @@ try {
     $itemType.GetField('NameQuotaCandidates', $flags).SetValue($uiLeader, $uiCandidates)
     $itemType.GetField('SelectedNameQuotaCandidateKey', $flags).SetValue($uiLeader, 'group-a')
     $panelPreview.Add($uiLeader)
+    $uiMember = New-PreviewItem 60 1 ''
+    $itemType.GetField('QuotaCode', $flags).SetValue($uiMember, 'ZLF*1.01')
+    $itemType.GetField('NeedExactNameConfirmation', $flags).SetValue($uiMember, $true)
+    $itemType.GetField('Selected', $flags).SetValue($uiMember, $false)
+    $panelPreview.Add($uiMember)
 
     $panelType.GetMethod('FillGrid', $flags).Invoke($panel, $null)
     $uiGrid = $panelType.GetField('grid', $flags).GetValue($panel)
-    if ($uiGrid.Rows.Count -ne 1 -or -not $uiGrid.Rows[0].Cells['sel'].ReadOnly -or $uiGrid.Rows[0].Cells['code'].ReadOnly) {
-        throw '多候选红色行应锁定勾选框并开放定额下拉'
+    if ($uiGrid.Rows.Count -ne 2 -or $uiGrid.Rows[0].Cells['sel'].ReadOnly -or
+        $uiGrid.Rows[0].Cells['code'].ReadOnly -or -not $uiGrid.Rows[1].Cells['sel'].ReadOnly) {
+        throw '多候选当前组首应允许直接勾选并保留下拉，组件组员不得单独确认'
     }
     if ($uiGrid.Rows[0].DefaultCellStyle.BackColor.ToArgb() -ne [System.Drawing.Color]::MistyRose.ToArgb()) {
         throw '多候选未确认行应标红'

@@ -1148,6 +1148,21 @@ namespace RecoNet
             return true;
         }
 
+        internal static bool ConfirmCurrentExactNameGroup(List<FillPreviewItem> all, int targetRow)
+        {
+            FillPreviewItem leader = (all ?? new List<FillPreviewItem>())
+                .Where(item => item != null && item.IsNameDriven && item.TargetRow == targetRow)
+                .OrderBy(item => item.GroupOrder)
+                .FirstOrDefault();
+            if (leader == null) return false;
+            if (leader.NameQuotaCandidates != null && leader.NameQuotaCandidates.Count > 1)
+            {
+                if (String.IsNullOrWhiteSpace(leader.SelectedNameQuotaCandidateKey)) return false;
+                return ApplyExactNameCandidate(all, targetRow, leader.SelectedNameQuotaCandidateKey);
+            }
+            return ConfirmSingleExactNameGroup(all, targetRow);
+        }
+
         internal static bool ApplyExactNameCandidate(List<FillPreviewItem> all, int targetRow, string candidateKey)
         {
             FillPreviewItem leader = (all ?? new List<FillPreviewItem>())

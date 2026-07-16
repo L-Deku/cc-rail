@@ -494,8 +494,15 @@ namespace RecoNet
                     }
                     if (requiresChoice)
                     {
-                        row.Cells["sel"].ReadOnly = true;
-                        row.Cells["sel"].ToolTipText = "请先在定额编号列选择绑定组";
+                        if (it.GroupOrder > 0)
+                        {
+                            row.Cells["sel"].ReadOnly = true;
+                            row.Cells["sel"].ToolTipText = "请在组首勾选接受当前候选，或在定额编号列切换绑定组";
+                        }
+                        else
+                        {
+                            row.Cells["sel"].ToolTipText = "勾选接受当前候选；点击定额编号可切换绑定组";
+                        }
                     }
                     if (it.NeedExactNameConfirmation || !String.IsNullOrEmpty(it.Status))
                         row.DefaultCellStyle.BackColor = Color.MistyRose;
@@ -555,13 +562,12 @@ namespace RecoNet
             {
                 FillPreviewItem item = row == null ? null : row.Tag as FillPreviewItem;
                 bool value = row != null && Convert.ToBoolean(row.Cells["sel"].Value ?? false);
-                if (item == null || !value || !item.NeedExactNameConfirmation ||
-                    (item.NameQuotaCandidates != null && item.NameQuotaCandidates.Count > 1)) return;
+                if (item == null || !value || !item.NeedExactNameConfirmation) return;
 
                 updatingNameQuotaCell = true;
                 try
                 {
-                    if (ConfirmSingleExactNameGroup(preview, item.TargetRow)) FillGrid();
+                    if (ConfirmCurrentExactNameGroup(preview, item.TargetRow)) FillGrid();
                 }
                 finally { updatingNameQuotaCell = false; }
             }
