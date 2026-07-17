@@ -34,6 +34,154 @@ Write-Host "PASS 章节兼容守卫"
 
 $templateType = $type.GetNestedType('FillTemplate', $flags)
 $templateRowType = $type.GetNestedType('FillTemplateRow', $flags)
+
+function Test-WorkbookReadPerformancePaths {
+    $fixturePath = Join-Path ([IO.Path]::GetTempPath()) ("reco-template-fill-" + [Guid]::NewGuid().ToString('N') + '.xlsx')
+    $xlsFixturePath = Join-Path ([IO.Path]::GetTempPath()) ("reco-template-fill-" + [Guid]::NewGuid().ToString('N') + '.xls')
+    $fixtureBook = $null
+    $xlsFixtureBook = $null
+    try {
+        $fixtureBook = New-Object NPOI.XSSF.UserModel.XSSFWorkbook
+        $fixtureSheet = $fixtureBook.CreateSheet('测试表')
+        $fixtureRow = $fixtureSheet.CreateRow(0)
+        $fixtureRow.CreateCell(0).SetCellValue('工程量名称')
+        $fixtureRow.CreateCell(1).SetCellValue([double]123.5)
+        $fixtureRow.CreateCell(2).SetCellValue($true)
+        [void]$fixtureRow.CreateCell(3)
+        $fixtureStream = [IO.File]::Create($fixturePath)
+        try { $fixtureBook.Write($fixtureStream) }
+        finally { $fixtureStream.Dispose() }
+
+        $addresses = [string[]]@('A1', 'B1', 'C1', 'D1', 'E1')
+        $direct = $type.GetMethod('TryReadXlsxTargetCells', $flags)
+        $npoi = $type.GetMethod('TryReadSheetTargetCellsByNpoi', $flags)
+        $directArgs = [object[]]::new(5)
+        $npoiArgs = [object[]]::new(5)
+        $directArgs[0] = $fixturePath.PSObject.BaseObject
+        $directArgs[1] = ([string]'测试表').PSObject.BaseObject
+        $directArgs[2] = $addresses.PSObject.BaseObject
+        $npoiArgs[0] = $fixturePath.PSObject.BaseObject
+        $npoiArgs[1] = ([string]'测试表').PSObject.BaseObject
+        $npoiArgs[2] = $addresses.PSObject.BaseObject
+        if (-not $direct.Invoke($null, $directArgs.PSObject.BaseObject)) { throw "定点读取失败: $($directArgs[4])" }
+        if (-not $npoi.Invoke($null, $npoiArgs.PSObject.BaseObject)) { throw "NPOI读取失败: $($npoiArgs[4])" }
+        foreach ($address in $addresses) {
+            if ($directArgs[3][$address] -ne $npoiArgs[3][$address]) {
+                throw "两套读取器结果不一致 ${address}: '$($directArgs[3][$address])' / '$($npoiArgs[3][$address])'"
+            }
+        }
+        Write-Host 'PASS xlsx 定点读取与 NPOI 结果一致'
+
+        $linkType = $type.GetNestedType('ExcelQuotaLink', $flags)
+        $linkListType = [Collections.Generic.List``1].MakeGenericType($linkType)
+        $links = [Activator]::CreateInstance($linkListType)
+        foreach ($definition in @(@('A1', 'A1+B1'), @('C1', 'C1'))) {
+            $link = [Activator]::CreateInstance($linkType)
+            $linkType.GetProperty('ExcelPath', $flags).SetValue($link, $fixturePath, $null)
+            $linkType.GetProperty('WorksheetName', $flags).SetValue($link, '测试表', $null)
+            $linkType.GetProperty('CellAddress', $flags).SetValue($link, $definition[0], $null)
+            $linkType.GetProperty('Expression', $flags).SetValue($link, $definition[1], $null)
+            $links.Add($link)
+        }
+        $contextType = $type.GetNestedType('ExcelSyncReadContext', $flags)
+        $contextCtor = @($contextType.GetConstructors($flags))[0]
+        $contextCtorArgs = [object[]]::new(1)
+        $contextCtorArgs[0] = $links.PSObject.BaseObject
+        $context = $contextCtor.Invoke($contextCtorArgs)
+        $readCell = $contextType.GetMethod('TryReadWorkbookCellValue', $flags)
+        foreach ($address in @('A1', 'B1', 'C1')) {
+            $readArgs = [object[]]::new(5)
+            $readArgs[0] = $fixturePath.PSObject.BaseObject
+            $readArgs[1] = ([string]'测试表').PSObject.BaseObject
+            $readArgs[2] = ([string]$address).PSObject.BaseObject
+            if (-not $readCell.Invoke($context, $readArgs.PSObject.BaseObject)) { throw "上下文读取失败 ${address}: $($readArgs[4])" }
+        }
+        if ($contextType.GetField('FileSheetReadCount', $flags).GetValue($context) -ne 1) {
+            throw '同一工作表应只加载一次'
+        }
+        $directCountField = $contextType.GetField('DirectXlsxReadCount', $flags)
+        $npoiCountField = $contextType.GetField('NpoiReadCount', $flags)
+        if ($null -eq $directCountField -or $null -eq $npoiCountField) {
+            throw '缺少读取路径计数字段'
+        }
+        if ($directCountField.GetValue($context) -ne 1 -or $npoiCountField.GetValue($context) -ne 0) {
+            throw 'xlsx 应优先且只使用一次定点读取'
+        }
+        Write-Host 'PASS xlsx 上下文批量读取只走一次快速路径'
+
+        $xlsFixtureBook = New-Object NPOI.HSSF.UserModel.HSSFWorkbook
+        $xlsSheet = $xlsFixtureBook.CreateSheet('测试表')
+        $xlsRow = $xlsSheet.CreateRow(0)
+        $xlsRow.CreateCell(0).SetCellValue('旧版工程量')
+        $xlsStream = [IO.File]::Create($xlsFixturePath)
+        try { $xlsFixtureBook.Write($xlsStream) }
+        finally { $xlsStream.Dispose() }
+
+        $xlsLinks = [Activator]::CreateInstance($linkListType)
+        $xlsLink = [Activator]::CreateInstance($linkType)
+        $linkType.GetProperty('ExcelPath', $flags).SetValue($xlsLink, $xlsFixturePath, $null)
+        $linkType.GetProperty('WorksheetName', $flags).SetValue($xlsLink, '测试表', $null)
+        $linkType.GetProperty('CellAddress', $flags).SetValue($xlsLink, 'A1', $null)
+        $linkType.GetProperty('Expression', $flags).SetValue($xlsLink, 'A1', $null)
+        $xlsLinks.Add($xlsLink)
+        $xlsContextArgs = [object[]]::new(1)
+        $xlsContextArgs[0] = $xlsLinks.PSObject.BaseObject
+        $xlsContext = $contextCtor.Invoke($xlsContextArgs)
+        $xlsReadArgs = [object[]]::new(5)
+        $xlsReadArgs[0] = $xlsFixturePath.PSObject.BaseObject
+        $xlsReadArgs[1] = ([string]'测试表').PSObject.BaseObject
+        $xlsReadArgs[2] = ([string]'A1').PSObject.BaseObject
+        if (-not $readCell.Invoke($xlsContext, $xlsReadArgs.PSObject.BaseObject) -or $xlsReadArgs[3] -ne '旧版工程量') {
+            throw "xls NPOI 读取失败: '$($xlsReadArgs[3])' / '$($xlsReadArgs[4])'"
+        }
+        if ($directCountField.GetValue($xlsContext) -ne 0 -or $npoiCountField.GetValue($xlsContext) -ne 1) {
+            throw 'xls 应保持只使用一次 NPOI 读取'
+        }
+        Write-Host 'PASS xls 保持 NPOI 读取路径'
+
+        $batchTemplate = [Activator]::CreateInstance($templateType)
+        $templateType.GetField('WorkbookPath', $flags).SetValue($batchTemplate, $fixturePath)
+        foreach ($expr in @('A1+B1', 'C1')) {
+            $row = [Activator]::CreateInstance($templateRowType)
+            $templateRowType.GetField('SourceSheet', $flags).SetValue($row, '测试表')
+            $templateRowType.GetField('SourceExpr', $flags).SetValue($row, $expr)
+            $templateType.GetField('Rows', $flags).GetValue($batchTemplate).Add($row)
+        }
+        $hashSetType = [Collections.Generic.HashSet``1].MakeGenericType([int])
+        $hiddenType = [Collections.Generic.Dictionary``2].MakeGenericType([string], $hashSetType)
+        $mergedRegionType = $type.GetNestedType('ExcelMergedRegion', $flags)
+        $mergedListType = [Collections.Generic.List``1].MakeGenericType($mergedRegionType)
+        $mergedType = [Collections.Generic.Dictionary``2].MakeGenericType([string], $mergedListType)
+        $hiddenCache = [Activator]::CreateInstance($hiddenType)
+        $mergedCache = [Activator]::CreateInstance($mergedType)
+        $createBatchContext = $type.GetMethod('CreateNameFillReadContext', $flags)
+        if ($null -eq $createBatchContext) { throw '缺少按名称模板批量读取上下文入口' }
+        $batchArgs = [object[]]::new(3)
+        $batchArgs[0] = $batchTemplate
+        $batchArgs[1] = $hiddenCache.PSObject.BaseObject
+        $batchArgs[2] = $mergedCache.PSObject.BaseObject
+        $batchContext = $createBatchContext.Invoke($null, $batchArgs)
+        if ($contextType.GetProperty('FileCount', $flags).GetValue($batchContext, $null) -ne 1 -or
+            $contextType.GetProperty('SheetCount', $flags).GetValue($batchContext, $null) -ne 1 -or
+            $contextType.GetProperty('CellCount', $flags).GetValue($batchContext, $null) -lt 2) {
+            throw '名字模板应把同一工作簿和工作表的名称地址聚合到一个上下文'
+        }
+        Write-Host 'PASS 名字模板批量聚合一个读取上下文'
+    }
+    finally {
+        if ($null -ne $fixtureBook) {
+            try { $fixtureBook.Close() } catch { }
+        }
+        if ($null -ne $xlsFixtureBook) {
+            try { $xlsFixtureBook.Close() } catch { }
+        }
+        if (Test-Path -LiteralPath $fixturePath) { Remove-Item -LiteralPath $fixturePath -Force }
+        if (Test-Path -LiteralPath $xlsFixturePath) { Remove-Item -LiteralPath $xlsFixturePath -Force }
+    }
+}
+
+Test-WorkbookReadPerformancePaths
+
 $groupBuilder = $type.GetMethod('BuildTemplateNameGroups', $flags)
 $conflict = $type.GetMethod('GetExactNameConflict', $flags)
 $uniqueBest = $type.GetMethod('FindUniqueBestMatchIndex', $flags)
@@ -221,6 +369,11 @@ $mainForm = New-Object System.Windows.Forms.Form
 $panel = $null
 try {
     $panel = $panelCtor.Invoke([object[]]@($mainForm.PSObject.BaseObject))
+    $reloadCountField = $panelType.GetField('targetWorkbookReloadCount', $flags)
+    if ($null -eq $reloadCountField -or $reloadCountField.GetValue($panel) -ne 1) {
+        throw '模板铺量窗口首次构造应只刷新一次目标工作簿'
+    }
+    Write-Host 'PASS 模板铺量窗口首次只刷新一次目标工作簿'
     if ($null -eq $panelType.GetField('cmbTargetWorkbook', $flags)) {
         throw '模板铺量面板缺少目标 Excel 下拉框'
     }
