@@ -264,6 +264,37 @@ namespace RecoNet
             return best;
         }
 
+        private static ExcelSyncReadContext CreateNameFillReadContext(
+            FillTemplate template,
+            Dictionary<string, HashSet<int>> hiddenCache,
+            Dictionary<string, List<ExcelMergedRegion>> mergedCache)
+        {
+            List<ExcelQuotaLink> readLinks = new List<ExcelQuotaLink>();
+            if (template == null || template.Rows == null) return new ExcelSyncReadContext(readLinks);
+
+            foreach (FillTemplateRow row in template.Rows)
+            {
+                if (row == null) continue;
+                string workbook = GetTemplateRowWorkbookPath(template, row);
+                if (String.IsNullOrWhiteSpace(workbook) || String.IsNullOrWhiteSpace(row.SourceSheet) ||
+                    String.IsNullOrWhiteSpace(row.SourceExpr)) continue;
+
+                List<string> cells = ExtractCellAddressesFromExpression(row.SourceExpr);
+                if (cells.Count <= 1)
+                {
+                    AddQuantityNameReadLinks(readLinks, workbook, row.SourceSheet, row.SourceExpr, hiddenCache, mergedCache);
+                }
+                else
+                {
+                    foreach (string cell in cells)
+                    {
+                        AddQuantityNameReadLinks(readLinks, workbook, row.SourceSheet, cell, hiddenCache, mergedCache);
+                    }
+                }
+            }
+            return new ExcelSyncReadContext(readLinks);
+        }
+
         // 名字模式模版生成：与 BuildFillTemplateFromBindings 同源，额外为每行读 Excel 工程量全名；
         // 表达式(E1+E2)拆操作数各读全名存 Operands，套用时按名字定位、不再绑坐标。
         private static FillTemplate BuildNameFillTemplateFromBindings(
@@ -274,6 +305,7 @@ namespace RecoNet
 
             Dictionary<string, HashSet<int>> hiddenCache = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
             Dictionary<string, List<ExcelMergedRegion>> mergedCache = new Dictionary<string, List<ExcelMergedRegion>>(StringComparer.OrdinalIgnoreCase);
+            ExcelSyncReadContext readContext = CreateNameFillReadContext(template, hiddenCache, mergedCache);
 
             foreach (FillTemplateRow row in template.Rows)
             {
@@ -286,7 +318,8 @@ namespace RecoNet
                 List<string> cells = ExtractCellAddressesFromExpression(row.SourceExpr);
                 if (cells.Count <= 1)
                 {
-                    row.MatchName = ReadFullNameForCell(workbook, row.SourceSheet, row.SourceExpr, hiddenCache, mergedCache);
+                    row.MatchName = ReadFullNameForCell(workbook, row.SourceSheet, row.SourceExpr,
+                        hiddenCache, mergedCache, readContext);
                 }
                 else
                 {
@@ -295,7 +328,8 @@ namespace RecoNet
                     {
                         FillOperand op = new FillOperand();
                         op.Op = "+";
-                        op.Name = ReadFullNameForCell(workbook, row.SourceSheet, cell, hiddenCache, mergedCache);
+                        op.Name = ReadFullNameForCell(workbook, row.SourceSheet, cell,
+                            hiddenCache, mergedCache, readContext);
                         row.Operands.Add(op);
                     }
                     row.MatchName = row.Operands.Count > 0 ? row.Operands[0].Name : "";
@@ -350,12 +384,10 @@ namespace RecoNet
 
         // 读某表达式首格所在行的【全名】(不截断)。复用绑定阶段的不截断 ReadRowNameAt 重载。
         private static string ReadFullNameForCell(string workbook, string sheet, string expr,
-            Dictionary<string, HashSet<int>> hiddenCache, Dictionary<string, List<ExcelMergedRegion>> mergedCache)
+            Dictionary<string, HashSet<int>> hiddenCache, Dictionary<string, List<ExcelMergedRegion>> mergedCache,
+            ExcelSyncReadContext readContext)
         {
-            List<ExcelQuotaLink> readLinks = new List<ExcelQuotaLink>();
-            AddQuantityNameReadLinks(readLinks, workbook, sheet, expr, hiddenCache, mergedCache);
-            ExcelSyncReadContext ctx = new ExcelSyncReadContext(readLinks);
-            return ReadRowNameAt(workbook, sheet, expr, hiddenCache, mergedCache, ctx, true);
+            return ReadRowNameAt(workbook, sheet, expr, hiddenCache, mergedCache, readContext, true);
         }
 
         private sealed class TargetQtyRow
