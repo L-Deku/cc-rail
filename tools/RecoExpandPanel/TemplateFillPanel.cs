@@ -11,6 +11,19 @@ namespace RecoNet
 {
     public partial class FormPanel : Form
     {
+        private static IEnumerable<string> GetTemplateFillSheetNames(string path, out string error)
+        {
+            string extension = Path.GetExtension(path ?? "");
+            if (String.Equals(extension, ".xlsx", StringComparison.OrdinalIgnoreCase) ||
+                String.Equals(extension, ".xlsm", StringComparison.OrdinalIgnoreCase))
+            {
+                List<string> names = GetXlsxSheetNames(path, out error).ToList();
+                if (names.Count > 0) return names;
+            }
+
+            return GetSheetNamesByNpoi(path, out error);
+        }
+
         private sealed class TemplateFillPanel : Form
         {
             private readonly Form mainForm;
@@ -40,7 +53,6 @@ namespace RecoNet
             private bool rebuildingTree;
             private bool updatingNameQuotaCell;
             private bool reloadingTargetWorkbooks;
-            private bool initializingTemplateList;
             private int targetWorkbookReloadCount;
 
             public TemplateFillPanel(Form owner)
@@ -50,9 +62,7 @@ namespace RecoNet
                 StartPosition = FormStartPosition.CenterParent;
                 ClientSize = new Size(900, 580);
                 BuildLayout();
-                initializingTemplateList = true;
-                try { ReloadTemplateList(); }
-                finally { initializingTemplateList = false; }
+                ReloadTemplateList();
                 ReloadSourceSheets();
                 ReloadTargetWorkbooks();
                 string cur = GetCurrentUnitNo(mainForm);
@@ -78,10 +88,6 @@ namespace RecoNet
                 // —— 套用配置 ——
                 AddLabel("模板", 12, 50, 36);
                 cmbTemplate.SetBounds(50, 47, 185, 23); cmbTemplate.DropDownStyle = ComboBoxStyle.DropDownList;
-                cmbTemplate.SelectedIndexChanged += delegate
-                {
-                    if (!initializingTemplateList) ReloadTargetWorkbooks();
-                };
                 btnDeleteTemplate.SetBounds(240, 46, 70, 25); btnDeleteTemplate.Text = "删除模板";
                 btnDeleteTemplate.Click += delegate { OnDeleteTemplate(); };
                 AddLabel("取数模式", 320, 50, 60);
@@ -266,7 +272,7 @@ namespace RecoNet
                     info = new OpenSpreadsheetWorkbookInfo();
                     info.FullName = fullName;
                     string sheetError;
-                    info.SheetNames = GetSheetNamesByNpoi(fullName, out sheetError).ToList();
+                    info.SheetNames = GetTemplateFillSheetNames(fullName, out sheetError).ToList();
                     workbooks.Add(info);
                 }
                 info.IsTemplateSource = true;
@@ -335,7 +341,7 @@ namespace RecoNet
                     if (selected.SheetNames == null || selected.SheetNames.Count == 0)
                     {
                         string sheetError;
-                        selected.SheetNames = GetSheetNamesByNpoi(selected.FullName, out sheetError).ToList();
+                        selected.SheetNames = GetTemplateFillSheetNames(selected.FullName, out sheetError).ToList();
                     }
                     foreach (string sheetName in selected.SheetNames) cmbTargetSheet.Items.Add(sheetName);
                     targetWorkbookToolTip.SetToolTip(cmbTargetWorkbook, selected.FullName ?? "");

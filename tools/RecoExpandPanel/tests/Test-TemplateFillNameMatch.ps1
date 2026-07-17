@@ -139,6 +139,21 @@ function Test-WorkbookReadPerformancePaths {
         }
         Write-Host 'PASS xls 保持 NPOI 读取路径'
 
+        $templateSheetNames = $type.GetMethod('GetTemplateFillSheetNames', $flags)
+        if ($null -eq $templateSheetNames) { throw '缺少模板铺量快速 sheet 名称读取入口' }
+        foreach ($fixture in @(
+            [pscustomobject]@{ Path = $fixturePath; Expected = '测试表'; Kind = 'xlsx' },
+            [pscustomobject]@{ Path = $xlsFixturePath; Expected = '测试表'; Kind = 'xls' }
+        )) {
+            $sheetArgs = [object[]]::new(2)
+            $sheetArgs[0] = ([string]$fixture.Path).PSObject.BaseObject
+            $sheetNames = @($templateSheetNames.Invoke($null, $sheetArgs.PSObject.BaseObject))
+            if (($sheetNames -join '|') -ne $fixture.Expected) {
+                throw "模板铺量 $($fixture.Kind) sheet 名称读取错误: '$($sheetNames -join '|')' / '$($sheetArgs[1])'"
+            }
+        }
+        Write-Host 'PASS 模板铺量 xlsx 快速读取与 xls NPOI sheet 名称兼容'
+
         $batchTemplate = [Activator]::CreateInstance($templateType)
         $templateType.GetField('WorkbookPath', $flags).SetValue($batchTemplate, $fixturePath)
         foreach ($expr in @('A1+B1', 'C1')) {
@@ -374,6 +389,17 @@ try {
         throw '模板铺量窗口首次构造应只刷新一次目标工作簿'
     }
     Write-Host 'PASS 模板铺量窗口首次只刷新一次目标工作簿'
+    $templateBox = $panelType.GetField('cmbTemplate', $flags).GetValue($panel)
+    $reloadCountBeforeSwitch = $reloadCountField.GetValue($panel)
+    $templateBox.Items.Clear()
+    [void]$templateBox.Items.Add('临时模板A')
+    [void]$templateBox.Items.Add('临时模板B')
+    $templateBox.SelectedIndex = 0
+    $templateBox.SelectedIndex = 1
+    if ($reloadCountField.GetValue($panel) -ne $reloadCountBeforeSwitch) {
+        throw '切换模板不得重新枚举目标工作簿'
+    }
+    Write-Host 'PASS 切换模板不重新枚举目标工作簿'
     if ($null -eq $panelType.GetField('cmbTargetWorkbook', $flags)) {
         throw '模板铺量面板缺少目标 Excel 下拉框'
     }
