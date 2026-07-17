@@ -1634,7 +1634,7 @@ namespace RecoNet
             private bool applyingBatchCheck;
             private List<AiMatchPreviewItem> items = new List<AiMatchPreviewItem>();
 
-            public event Action<List<AiMatchPreviewItem>> Accepted;
+            public event Func<List<AiMatchPreviewItem>, int> Accepted;
             public event Action Cancelled;
 
             public AutoMatchDialog(Form ownerForm, SqlConnection projectConnection)
@@ -3118,13 +3118,14 @@ namespace RecoNet
                     return;
                 }
 
-                if (Accepted != null)
+                int saved = Accepted == null ? 0 : Accepted(accepted);
+                if (saved <= 0)
                 {
-                    Accepted(accepted);
+                    status.Text = "\u5168\u90e8\u7ed1\u5b9a\u5931\u8d25\uff0c\u672a\u4fdd\u5b58\u4efb\u4f55\u7ed1\u5b9a\u3002";
+                    return;
                 }
 
-                DialogResult = DialogResult.OK;
-                Close();
+                status.Text = "\u5df2\u5168\u90e8\u7ed1\u5b9a " + saved.ToString(CultureInfo.InvariantCulture) + " \u6761\u3002";
             }
 
             public List<AiMatchPreviewItem> GetAcceptedItems()

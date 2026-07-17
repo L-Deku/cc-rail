@@ -190,7 +190,7 @@ namespace RecoNet
                 AutoMatchDialog dialog = new AutoMatchDialog(mainForm, conn);
                 dialog.Accepted += delegate(List<AiMatchPreviewItem> accepted)
                 {
-                    SaveAutoMatchPreviewAccepted(mainForm, conn, accepted);
+                    return SaveAutoMatchPreviewAccepted(mainForm, conn, accepted);
                 };
                 dialog.Show(mainForm);
             }
@@ -201,15 +201,16 @@ namespace RecoNet
             }
         }
 
-        private static void SaveAutoMatchPreviewAccepted(Form mainForm, SqlConnection conn, List<AiMatchPreviewItem> accepted)
+        private static int SaveAutoMatchPreviewAccepted(Form mainForm, SqlConnection conn, List<AiMatchPreviewItem> accepted)
         {
             try
             {
                 if (accepted == null || accepted.Count == 0)
                 {
-                    return;
+                    return 0;
                 }
 
+                int saved = 0;
                 ExcelLinkStore store = LoadStore(conn);
                 foreach (AiMatchPreviewItem item in accepted)
                 {
@@ -227,6 +228,7 @@ namespace RecoNet
                     item.Link.LastStatus = "\u81ea\u52a8\u5339\u914d\u7ed1\u5b9a\uff0c\u7b49\u5f85\u540c\u6b65";
                     item.Link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
                     store.Upsert(item.Link);
+                    saved++;
                 }
 
                 SaveStore(conn, store);
@@ -237,11 +239,13 @@ namespace RecoNet
                 }
 
                 RefreshExcelLinkPanel(mainForm);
+                return saved;
             }
             catch (Exception ex)
             {
                 Log("Save auto Excel match preview failed: " + ex);
                 MessageBox.Show(mainForm, "\u4fdd\u5b58\u81ea\u52a8\u5339\u914d\u7ed1\u5b9a\u5931\u8d25\uff1a" + ex.Message, "Excel\u8054\u52a8", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return 0;
             }
         }
 
