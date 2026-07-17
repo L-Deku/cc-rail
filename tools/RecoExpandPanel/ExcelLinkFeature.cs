@@ -5421,6 +5421,8 @@ namespace RecoNet
 
             public int FileSheetReadCount;
             public int LiveWorkbookScanCount;
+            public int DirectXlsxReadCount;
+            public int NpoiReadCount;
 
             public ExcelSyncReadContext(IEnumerable<ExcelQuotaLink> links)
             {
@@ -5604,16 +5606,24 @@ namespace RecoNet
                 }
 
                 Dictionary<string, string> values;
-                string npoiError;
-                if (TryReadSheetTargetCellsByNpoi(path, sheetName, addresses, out values, out npoiError))
+                string extension = Path.GetExtension(path ?? "");
+                bool directXlsxCandidate = String.Equals(extension, ".xlsx", StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(extension, ".xlsm", StringComparison.OrdinalIgnoreCase);
+                string xlsxError = null;
+                if (directXlsxCandidate)
                 {
-                    cache.Loaded = true;
-                    cache.Values = values;
-                    return cache;
+                    DirectXlsxReadCount++;
+                    if (TryReadXlsxTargetCells(path, sheetName, addresses, out values, out xlsxError))
+                    {
+                        cache.Loaded = true;
+                        cache.Values = values;
+                        return cache;
+                    }
                 }
 
-                string xlsxError;
-                if (TryReadXlsxTargetCells(path, sheetName, addresses, out values, out xlsxError))
+                string npoiError;
+                NpoiReadCount++;
+                if (TryReadSheetTargetCellsByNpoi(path, sheetName, addresses, out values, out npoiError))
                 {
                     cache.Loaded = true;
                     cache.Values = values;
@@ -5622,7 +5632,9 @@ namespace RecoNet
 
                 cache.Loaded = false;
                 cache.Values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                cache.Error = "NPOI read failed: " + npoiError + "; direct xlsx read failed: " + xlsxError;
+                cache.Error = directXlsxCandidate
+                    ? "Direct xlsx read failed: " + xlsxError + "; NPOI read failed: " + npoiError
+                    : "NPOI read failed: " + npoiError;
                 return cache;
             }
 
