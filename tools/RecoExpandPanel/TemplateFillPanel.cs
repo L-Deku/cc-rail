@@ -40,6 +40,8 @@ namespace RecoNet
             private bool rebuildingTree;
             private bool updatingNameQuotaCell;
             private bool reloadingTargetWorkbooks;
+            private bool initializingTemplateList;
+            private int targetWorkbookReloadCount;
 
             public TemplateFillPanel(Form owner)
             {
@@ -48,7 +50,9 @@ namespace RecoNet
                 StartPosition = FormStartPosition.CenterParent;
                 ClientSize = new Size(900, 580);
                 BuildLayout();
-                ReloadTemplateList();
+                initializingTemplateList = true;
+                try { ReloadTemplateList(); }
+                finally { initializingTemplateList = false; }
                 ReloadSourceSheets();
                 ReloadTargetWorkbooks();
                 string cur = GetCurrentUnitNo(mainForm);
@@ -74,7 +78,10 @@ namespace RecoNet
                 // —— 套用配置 ——
                 AddLabel("模板", 12, 50, 36);
                 cmbTemplate.SetBounds(50, 47, 185, 23); cmbTemplate.DropDownStyle = ComboBoxStyle.DropDownList;
-                cmbTemplate.SelectedIndexChanged += delegate { ReloadTargetWorkbooks(); };
+                cmbTemplate.SelectedIndexChanged += delegate
+                {
+                    if (!initializingTemplateList) ReloadTargetWorkbooks();
+                };
                 btnDeleteTemplate.SetBounds(240, 46, 70, 25); btnDeleteTemplate.Text = "删除模板";
                 btnDeleteTemplate.Click += delegate { OnDeleteTemplate(); };
                 AddLabel("取数模式", 320, 50, 60);
@@ -269,6 +276,7 @@ namespace RecoNet
             private void ReloadTargetWorkbooks()
             {
                 if (reloadingTargetWorkbooks) return;
+                targetWorkbookReloadCount++;
                 string keepSheet = cmbTargetSheet.Text;
                 reloadingTargetWorkbooks = true;
                 try
