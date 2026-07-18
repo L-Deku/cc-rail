@@ -58,6 +58,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 在非交互 WinForms 环境可能卡在“定额候选下拉与组件组界面确认”之后的滚动视口用例；连续停在该位置时应按“综合回归未完成”报告，终止并核对本次测试启动的精确进程，不得把前半段 PASS 当作全部通过，也不要反复无上限重跑。
 - 读取 UTF-8 附件或中文文本时，如 PowerShell `Get-Content` 输出乱码，先设置 `[Console]::OutputEncoding`，并优先用 `[System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes(...))` 按字节解码验证内容。
 - PowerShell 部署/验证脚本需要格式化多段 `foreach` 输出时，优先先收集到数组或 `List[object]` 再统一 `Format-Table`；不要把脚本块闭合后直接接管道，容易触发 `An empty pipe element is not allowed` 解析错误。
+- PowerShell 创建目录时不要给 `New-Item` 使用不存在的 `-LiteralPath` 参数；中文或特殊字符路径优先调用 `[System.IO.Directory]::CreateDirectory($path)`，并在后续读写继续使用 `-LiteralPath`。
 - Windows PowerShell 中用 `rg` 搜索指定目录文件时，优先写 `rg -n "pattern" -S path` 或用 `rg --files -g "*.cs"` 先列文件；不要把 `目录\*.cs` 当作路径参数传给 `rg`，容易被解析成非法路径。
 - PowerShell 中用 `rg` 同时搜索含中文引号、括号或反斜杠的多个模式时，优先拆成多个简单的 `rg -n -F "literal" path`；不要在一条双引号命令里拼复杂分组正则，避免 PowerShell 截断引号后产生伪语法错误。
 - GitHub 推送报 `Failed to connect ... via 127.0.0.1` 时，先分别检查 Git `http.proxy`/`https.proxy` 与 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 环境变量；若本地代理端口失效或不一致，先在单次命令中临时清空环境代理并用 `git -c http.proxy= -c https.proxy=` 做 `ls-remote` 直连验证；不要未经用户确认修改全局代理配置。

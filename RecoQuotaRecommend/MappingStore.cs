@@ -325,11 +325,8 @@ namespace RecoQuotaRecommend
 
         private void LoadFile()
         {
-            List<MappingBox> parsed = null;
-            WithMappingBoxesLock(delegate
-            {
-                parsed = ParseFile(path);
-            });
+            // 写入方使用同目录原子替换；读取旧文件或新文件都完整，不必占用写锁阻塞窗口打开。
+            List<MappingBox> parsed = ParseFile(path);
             boxes.Clear();
             boxes.AddRange(CanonicalizeBoxes(parsed));
         }
@@ -462,11 +459,14 @@ namespace RecoQuotaRecommend
         private void Save()
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path));
-            WithMappingBoxesLock(delegate
+            if (!TryWithMappingBoxesLock(delegate
             {
                 MergeFromDisk();
                 WriteFile();
-            });
+            }, 5000))
+            {
+                QuotaRecommendPanel.Log("MappingStore save skipped: mapping-boxes lock timeout.");
+            }
         }
 
         // Excel联动AI匹配和扶正训练器也会写这个文件；整文件重写前先合并磁盘上的新增记录，避免覆盖丢失。
@@ -488,54 +488,72 @@ namespace RecoQuotaRecommend
 
         private void WriteFile()
         {
-            string temp = path + ".tmp";
-            using (StreamWriter writer = new StreamWriter(temp, false, Encoding.UTF8))
+            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
             {
-                foreach (MappingBox box in boxes)
+                using (StreamWriter writer = new StreamWriter(temp, false, Encoding.UTF8))
                 {
-                    box.TrimSamples(MaxSamplesPerBox);
-                    foreach (MappingTarget target in box.Targets
-                        .OrderBy(t => TargetSortRank(t.TargetKind, t.Code))
-                        .ThenBy(t => t.Code ?? "", StringComparer.OrdinalIgnoreCase))
+                    foreach (MappingBox box in boxes)
                     {
-                        foreach (MappingSample sample in box.Samples)
+                        box.TrimSamples(MaxSamplesPerBox);
+                        foreach (MappingTarget target in box.Targets
+                            .OrderBy(t => TargetSortRank(t.TargetKind, t.Code))
+                            .ThenBy(t => t.Code ?? "", StringComparer.OrdinalIgnoreCase))
                         {
-                            Dictionary<string, string> row = new Dictionary<string, string>();
-                            row["record_type"] = "mapping_box";
-                            row["box_id"] = box.BoxId;
-                            row["target_kind"] = String.IsNullOrWhiteSpace(target.TargetKind) ? QuotaEntry.GuessKind(target.Code) : target.TargetKind;
-                            row["target_code"] = target.Code;
-                            row["target_name"] = target.Name;
-                            row["target_unit"] = target.Unit;
-                            row["quantity_name"] = sample.QuantityName;
-                            row["quantity_unit"] = sample.QuantityUnit;
-                            row["weight"] = sample.Weight.ToString(CultureInfo.InvariantCulture);
-                            row["accepted_count"] = sample.AcceptedCount.ToString(CultureInfo.InvariantCulture);
-                            row["corrected_count"] = sample.CorrectedCount.ToString(CultureInfo.InvariantCulture);
-                            row["rejected_count"] = sample.RejectedCount.ToString(CultureInfo.InvariantCulture);
-                            row["last_used_at"] = sample.LastUsedAt;
-                            if (box.EntryCodes.Count > 0)
+                            foreach (MappingSample sample in box.Samples)
                             {
-                                row["entry_codes"] = String.Join(",", box.EntryCodes.OrderBy(t => t, StringComparer.OrdinalIgnoreCase).ToArray());
+                                Dictionary<string, string> row = new Dictionary<string, string>();
+                                row["record_type"] = "mapping_box";
+                                row["box_id"] = box.BoxId;
+                                row["target_kind"] = String.IsNullOrWhiteSpace(target.TargetKind) ? QuotaEntry.GuessKind(target.Code) : target.TargetKind;
+                                row["target_code"] = target.Code;
+                                row["target_name"] = target.Name;
+                                row["target_unit"] = target.Unit;
+                                row["quantity_name"] = sample.QuantityName;
+                                row["quantity_unit"] = sample.QuantityUnit;
+                                row["weight"] = sample.Weight.ToString(CultureInfo.InvariantCulture);
+                                row["accepted_count"] = sample.AcceptedCount.ToString(CultureInfo.InvariantCulture);
+                                row["corrected_count"] = sample.CorrectedCount.ToString(CultureInfo.InvariantCulture);
+                                row["rejected_count"] = sample.RejectedCount.ToString(CultureInfo.InvariantCulture);
+                                row["last_used_at"] = sample.LastUsedAt;
+                                if (box.EntryCodes.Count > 0)
+                                {
+                                    row["entry_codes"] = String.Join(",", box.EntryCodes.OrderBy(t => t, StringComparer.OrdinalIgnoreCase).ToArray());
+                                }
+                                writer.WriteLine(LearningStore.ToJson(row));
                             }
-                            writer.WriteLine(LearningStore.ToJson(row));
                         }
                     }
                 }
+
+                ReplaceFileAtomically(path, temp);
+            }
+            finally
+            {
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
+            }
+        }
+
+        private static void ReplaceFileAtomically(string filePath, string temp)
+        {
+            if (!File.Exists(filePath))
+            {
+                File.Move(temp, filePath);
+                return;
             }
 
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
-            File.Move(temp, path);
+            string backup = filePath + ".bak";
+            File.Replace(temp, filePath, backup, true);
         }
 
         private const string MappingBoxesMutexName = "RecoQuotaData.mapping-boxes.lock";
 
         // 学习库有多个写入方（本窗口扶正、RecoExpandPanel 的 Excel联动与训练器），
         // 用跨程序集一致的命名互斥锁串行化读改写，名称必须与 RecoExpandPanel 保持一致。
-        private static void WithMappingBoxesLock(Action action)
+        private static bool TryWithMappingBoxesLock(Action action, int timeoutMilliseconds)
         {
             Mutex mutex = new Mutex(false, MappingBoxesMutexName);
             bool acquired = false;
@@ -543,14 +561,20 @@ namespace RecoQuotaRecommend
             {
                 try
                 {
-                    acquired = mutex.WaitOne(5000);
+                    acquired = mutex.WaitOne(timeoutMilliseconds);
                 }
                 catch (AbandonedMutexException)
                 {
                     acquired = true;
                 }
 
+                if (!acquired)
+                {
+                    return false;
+                }
+
                 action();
+                return true;
             }
             finally
             {

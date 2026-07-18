@@ -1474,6 +1474,11 @@ namespace ChapterQuotaLibrary
                     acquired = true;
                 }
 
+                if (!acquired)
+                {
+                    throw new TimeoutException("Timed out waiting for mapping-boxes lock.");
+                }
+
                 List<Dictionary<string, string>> lines = new List<Dictionary<string, string>>();
                 Dictionary<string, HashSet<string>> boxTargets = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
                 Dictionary<string, HashSet<string>> boxTags = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
@@ -1593,13 +1598,26 @@ namespace ChapterQuotaLibrary
 
         private static void WriteAllLinesAtomic(string path, List<string> lines)
         {
-            string temp = path + ".tmp";
-            File.WriteAllLines(temp, lines.ToArray(), Encoding.UTF8);
-            if (File.Exists(path))
+            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
             {
-                File.Delete(path);
+                File.WriteAllLines(temp, lines.ToArray(), Encoding.UTF8);
+                if (File.Exists(path))
+                {
+                    File.Replace(temp, path, path + ".bak", true);
+                }
+                else
+                {
+                    File.Move(temp, path);
+                }
             }
-            File.Move(temp, path);
+            finally
+            {
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
+            }
         }
 
         private static string S(SqlDataReader reader, int index)

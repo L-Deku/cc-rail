@@ -22,6 +22,16 @@ namespace RecoQuotaRecommend
         private const int RefreshDelayMs = 200;
         private const string ReferenceTabText = "\u53c2\u8003\u5b9a\u989d"; // 参考定额
         private static readonly Dictionary<Form, Runtime> Runtimes = new Dictionary<Form, Runtime>();
+        private static readonly object ReferenceDataCacheLock = new object();
+        private static string quotaIndexCacheFingerprint = "";
+        private static Dictionary<string, QuotaInfo> quotaIndexCache;
+        private static readonly Dictionary<string, ReferencePoolCacheEntry> referencePoolCache = new Dictionary<string, ReferencePoolCacheEntry>(StringComparer.OrdinalIgnoreCase);
+
+        private sealed class ReferencePoolCacheEntry
+        {
+            public string Fingerprint;
+            public Dictionary<string, List<PoolItem>> Pool;
+        }
 
         public static void Install(Form mainForm)
         {
@@ -63,7 +73,7 @@ namespace RecoQuotaRecommend
             private readonly DataGridView grid; // 宿主定额输入表 dataGridViewDE
             private readonly Timer timer;
             private readonly ChapterLibraryStore chapterLibrary;
-            private readonly Dictionary<string, List<PoolItem>> poolByEntry; // matchedEntryCode -> 富字段定额池
+            private readonly Dictionary<string, List<PoolItem>> poolByEntry; // method_no|matchedEntryCode -> 富字段定额池
             private readonly Dictionary<string, QuotaInfo> quotaIndex; // 定额编号(大写) -> 名称/单位/基价/工作内容（取自 quota-index.jsonl）
             private readonly Dictionary<string, bool> methodCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
             private DataGridView refGrid; // 我们自管的只读表格，叠放进"参考定额"框
@@ -319,7 +329,8 @@ namespace RecoQuotaRecommend
                 }
 
                 List<PoolItem> items;
-                poolByEntry.TryGetValue(scope.MatchedEntryCode, out items);
+                string poolEntryKey = ReferencePoolEntryKey(scope.MethodNo, scope.MatchedEntryCode);
+                poolByEntry.TryGetValue(poolEntryKey, out items);
                 // 参考框只显示定额，过滤掉材料（全数字代号等）
                 string effectiveEntryName = ResolveEffectiveEntryName(scope);
                 List<PoolItem> quotas = items == null
@@ -327,11 +338,11 @@ namespace RecoQuotaRecommend
                     : items.Where(x => IsAllowedReferencePoolItem(effectiveEntryName, x.Kind, x.Code, quotaIndex)).ToList();
                 if (quotas == null || quotas.Count == 0)
                 {
-                    SetKey("\0empty:" + scope.Method + ":" + scope.MatchedEntryCode);
+                    SetKey("\0empty:" + scope.MethodNo + ":" + scope.MatchedEntryCode);
                     return;
                 }
 
-                string key = "pool:" + scope.Method + ":" + scope.MatchedEntryCode;
+                string key = "pool:" + scope.MethodNo + ":" + scope.MatchedEntryCode;
                 if (key == currentKey)
                 {
                     return;
@@ -355,9 +366,10 @@ namespace RecoQuotaRecommend
                 string entryName;
                 string entryCode = ResolveCurrentChapterNo(conn, out entryName);
                 EntryScope scope = String.IsNullOrWhiteSpace(entryCode) ? null : chapterLibrary.ResolveScopeForUserEdit(entryCode, entryName);
+                string poolEntryKey = scope == null ? "" : ReferencePoolEntryKey(scope.MethodNo, scope.MatchedEntryCode);
                 string diag = "entryCode=" + (entryCode ?? "<null>") + " entryName=" + (entryName ?? "")
                     + " scope=" + (scope == null ? "<null>" : scope.MatchedEntryCode)
-                    + " pool=" + (scope != null && poolByEntry.ContainsKey(scope.MatchedEntryCode) ? poolByEntry[scope.MatchedEntryCode].Count : 0).ToString(CultureInfo.InvariantCulture);
+                    + " pool=" + (scope != null && poolByEntry.ContainsKey(poolEntryKey) ? poolByEntry[poolEntryKey].Count : 0).ToString(CultureInfo.InvariantCulture);
                 if (diag != lastScopeDiag)
                 {
                     lastScopeDiag = diag;
@@ -1056,6 +1068,17 @@ namespace RecoQuotaRecommend
             return (value ?? "").Trim().ToUpperInvariant();
         }
 
+        private static string ReferencePoolEntryKey(string methodNo, string entryCode)
+        {
+            string normalizedMethodNo = (methodNo ?? "")
+                .Replace('\u2013', '-')
+                .Replace('\u2014', '-')
+                .Replace('\uff0d', '-')
+                .Replace(" ", "")
+                .Trim();
+            return normalizedMethodNo + "|" + (entryCode ?? "").Trim();
+        }
+
         // 定额编号 -> 名称/单位/基期价格(基价)/内容(工作内容)，取自 quota-index.jsonl
         private sealed class QuotaInfo
         {
@@ -1067,10 +1090,26 @@ namespace RecoQuotaRecommend
 
         private static Dictionary<string, QuotaInfo> LoadQuotaIndex()
         {
+            string path = Path.Combine(LearningStore.FindDataDir(), "quota-index.jsonl");
+            string fingerprint = Path.GetFullPath(path) + "|" + BuildReferenceFileFingerprint(path);
+            lock (ReferenceDataCacheLock)
+            {
+                if (quotaIndexCache != null && String.Equals(quotaIndexCacheFingerprint, fingerprint, StringComparison.Ordinal))
+                {
+                    return quotaIndexCache;
+                }
+
+                quotaIndexCache = LoadQuotaIndexUncached(path);
+                quotaIndexCacheFingerprint = Path.GetFullPath(path) + "|" + BuildReferenceFileFingerprint(path);
+                return quotaIndexCache;
+            }
+        }
+
+        private static Dictionary<string, QuotaInfo> LoadQuotaIndexUncached(string path)
+        {
             Dictionary<string, QuotaInfo> map = new Dictionary<string, QuotaInfo>(StringComparer.OrdinalIgnoreCase);
             try
             {
-                string path = Path.Combine(LearningStore.FindDataDir(), "quota-index.jsonl");
                 if (!File.Exists(path))
                 {
                     QuotaRecommendPanel.Log("Reference quota index missing: " + path);
@@ -1106,12 +1145,36 @@ namespace RecoQuotaRecommend
 
         private static Dictionary<string, List<PoolItem>> LoadPool(string methodKey, Dictionary<string, QuotaInfo> quotaIndex)
         {
+            string dataDir = LearningStore.FindDataDir();
+            string path = Path.Combine(dataDir, "chapter-quota-library.jsonl");
+            string cacheKey = Path.GetFullPath(dataDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + "|" + (methodKey ?? "");
+            string fingerprint = BuildReferenceFileFingerprint(path) + "|" + BuildReferenceFileFingerprint(Path.Combine(dataDir, "quota-index.jsonl"));
+            lock (ReferenceDataCacheLock)
+            {
+                ReferencePoolCacheEntry cached;
+                if (referencePoolCache.TryGetValue(cacheKey, out cached) &&
+                    String.Equals(cached.Fingerprint, fingerprint, StringComparison.Ordinal))
+                {
+                    return CloneReferencePool(cached.Pool);
+                }
+
+                Dictionary<string, List<PoolItem>> loaded = LoadPoolUncached(path, methodKey, quotaIndex);
+                referencePoolCache[cacheKey] = new ReferencePoolCacheEntry
+                {
+                    Fingerprint = BuildReferenceFileFingerprint(path) + "|" + BuildReferenceFileFingerprint(Path.Combine(dataDir, "quota-index.jsonl")),
+                    Pool = loaded
+                };
+                return CloneReferencePool(loaded);
+            }
+        }
+
+        private static Dictionary<string, List<PoolItem>> LoadPoolUncached(string path, string methodKey, Dictionary<string, QuotaInfo> quotaIndex)
+        {
             Dictionary<string, List<PoolItem>> map = new Dictionary<string, List<PoolItem>>(StringComparer.Ordinal);
             // entry -> (kind:CODE -> PoolItem)，按文件顺序后写覆盖先写；deleted=1 即移除该 code（软删除）
             Dictionary<string, Dictionary<string, PoolItem>> tmp = new Dictionary<string, Dictionary<string, PoolItem>>(StringComparer.Ordinal);
             try
             {
-                string path = Path.Combine(LearningStore.FindDataDir(), "chapter-quota-library.jsonl");
                 if (!File.Exists(path))
                 {
                     return map;
@@ -1128,6 +1191,7 @@ namespace RecoQuotaRecommend
                         continue;
                     }
                     string entry = LearningStore.Get(values, "entry_code").Trim();
+                    string methodNo = LearningStore.Get(values, "method_no").Trim();
                     string code = QuotaEntry.NormalizeCode(LearningStore.Get(values, "quota_code").Trim());
                     if (entry.Length == 0 || code.Length == 0)
                     {
@@ -1149,11 +1213,12 @@ namespace RecoQuotaRecommend
                     string quotaPrice = FirstNonEmpty(values, "base_price", "price", "unit_price", "quota_price", "current_price");
                     string itemKey = ReferencePoolItemKey(kind, code, quotaName, quotaUnit, quotaPrice);
 
+                    string entryKey = ReferencePoolEntryKey(methodNo, entry);
                     Dictionary<string, PoolItem> inner;
-                    if (!tmp.TryGetValue(entry, out inner))
+                    if (!tmp.TryGetValue(entryKey, out inner))
                     {
                         inner = new Dictionary<string, PoolItem>(StringComparer.Ordinal);
-                        tmp[entry] = inner;
+                        tmp[entryKey] = inner;
                     }
 
                     if (LearningStore.Get(values, "deleted").Trim() == "1")
@@ -1199,6 +1264,27 @@ namespace RecoQuotaRecommend
                 QuotaRecommendPanel.Log("Reference quota pool load failed: " + ex.Message);
             }
             return map;
+        }
+
+        private static Dictionary<string, List<PoolItem>> CloneReferencePool(Dictionary<string, List<PoolItem>> source)
+        {
+            Dictionary<string, List<PoolItem>> clone = new Dictionary<string, List<PoolItem>>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, List<PoolItem>> pair in source ?? new Dictionary<string, List<PoolItem>>())
+            {
+                clone[pair.Key] = new List<PoolItem>(pair.Value ?? new List<PoolItem>());
+            }
+            return clone;
+        }
+
+        private static string BuildReferenceFileFingerprint(string path)
+        {
+            if (!File.Exists(path))
+            {
+                return "missing";
+            }
+
+            FileInfo info = new FileInfo(path);
+            return info.Length.ToString(CultureInfo.InvariantCulture) + ":" + info.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture);
         }
 
         private static int ComparePoolItem(PoolItem a, PoolItem b)

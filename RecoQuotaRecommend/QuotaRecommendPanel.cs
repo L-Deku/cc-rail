@@ -21,6 +21,9 @@ namespace RecoQuotaRecommend
 {
     public sealed class QuotaRecommendPanel : Form
     {
+        private const long MaxLogBytes = 5L * 1024L * 1024L;
+        private const int LogBackupCount = 3;
+        private static readonly object LogLock = new object();
         private static readonly HashSet<Form> InstalledForms = new HashSet<Form>();
         private static readonly Dictionary<ContextMenuStrip, MenuInfo> MenuInfos = new Dictionary<ContextMenuStrip, MenuInfo>();
         private static readonly Dictionary<Form, RecommendDialog> RecommendDialogs = new Dictionary<Form, RecommendDialog>();
@@ -494,10 +497,38 @@ namespace RecoQuotaRecommend
             {
                 string dir = Path.GetDirectoryName(typeof(QuotaRecommendPanel).Assembly.Location);
                 string path = Path.Combine(dir, "RecoQuotaRecommend.log");
-                File.AppendAllText(path, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + " " + message + Environment.NewLine);
+                string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + " " + message + Environment.NewLine;
+                lock (LogLock)
+                {
+                    RotateLogIfNeeded(path);
+                    File.AppendAllText(path, line, Encoding.UTF8);
+                }
             }
             catch
             {
+            }
+        }
+
+        private static void RotateLogIfNeeded(string path)
+        {
+            if (!File.Exists(path) || new FileInfo(path).Length < MaxLogBytes)
+            {
+                return;
+            }
+
+            for (int i = LogBackupCount; i >= 1; i--)
+            {
+                string source = i == 1 ? path : path + "." + (i - 1).ToString(CultureInfo.InvariantCulture);
+                string target = path + "." + i.ToString(CultureInfo.InvariantCulture);
+                if (!File.Exists(source))
+                {
+                    continue;
+                }
+                if (File.Exists(target))
+                {
+                    File.Delete(target);
+                }
+                File.Move(source, target);
             }
         }
     }

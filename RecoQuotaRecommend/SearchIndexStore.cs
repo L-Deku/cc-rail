@@ -21,6 +21,8 @@ namespace RecoQuotaRecommend
 {
     internal sealed class SearchIndexStore
     {
+        private static readonly object CacheLock = new object();
+        private static readonly Dictionary<string, SearchIndexCacheEntry> StoreCache = new Dictionary<string, SearchIndexCacheEntry>(StringComparer.OrdinalIgnoreCase);
         private readonly List<IndexQuota> quotas = new List<IndexQuota>();
         private readonly List<IndexMaterial> materials = new List<IndexMaterial>();
         private readonly Dictionary<string, List<IndexQuota>> quotaTokenIndex = new Dictionary<string, List<IndexQuota>>(StringComparer.OrdinalIgnoreCase);
@@ -29,9 +31,14 @@ namespace RecoQuotaRecommend
         public int QuotaCount { get { return quotas.Count; } }
         public int MaterialCount { get { return materials.Count; } }
 
+        private sealed class SearchIndexCacheEntry
+        {
+            public string Fingerprint;
+            public SearchIndexStore Store;
+        }
+
         public static SearchIndexStore LoadOrBuild()
         {
-            SearchIndexStore store = new SearchIndexStore();
             string dataDir = LearningStore.FindDataDir();
             string quotaPath = Path.Combine(dataDir, "quota-index.jsonl");
             string materialPath = Path.Combine(dataDir, "material-index.jsonl");
@@ -48,8 +55,37 @@ namespace RecoQuotaRecommend
                 }
             }
 
-            store.LoadFiles(quotaPath, materialPath);
-            return store;
+            string cacheKey = Path.GetFullPath(dataDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            lock (CacheLock)
+            {
+                string fingerprint = BuildFileFingerprint(quotaPath) + "|" + BuildFileFingerprint(materialPath);
+                SearchIndexCacheEntry cached;
+                if (StoreCache.TryGetValue(cacheKey, out cached) &&
+                    String.Equals(cached.Fingerprint, fingerprint, StringComparison.Ordinal))
+                {
+                    return cached.Store;
+                }
+
+                SearchIndexStore store = new SearchIndexStore();
+                store.LoadFiles(quotaPath, materialPath);
+                StoreCache[cacheKey] = new SearchIndexCacheEntry
+                {
+                    Fingerprint = BuildFileFingerprint(quotaPath) + "|" + BuildFileFingerprint(materialPath),
+                    Store = store
+                };
+                return store;
+            }
+        }
+
+        private static string BuildFileFingerprint(string path)
+        {
+            if (!File.Exists(path))
+            {
+                return "missing";
+            }
+
+            FileInfo info = new FileInfo(path);
+            return info.Length.ToString(CultureInfo.InvariantCulture) + ":" + info.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture);
         }
 
         public List<RecommendationRow> SearchQuotaCandidates(ExcelQuantityItem item, string categoryFilter, EntryScope scope, int limit)
@@ -278,7 +314,7 @@ namespace RecoQuotaRecommend
         {
             if (File.Exists(quotaPath))
             {
-                foreach (string line in File.ReadAllLines(quotaPath, Encoding.UTF8))
+                foreach (string line in File.ReadLines(quotaPath, Encoding.UTF8))
                 {
                     if (String.IsNullOrWhiteSpace(line))
                     {
@@ -320,7 +356,7 @@ namespace RecoQuotaRecommend
 
             if (File.Exists(materialPath))
             {
-                foreach (string line in File.ReadAllLines(materialPath, Encoding.UTF8))
+                foreach (string line in File.ReadLines(materialPath, Encoding.UTF8))
                 {
                     if (String.IsNullOrWhiteSpace(line))
                     {

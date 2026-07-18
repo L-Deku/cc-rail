@@ -6,7 +6,12 @@ $root = Split-Path -Parent $PSScriptRoot
 $soft = Join-Path $root "铁路基本建设工程投资控制系统2020网络版V0503021201"
 $work = Join-Path $env:TEMP ("reco-verify-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Path (Join-Path $work "RecoQuotaData") -Force | Out-Null
-Copy-Item (Join-Path $soft "RecoQuotaRecommend.dll") $work -Force
+$sourceDll = if (-not [String]::IsNullOrWhiteSpace($env:RECO_QUOTA_DLL)) {
+  $env:RECO_QUOTA_DLL
+} else {
+  Join-Path $soft "RecoQuotaRecommend.dll"
+}
+Copy-Item -LiteralPath $sourceDll -Destination $work -Force
 foreach ($f in @("quota-index.jsonl", "material-index.jsonl", "mapping-boxes.jsonl", "learning.jsonl")) {
   $src = Join-Path $soft "RecoQuotaData\$f"
   if (Test-Path $src) { Copy-Item $src (Join-Path $work "RecoQuotaData") -Force }

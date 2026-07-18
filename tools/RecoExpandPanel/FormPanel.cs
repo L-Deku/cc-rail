@@ -22,6 +22,11 @@ namespace RecoNet
 {
     public partial class FormPanel : Form
     {
+        private const long MaxLogBytes = 5L * 1024L * 1024L;
+        private const int LogBackupCount = 3;
+        private const int StartupPollIntervalMs = 800;
+        private const int InstalledPollIntervalMs = 15000;
+        private static readonly object LogLock = new object();
         private static readonly HashSet<Form> InstalledForms = new HashSet<Form>();
         private static readonly Dictionary<ContextMenuStrip, MenuInfo> MenuInfos = new Dictionary<ContextMenuStrip, MenuInfo>();
         private static readonly Dictionary<ContextMenu, MenuInfo> LegacyMenuInfos = new Dictionary<ContextMenu, MenuInfo>();
@@ -82,7 +87,7 @@ namespace RecoNet
             Opacity = 0;
 
             installTimer = new Timer();
-            installTimer.Interval = 800;
+            installTimer.Interval = StartupPollIntervalMs;
             installTimer.Tick += delegate { TryInstall(); };
             installTimer.Start();
             TryInstall();
@@ -106,6 +111,8 @@ namespace RecoNet
 
                 if (InstalledForms.Contains(mainForm))
                 {
+                    AttachInstalledMainForm(mainForm);
+                    installTimer.Interval = InstalledPollIntervalMs;
                     InstallAllContextMenus(mainForm);
                     InstallTreeMouseHook(mainForm);
                     InstallNativeTreeMenuFilter(mainForm);
@@ -128,7 +135,8 @@ namespace RecoNet
                 }
 
                 InstalledForms.Add(mainForm);
-                installedMainForm = mainForm;
+                AttachInstalledMainForm(mainForm);
+                installTimer.Interval = InstalledPollIntervalMs;
                 Log("Multiplier menu installed. menus=" + menus.ToString(CultureInfo.InvariantCulture));
             }
             catch (Exception ex)
@@ -136,6 +144,36 @@ namespace RecoNet
                 Log("Install failed: " + ex);
                 // Keep the host application quiet; the next timer tick can retry.
             }
+        }
+
+        private void AttachInstalledMainForm(Form mainForm)
+        {
+            if (Object.ReferenceEquals(installedMainForm, mainForm))
+            {
+                return;
+            }
+
+            if (installedMainForm != null)
+            {
+                installedMainForm.FormClosed -= InstalledMainFormClosed;
+            }
+            installedMainForm = mainForm;
+            mainForm.FormClosed -= InstalledMainFormClosed;
+            mainForm.FormClosed += InstalledMainFormClosed;
+        }
+
+        private void InstalledMainFormClosed(object sender, FormClosedEventArgs e)
+        {
+            Form mainForm = installedMainForm;
+            if (mainForm != null)
+            {
+                mainForm.FormClosed -= InstalledMainFormClosed;
+                InstalledForms.Remove(mainForm);
+            }
+            installedMainForm = null;
+            installTimer.Stop();
+            installTimer.Dispose();
+            Dispose();
         }
 
         private static int InstallAllContextMenus(Form mainForm)
@@ -349,10 +387,38 @@ namespace RecoNet
             {
                 string dir = Path.GetDirectoryName(typeof(FormPanel).Assembly.Location);
                 string path = Path.Combine(dir, "RecoExpandPanel.log");
-                File.AppendAllText(path, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + " " + message + Environment.NewLine);
+                string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + " " + message + Environment.NewLine;
+                lock (LogLock)
+                {
+                    RotateLogIfNeeded(path);
+                    File.AppendAllText(path, line, Encoding.UTF8);
+                }
             }
             catch
             {
+            }
+        }
+
+        private static void RotateLogIfNeeded(string path)
+        {
+            if (!File.Exists(path) || new FileInfo(path).Length < MaxLogBytes)
+            {
+                return;
+            }
+
+            for (int i = LogBackupCount; i >= 1; i--)
+            {
+                string source = i == 1 ? path : path + "." + (i - 1).ToString(CultureInfo.InvariantCulture);
+                string target = path + "." + i.ToString(CultureInfo.InvariantCulture);
+                if (!File.Exists(source))
+                {
+                    continue;
+                }
+                if (File.Exists(target))
+                {
+                    File.Delete(target);
+                }
+                File.Move(source, target);
             }
         }
 

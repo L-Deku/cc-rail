@@ -211,6 +211,7 @@ namespace RecoNet
                 }
 
                 int saved = 0;
+                Dictionary<ExcelQuotaLink, string> savedQuantityNames = new Dictionary<ExcelQuotaLink, string>();
                 ExcelLinkStore store = LoadStore(conn);
                 foreach (AiMatchPreviewItem item in accepted)
                 {
@@ -228,10 +229,12 @@ namespace RecoNet
                     item.Link.LastStatus = "\u81ea\u52a8\u5339\u914d\u7ed1\u5b9a\uff0c\u7b49\u5f85\u540c\u6b65";
                     item.Link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
                     store.Upsert(item.Link);
+                    savedQuantityNames[item.Link] = item.QuantityName ?? "";
                     saved++;
                 }
 
                 SaveStore(conn, store);
+                RecordBindingsToMappingStore(savedQuantityNames);
                 EnsureExcelLinkRuntime(mainForm);
                 if (ExcelLinkRuntimes.ContainsKey(mainForm))
                 {
@@ -2069,7 +2072,7 @@ namespace RecoNet
             if (groups == null || groups.Count == 0) return;
             try
             {
-                WithMappingBoxesLock(delegate
+                if (!TryWithMappingBoxesLock(delegate
                 {
                 string path = Path.Combine(FindRecoQuotaDataDir(), "mapping-boxes.jsonl");
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
@@ -2088,8 +2091,11 @@ namespace RecoNet
                     UpsertMappingBoxGroup(rows, group);
                 }
                 TrimMappingRows(rows, 30);
-                File.WriteAllLines(path, rows.Select(ToFlatJson).ToArray(), Encoding.UTF8);
-                });
+                WriteAllLinesAtomic(path, rows.Select(ToFlatJson).ToArray(), Encoding.UTF8);
+                }, 5000))
+                {
+                    Log("Record name matches to mapping store skipped: mapping-boxes lock timeout.");
+                }
             }
             catch (Exception ex)
             {
@@ -2241,7 +2247,7 @@ namespace RecoNet
 
         // mapping-boxes.jsonl 有三个写入方（推荐窗口扶正、Excel联动自动匹配、扶正训练器），
         // 都是整文件读改写，必须用跨程序集一致的命名互斥锁串行化，避免互相覆盖。
-        private static void WithMappingBoxesLock(Action action)
+        private static bool TryWithMappingBoxesLock(Action action, int timeoutMilliseconds)
         {
             System.Threading.Mutex mutex = new System.Threading.Mutex(false, MappingBoxesMutexName);
             bool acquired = false;
@@ -2249,14 +2255,20 @@ namespace RecoNet
             {
                 try
                 {
-                    acquired = mutex.WaitOne(5000);
+                    acquired = mutex.WaitOne(timeoutMilliseconds);
                 }
                 catch (System.Threading.AbandonedMutexException)
                 {
                     acquired = true;
                 }
 
+                if (!acquired)
+                {
+                    return false;
+                }
+
                 action();
+                return true;
             }
             finally
             {
@@ -2265,6 +2277,31 @@ namespace RecoNet
                     mutex.ReleaseMutex();
                 }
                 mutex.Dispose();
+            }
+        }
+
+        private static void WriteAllLinesAtomic(string filePath, string[] lines, Encoding encoding)
+        {
+            string temp = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllLines(temp, lines, encoding);
+                if (File.Exists(filePath))
+                {
+                    string backup = filePath + ".bak";
+                    File.Replace(temp, filePath, backup, true);
+                }
+                else
+                {
+                    File.Move(temp, filePath);
+                }
+            }
+            finally
+            {
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
             }
         }
 

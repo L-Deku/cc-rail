@@ -88,10 +88,16 @@ namespace RecoQuotaRecommend
         private readonly Dictionary<string, HashSet<string>> pools = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         // 规范化条目名称 → 小计/指标条目编号列表（识别用户复制条目的来源）
         private readonly Dictionary<string, List<string>> nameIndex = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        private static readonly object ActiveStoresLock = new object();
-        private static readonly List<ChapterLibraryStore> ActiveStores = new List<ChapterLibraryStore>();
+        private static readonly object StoreCacheLock = new object();
+        private static readonly Dictionary<string, ChapterLibraryCacheEntry> StoreCache = new Dictionary<string, ChapterLibraryCacheEntry>(StringComparer.OrdinalIgnoreCase);
         public string MethodKey = "";
         public string MethodNo = "";
+
+        private sealed class ChapterLibraryCacheEntry
+        {
+            public string Fingerprint;
+            public ChapterLibraryStore Store;
+        }
 
         public bool IsEmpty
         {
@@ -100,19 +106,40 @@ namespace RecoQuotaRecommend
 
         public static ChapterLibraryStore Load()
         {
-            ChapterLibraryStore store = new ChapterLibraryStore();
-            try
+            string methodKey = ResolveMethodKey();
+            string dataDir = LearningStore.FindDataDir();
+            string entriesPath = Path.Combine(dataDir, "chapter-entries.jsonl");
+            string libraryPath = Path.Combine(dataDir, "chapter-quota-library.jsonl");
+            string quotaPath = Path.Combine(dataDir, "quota-index.jsonl");
+            string cacheKey = Path.GetFullPath(dataDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + "|" + methodKey;
+            lock (StoreCacheLock)
             {
-                store.MethodKey = ResolveMethodKey();
-                string dataDir = LearningStore.FindDataDir();
-                string entriesPath = Path.Combine(dataDir, "chapter-entries.jsonl");
-                string libraryPath = Path.Combine(dataDir, "chapter-quota-library.jsonl");
+                string fingerprint = BuildFileFingerprint(entriesPath) + "|" + BuildFileFingerprint(libraryPath) + "|" + BuildFileFingerprint(quotaPath);
+                ChapterLibraryCacheEntry cached;
+                if (StoreCache.TryGetValue(cacheKey, out cached) &&
+                    String.Equals(cached.Fingerprint, fingerprint, StringComparison.Ordinal))
+                {
+                    return cached.Store;
+                }
+
+                ChapterLibraryStore store = new ChapterLibraryStore();
+                store.MethodKey = methodKey;
                 if (!File.Exists(entriesPath) || !File.Exists(libraryPath))
                 {
+                    if (cached != null && cached.Store != null)
+                    {
+                        cached.Store.ReplaceSnapshot(store);
+                        cached.Fingerprint = fingerprint;
+                        return cached.Store;
+                    }
+                    StoreCache[cacheKey] = new ChapterLibraryCacheEntry { Fingerprint = fingerprint, Store = store };
                     return store;
                 }
 
-                foreach (string line in File.ReadAllLines(entriesPath, Encoding.UTF8))
+                bool loadSucceeded = true;
+                try
+                {
+                foreach (string line in File.ReadLines(entriesPath, Encoding.UTF8))
                 {
                     if (String.IsNullOrWhiteSpace(line))
                     {
@@ -139,7 +166,7 @@ namespace RecoQuotaRecommend
 
                 HashSet<string> validQuotaCodes = LoadReferenceQuotaCodes(dataDir);
 
-                foreach (string line in File.ReadAllLines(libraryPath, Encoding.UTF8))
+                foreach (string line in File.ReadLines(libraryPath, Encoding.UTF8))
                 {
                     if (String.IsNullOrWhiteSpace(line))
                     {
@@ -190,15 +217,85 @@ namespace RecoQuotaRecommend
                 }
 
                 store.BuildNameIndex();
-                RegisterActiveStore(store);
                 QuotaRecommendPanel.Log("ChapterLibraryStore loaded. method=" + store.MethodKey + " entries=" + store.entryNames.Count.ToString(CultureInfo.InvariantCulture) + " pooledEntries=" + store.pools.Count.ToString(CultureInfo.InvariantCulture));
+                }
+                catch (Exception ex)
+                {
+                    loadSucceeded = false;
+                    QuotaRecommendPanel.Log("ChapterLibraryStore load failed: " + ex.Message);
+                }
+
+                if (!loadSucceeded)
+                {
+                    return cached != null && cached.Store != null ? cached.Store : store;
+                }
+
+                string loadedFingerprint = BuildFileFingerprint(entriesPath) + "|" + BuildFileFingerprint(libraryPath) + "|" + BuildFileFingerprint(quotaPath);
+                if (cached != null && cached.Store != null)
+                {
+                    cached.Store.ReplaceSnapshot(store);
+                    cached.Fingerprint = loadedFingerprint;
+                    return cached.Store;
+                }
+
+                StoreCache[cacheKey] = new ChapterLibraryCacheEntry
+                {
+                    Fingerprint = loadedFingerprint,
+                    Store = store
+                };
+                return store;
             }
-            catch (Exception ex)
+        }
+
+        private static string BuildFileFingerprint(string path)
+        {
+            if (!File.Exists(path))
             {
-                QuotaRecommendPanel.Log("ChapterLibraryStore load failed: " + ex.Message);
+                return "missing";
             }
 
-            return store;
+            FileInfo info = new FileInfo(path);
+            return info.Length.ToString(CultureInfo.InvariantCulture) + ":" + info.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private void ReplaceSnapshot(ChapterLibraryStore source)
+        {
+            entryNames.Clear();
+            foreach (KeyValuePair<string, string> pair in source.entryNames)
+            {
+                entryNames[pair.Key] = pair.Value;
+            }
+            entryTypes.Clear();
+            foreach (KeyValuePair<string, string> pair in source.entryTypes)
+            {
+                entryTypes[pair.Key] = pair.Value;
+            }
+            pools.Clear();
+            foreach (KeyValuePair<string, HashSet<string>> pair in source.pools)
+            {
+                pools[pair.Key] = new HashSet<string>(pair.Value, StringComparer.Ordinal);
+            }
+            MethodKey = source.MethodKey;
+            MethodNo = source.MethodNo;
+            BuildNameIndex();
+        }
+
+        private void RefreshCachedFingerprint()
+        {
+            string dataDir = LearningStore.FindDataDir();
+            string fingerprint = BuildFileFingerprint(Path.Combine(dataDir, "chapter-entries.jsonl")) + "|"
+                + BuildFileFingerprint(Path.Combine(dataDir, "chapter-quota-library.jsonl")) + "|"
+                + BuildFileFingerprint(Path.Combine(dataDir, "quota-index.jsonl"));
+            lock (StoreCacheLock)
+            {
+                foreach (ChapterLibraryCacheEntry cached in StoreCache.Values)
+                {
+                    if (cached != null && Object.ReferenceEquals(cached.Store, this))
+                    {
+                        cached.Fingerprint = fingerprint;
+                    }
+                }
+            }
         }
 
         // 与 SearchIndexStore.ResolveDatabaseName 同一套判断：按运行目录/进程判定 2020 还是 2024
@@ -365,46 +462,6 @@ namespace RecoQuotaRecommend
             methodNo = poolKey.Substring(0, sep);
             entryCode = poolKey.Substring(sep + 1);
             return !String.IsNullOrEmpty(entryCode);
-        }
-
-        private static void RegisterActiveStore(ChapterLibraryStore store)
-        {
-            if (store == null)
-            {
-                return;
-            }
-            lock (ActiveStoresLock)
-            {
-                if (!ActiveStores.Contains(store))
-                {
-                    ActiveStores.Add(store);
-                }
-            }
-        }
-
-        private static void ApplyPoolMutationToActiveStores(string methodKey, string methodNo, string entryCode, string kind, string code, string name, string unit, string price, bool add)
-        {
-            List<ChapterLibraryStore> stores;
-            lock (ActiveStoresLock)
-            {
-                stores = new List<ChapterLibraryStore>(ActiveStores);
-            }
-            foreach (ChapterLibraryStore store in stores)
-            {
-                if (store == null || !String.Equals(store.MethodKey, methodKey, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-                if (add)
-                {
-                    store.AddPoolKey(methodNo, entryCode, kind, code, name, unit, price);
-                }
-                else
-                {
-                    store.RemovePoolKey(methodNo, entryCode, kind, code, name, unit, price);
-                }
-                store.BuildNameIndex();
-            }
         }
 
         private void AddPoolKey(string methodNo, string entryCode, string kind, string code)
@@ -738,7 +795,9 @@ namespace RecoQuotaRecommend
                 record["last_seen"] = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
                 string path = Path.Combine(LearningStore.FindDataDir(), "chapter-quota-library.jsonl");
                 File.AppendAllText(path, LearningStore.ToJson(record) + Environment.NewLine, Encoding.UTF8);
-                ApplyPoolMutationToActiveStores(MethodKey, methodNo, entryCode, kind, code.Trim(), name, unit, price, true);
+                AddPoolKey(methodNo, entryCode, kind, code.Trim(), name, unit, price);
+                BuildNameIndex();
+                RefreshCachedFingerprint();
                 QuotaRecommendPanel.Log("ChapterLibrary user quota added. methodNo=" + methodNo + " entry=" + entryCode + " code=" + code);
             }
             catch (Exception ex)
@@ -796,7 +855,9 @@ namespace RecoQuotaRecommend
                 record["last_seen"] = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
                 string path = Path.Combine(LearningStore.FindDataDir(), "chapter-quota-library.jsonl");
                 File.AppendAllText(path, LearningStore.ToJson(record) + Environment.NewLine, Encoding.UTF8);
-                ApplyPoolMutationToActiveStores(MethodKey, methodNo, entryCode, kind, code.Trim(), name, unit, price, false);
+                RemovePoolKey(methodNo, entryCode, kind, code.Trim(), name, unit, price);
+                BuildNameIndex();
+                RefreshCachedFingerprint();
                 QuotaRecommendPanel.Log("ChapterLibrary user quota removed. methodNo=" + methodNo + " entry=" + entryCode + " code=" + code);
             }
             catch (Exception ex)

@@ -16,6 +16,8 @@ namespace RecoNet
     {
         private static readonly Dictionary<Form, List<AgentUndoRecord>> AgentUndoStacks = new Dictionary<Form, List<AgentUndoRecord>>();
         private static readonly Dictionary<Form, List<AgentUndoRecord>> AgentRedoStacks = new Dictionary<Form, List<AgentUndoRecord>>();
+        private static readonly object AgentConnectionFailureLock = new object();
+        private static readonly HashSet<string> AgentCloneConnectionFailures = new HashSet<string>(StringComparer.Ordinal);
 
         // 与迁移工具相同的诊断账号，仅当主程序连接串克隆失败时兜底使用。
         private const string AgentDbUser = "reco";
@@ -217,28 +219,60 @@ namespace RecoNet
 
             string hostString = host.ConnectionString;
             string database = host.Database;
-            try
+            string connectionKey = hostString + "\n" + database;
+            bool skipClone;
+            lock (AgentConnectionFailureLock)
             {
-                SqlConnection conn = new SqlConnection(hostString);
-                conn.Open();
-                if (!String.IsNullOrEmpty(database) && !String.Equals(conn.Database, database, StringComparison.OrdinalIgnoreCase))
-                {
-                    conn.ChangeDatabase(database);
-                }
-
-                return conn;
+                skipClone = AgentCloneConnectionFailures.Contains(connectionKey);
             }
-            catch (Exception ex)
+
+            bool cloneFailed = false;
+            if (!skipClone)
             {
-                Log("Agent clone connection failed, fallback to reco: " + ex.Message);
+                SqlConnection conn = null;
+                try
+                {
+                    conn = new SqlConnection(hostString);
+                    conn.Open();
+                    if (!String.IsNullOrEmpty(database) && !String.Equals(conn.Database, database, StringComparison.OrdinalIgnoreCase))
+                    {
+                        conn.ChangeDatabase(database);
+                    }
+
+                    return conn;
+                }
+                catch (Exception ex)
+                {
+                    if (conn != null)
+                    {
+                        conn.Dispose();
+                    }
+                    cloneFailed = true;
+                    Log("Agent clone connection failed, fallback to reco: " + ex.Message);
+                }
             }
 
             SqlConnectionStringBuilder builder = new SqlConnectionStringBuilder(hostString);
             string fallback = "Server=" + builder.DataSource + ";Database=" + database +
                 ";User ID=" + AgentDbUser + ";Password=" + AgentDbPassword + ";Connect Timeout=8";
             SqlConnection fallbackConn = new SqlConnection(fallback);
-            fallbackConn.Open();
-            return fallbackConn;
+            try
+            {
+                fallbackConn.Open();
+                if (cloneFailed)
+                {
+                    lock (AgentConnectionFailureLock)
+                    {
+                        AgentCloneConnectionFailures.Add(connectionKey);
+                    }
+                }
+                return fallbackConn;
+            }
+            catch
+            {
+                fallbackConn.Dispose();
+                throw;
+            }
         }
 
         private static AgentSelectionSnapshot CaptureAgentSelection(Form mainForm)
