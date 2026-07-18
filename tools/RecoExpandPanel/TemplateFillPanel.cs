@@ -55,6 +55,11 @@ namespace RecoNet
             private bool reloadingTargetWorkbooks;
             private int targetWorkbookReloadCount;
 
+            internal void SelectSmartFillMode()
+            {
+                if (cmbMode.Items.Count >= 3) cmbMode.SelectedIndex = 2;
+            }
+
             public TemplateFillPanel(Form owner)
             {
                 mainForm = owner;
@@ -92,8 +97,14 @@ namespace RecoNet
                 btnDeleteTemplate.Click += delegate { OnDeleteTemplate(); };
                 AddLabel("取数模式", 320, 50, 60);
                 cmbMode.SetBounds(385, 47, 150, 23); cmbMode.DropDownStyle = ComboBoxStyle.DropDownList;
-                cmbMode.Items.AddRange(new object[] { "一·列锚点", "二·名字驱动" });
+                cmbMode.Items.AddRange(new object[] { "一·列锚点", "二·名字驱动", "三·智能铺量(学习库)" });
                 cmbMode.SelectedIndex = 0;
+                cmbMode.SelectedIndexChanged += delegate
+                {
+                    bool smart = cmbMode.SelectedIndex == 2;
+                    cmbTemplate.Enabled = !smart;
+                    btnDeleteTemplate.Enabled = !smart;
+                };
                 AddLabel("目标Excel", 12, 82, 60);
                 cmbTargetWorkbook.SetBounds(75, 79, 190, 23);
                 cmbTargetWorkbook.DropDownWidth = 420;
@@ -451,6 +462,23 @@ namespace RecoNet
                 SetBusy(true, "预览中...");
                 try
                 {
+                    // 模式三·智能铺量:不需要模板,直接走学习库漏斗。
+                    if (cmbMode.SelectedIndex == 2)
+                    {
+                        string smartWorkbook = GetSelectedTargetWorkbookPath();
+                        if (String.IsNullOrWhiteSpace(smartWorkbook) || !File.Exists(smartWorkbook))
+                        {
+                            MessageBox.Show(this, "没有可用的目标 Excel，请先打开并保存工作簿。", "智能铺量");
+                            return;
+                        }
+                        string smartWarning = null;
+                        preview = BuildPreview_SmartFill(mainForm, smartWorkbook, cmbTargetSheet.Text.Trim(), txtColumn.Text.Trim(), out smartWarning);
+                        if (!String.IsNullOrEmpty(smartWarning)) MessageBox.Show(this, smartWarning, "智能铺量");
+                        RebuildItemTree();
+                        FillGrid();
+                        return;
+                    }
+
                     if (cmbTemplate.SelectedItem == null) { MessageBox.Show(this, "请先选择模板。", "模板铺量"); return; }
                     FillTemplate t = LoadFillTemplate(Convert.ToString(cmbTemplate.SelectedItem));
                     if (t == null) { MessageBox.Show(this, "模板加载失败。", "模板铺量"); return; }
@@ -1004,6 +1032,19 @@ namespace RecoNet
                 panel = new TemplateFillPanel(mainForm);
                 TemplateFillPanels[mainForm] = panel;
             }
+            panel.Show(mainForm); panel.Activate();
+        }
+
+        // 智能铺量入口:同一面板,预选"三·智能铺量(学习库)"模式。
+        private static void ShowSmartFillPanel(Form mainForm)
+        {
+            TemplateFillPanel panel;
+            if (!TemplateFillPanels.TryGetValue(mainForm, out panel) || panel == null || panel.IsDisposed)
+            {
+                panel = new TemplateFillPanel(mainForm);
+                TemplateFillPanels[mainForm] = panel;
+            }
+            panel.SelectSmartFillMode();
             panel.Show(mainForm); panel.Activate();
         }
     }

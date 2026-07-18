@@ -160,6 +160,17 @@ namespace RecoNet
                     openTemplateFill.Enabled = true;
                     openTemplateFill.Click += delegate { ShowTemplateFillPanel(mainForm); };
                     menu.Items.Insert(Math.Min(baseIndex, menu.Items.Count), openTemplateFill);
+                    baseIndex++;
+                }
+                ToolStripMenuItem openSmartFill = FindMenuItem(menu, "打开智能铺量面板");
+                if (openSmartFill == null)
+                {
+                    openSmartFill = new ToolStripMenuItem("打开智能铺量面板");
+                    openSmartFill.Visible = true;
+                    openSmartFill.Available = true;
+                    openSmartFill.Enabled = true;
+                    openSmartFill.Click += delegate { ShowSmartFillPanel(mainForm); };
+                    menu.Items.Insert(Math.Min(baseIndex, menu.Items.Count), openSmartFill);
                 }
         }
 
