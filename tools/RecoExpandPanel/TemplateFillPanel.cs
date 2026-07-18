@@ -216,17 +216,36 @@ namespace RecoNet
                     Log("Template fill grid data error: " + (e.Exception == null ? "unknown" : e.Exception.Message));
                     e.ThrowException = false;
                 };
-                // 一量对多定额:工程量名列的续行不画文字与上分隔线,视觉上与首行合并成一个单元格。
+                // 一量对多定额:工程量名列按合并单元格绘制——组内行间不画横线,文字在整个合并区域内水平+垂直居中。
                 grid.CellPainting += delegate(object sender, DataGridViewCellPaintingEventArgs e)
                 {
-                    if (e.RowIndex <= 0 || e.ColumnIndex < 0) return;
+                    if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
                     if (!String.Equals(grid.Columns[e.ColumnIndex].Name, "tname", StringComparison.Ordinal)) return;
                     FillPreviewItem cur = grid.Rows[e.RowIndex].Tag as FillPreviewItem;
-                    FillPreviewItem prev = grid.Rows[e.RowIndex - 1].Tag as FillPreviewItem;
-                    if (cur == null || prev == null || !cur.IsNameDriven) return;
-                    if (cur.TargetRow != prev.TargetRow || cur.GroupOrder <= 0) return;
-                    e.AdvancedBorderStyle.Top = DataGridViewAdvancedCellBorderStyle.None;
+                    if (cur == null || !cur.IsNameDriven) return;
+                    int start = e.RowIndex, end = e.RowIndex;
+                    while (start > 0 && IsSameQuantityGroup(grid.Rows[start - 1].Tag as FillPreviewItem, cur)) start--;
+                    while (end < grid.Rows.Count - 1 && IsSameQuantityGroup(grid.Rows[end + 1].Tag as FillPreviewItem, cur)) end++;
+                    if (start == end) return; // 非一对多,走默认绘制
+
+                    int above = 0, total = 0;
+                    for (int i = start; i <= end; i++)
+                    {
+                        if (i < e.RowIndex) above += grid.Rows[i].Height;
+                        total += grid.Rows[i].Height;
+                    }
+                    Rectangle union = new Rectangle(e.CellBounds.Left, e.CellBounds.Top - above, e.CellBounds.Width, total);
+
+                    if (e.RowIndex > start) e.AdvancedBorderStyle.Top = DataGridViewAdvancedCellBorderStyle.None;
                     e.PaintBackground(e.ClipBounds, true);
+                    string text = Convert.ToString(grid.Rows[start].Cells[e.ColumnIndex].Value);
+                    if (!String.IsNullOrEmpty(text))
+                    {
+                        bool selected = (e.State & DataGridViewElementStates.Selected) != 0;
+                        Color foreColor = selected ? e.CellStyle.SelectionForeColor : e.CellStyle.ForeColor;
+                        TextRenderer.DrawText(e.Graphics, text, e.CellStyle.Font, union, foreColor,
+                            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
+                    }
                     e.Handled = true;
                 };
 
@@ -264,6 +283,13 @@ namespace RecoNet
             {
                 Label l = new Label { Text = text, AutoSize = false };
                 l.SetBounds(x, y, w, 18); Controls.Add(l);
+            }
+
+            // 同一 Excel 工程量行产生的多条定额 = 一个合并显示组。
+            private static bool IsSameQuantityGroup(FillPreviewItem other, FillPreviewItem current)
+            {
+                return other != null && current != null && other.IsNameDriven && current.IsNameDriven &&
+                    other.TargetRow == current.TargetRow;
             }
 
             private void ReloadTemplateList()
