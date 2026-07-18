@@ -7,6 +7,8 @@ $learning = Get-Content -LiteralPath $learningPath -Raw
 $excelLink = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\ExcelLinkFeature.cs') -Raw
 
 if ($learning -notmatch 'RecordBindingEventsToLearningDb') { throw '缺少双写入口 RecordBindingEventsToLearningDb' }
+if ($learning -notmatch '192\.168\.2\.213') { throw '学习库必须固定连中央服务器,不得跟随 ServerSetting.xml' }
+if ($learning -match 'ServerSetting\.xml') { throw '学习库连接不应再读 ServerSetting.xml(2020版指向另一台服务器)' }
 if ($learning -notmatch 'learningDbUnavailable = true') { throw '缺少失败即停用保护' }
 if ($learning -notmatch 'Connect Timeout=3') { throw '缺少短超时保护' }
 if ($learning -notmatch 'catch') { throw '缺少异常吞噬保护' }

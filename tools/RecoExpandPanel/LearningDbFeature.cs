@@ -1,14 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
-using System.IO;
 using System.Windows.Forms;
-using System.Xml;
 
 namespace RecoNet
 {
     public partial class FormPanel : Form
     {
+        // 学习库固定在中央服务器,不跟随各软件的项目服务器(2020版连192.168.2.13,学习库统一在.213)。
+        private const string LearningDbServer = "192.168.2.213,1433";
+
         private static string learningDbConnectionString;
         private static bool learningDbUnavailable;
 
@@ -75,39 +76,9 @@ namespace RecoNet
 
         private static string GetLearningDbConnectionString()
         {
-            if (learningDbConnectionString != null)
+            if (learningDbConnectionString == null)
             {
-                return learningDbConnectionString;
-            }
-
-            try
-            {
-                string dir = Path.GetDirectoryName(typeof(FormPanel).Assembly.Location);
-                string settingPath = Path.Combine(dir, "ServerSetting.xml");
-                if (!File.Exists(settingPath))
-                {
-                    learningDbConnectionString = "";
-                    return "";
-                }
-
-                XmlDocument doc = new XmlDocument();
-                doc.Load(settingPath);
-                XmlNode ipNode = doc.SelectSingleNode("//ServerIP");
-                XmlNode portNode = doc.SelectSingleNode("//SqlPort");
-                string ip = ipNode != null ? (ipNode.InnerText ?? "").Trim() : "";
-                string port = portNode != null ? (portNode.InnerText ?? "").Trim() : "1433";
-                if (String.IsNullOrEmpty(ip))
-                {
-                    learningDbConnectionString = "";
-                    return "";
-                }
-
-                learningDbConnectionString = "Server=" + ip + "," + port + ";Database=RecoLearning;User ID=" + AgentDbUser + ";Password=" + AgentDbPassword + ";Connect Timeout=3";
-            }
-            catch (Exception ex)
-            {
-                Log("Learning DB connection setup failed: " + ex.Message);
-                learningDbConnectionString = "";
+                learningDbConnectionString = "Server=" + LearningDbServer + ";Database=RecoLearning;User ID=" + AgentDbUser + ";Password=" + AgentDbPassword + ";Connect Timeout=3";
             }
 
             return learningDbConnectionString;
