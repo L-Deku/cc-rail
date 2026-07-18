@@ -1,7 +1,10 @@
 # tools/RecoLearning/Import-JsonlLibraries.ps1
 # 导入 RecoQuotaData 下四个 jsonl:章节树/条目定额库全量重载,mapping-boxes/learning 追加为流水。
 param(
-  [string]$DataDir = "D:\AI文件\自动预算\2024铁路工程云计价系统网络版V1.0\铁路工程云计价系统网络版V1.0\RecoQuotaData"
+  [string]$DataDir = "D:\AI文件\自动预算\2024铁路工程云计价系统网络版V1.0\铁路工程云计价系统网络版V1.0\RecoQuotaData",
+  # 只收 mapping-boxes/learning 流水,不重载章节树与条目定额库。
+  # 用于收割其他软件目录(如2020版)的 RecoQuotaData,避免其旧版大库文件覆盖主库。
+  [switch]$SkipChapterLibraries
 )
 . "$PSScriptRoot\Common.ps1"
 
@@ -15,6 +18,8 @@ function Read-Jsonl {
 }
 
 function Get-Prop { param($Obj, [string]$Name) $p = $Obj.PSObject.Properties[$Name]; if ($p) { [string]$p.Value } else { '' } }
+
+if (-not $SkipChapterLibraries) {
 
 # ---------- 1. ChapterEntry:全量重载 ----------
 $dt = New-Object System.Data.DataTable
@@ -54,6 +59,10 @@ foreach ($item in $best.Values) {
 [void](Invoke-RecoNonQuery -Sql "TRUNCATE TABLE dbo.EntryQuota")
 Invoke-RecoBulkCopy -Table $dt2 -TargetTable 'dbo.EntryQuota'
 Write-Host ("EntryQuota: 源 $srcCount 行,去重导入 " + $dt2.Rows.Count + " 行")
+
+} else {
+  Write-Host "已跳过章节树与条目定额库重载(-SkipChapterLibraries)"
+}
 
 # ---------- 3. mapping-boxes.jsonl → BindingLog(追加,按行哈希幂等) ----------
 $existing = @{}
