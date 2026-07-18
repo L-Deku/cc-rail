@@ -298,7 +298,7 @@ namespace RecoNet
                 if (target == null || String.IsNullOrEmpty(target.Code)) continue;
                 FillPreviewItem item = new FillPreviewItem
                 {
-                    TemplateName = "智能铺量",
+                    TemplateName = "推荐定额",
                     IsNameDriven = true,
                     TargetRow = row.Row,
                     TargetName = row.DisplayName,
@@ -429,7 +429,7 @@ namespace RecoNet
 
                 FillPreviewItem manual = new FillPreviewItem
                 {
-                    TemplateName = "智能铺量",
+                    TemplateName = "推荐定额",
                     IsNameDriven = true,
                     NeedManualQuota = true,
                     TargetRow = row.Row,

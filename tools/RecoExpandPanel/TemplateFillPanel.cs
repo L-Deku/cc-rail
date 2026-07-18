@@ -55,20 +55,30 @@ namespace RecoNet
             private bool reloadingTargetWorkbooks;
             private int targetWorkbookReloadCount;
 
-            internal void SelectSmartFillMode()
+            private readonly bool smartOnly;
+
+            public TemplateFillPanel(Form owner) : this(owner, false)
             {
-                if (cmbMode.Items.Count >= 3) cmbMode.SelectedIndex = 2;
             }
 
-            public TemplateFillPanel(Form owner)
+            // smartOnlyMode=true:独立"推荐定额"窗口,上部只有目标一行,固定走学习库漏斗。
+            public TemplateFillPanel(Form owner, bool smartOnlyMode)
             {
                 mainForm = owner;
-                Text = "模板铺量";
+                smartOnly = smartOnlyMode;
+                Text = smartOnly ? "推荐定额" : "模板铺量";
                 StartPosition = FormStartPosition.CenterParent;
                 ClientSize = new Size(900, 580);
                 BuildLayout();
-                ReloadTemplateList();
-                ReloadSourceSheets();
+                if (smartOnly)
+                {
+                    cmbMode.SelectedIndex = 2;
+                }
+                else
+                {
+                    ReloadTemplateList();
+                    ReloadSourceSheets();
+                }
                 ReloadTargetWorkbooks();
                 string cur = GetCurrentUnitNo(mainForm);
                 if (!String.IsNullOrEmpty(cur)) txtUnit.Text = cur;
@@ -76,6 +86,9 @@ namespace RecoNet
 
             private void BuildLayout()
             {
+                int targetTop = smartOnly ? 12 : 79;
+                if (!smartOnly)
+                {
                 // —— 生成模板 ——
                 AddLabel("源单元号", 12, 15, 56);
                 txtUnit.SetBounds(72, 12, 90, 23); txtUnit.Text = "_ZGS_01";
@@ -97,7 +110,7 @@ namespace RecoNet
                 btnDeleteTemplate.Click += delegate { OnDeleteTemplate(); };
                 AddLabel("取数模式", 320, 50, 60);
                 cmbMode.SetBounds(385, 47, 150, 23); cmbMode.DropDownStyle = ComboBoxStyle.DropDownList;
-                cmbMode.Items.AddRange(new object[] { "一·列锚点", "二·名字驱动", "三·智能铺量(学习库)" });
+                cmbMode.Items.AddRange(new object[] { "一·列锚点", "二·名字驱动", "三·推荐定额(学习库)" });
                 cmbMode.SelectedIndex = 0;
                 cmbMode.SelectedIndexChanged += delegate
                 {
@@ -105,25 +118,26 @@ namespace RecoNet
                     cmbTemplate.Enabled = !smart;
                     btnDeleteTemplate.Enabled = !smart;
                 };
-                AddLabel("目标Excel", 12, 82, 60);
-                cmbTargetWorkbook.SetBounds(75, 79, 190, 23);
+                }
+                AddLabel("目标Excel", 12, targetTop + 3, 60);
+                cmbTargetWorkbook.SetBounds(75, targetTop, 190, 23);
                 cmbTargetWorkbook.DropDownWidth = 420;
                 cmbTargetWorkbook.DropDownStyle = ComboBoxStyle.DropDownList;
                 cmbTargetWorkbook.DropDown += delegate { ReloadTargetWorkbooks(); };
                 cmbTargetWorkbook.SelectedIndexChanged += delegate { if (!reloadingTargetWorkbooks) ReloadTargetSheets(); };
-                AddLabel("目标sheet", 275, 82, 60);
-                cmbTargetSheet.SetBounds(340, 79, 105, 23); cmbTargetSheet.Text = "";
+                AddLabel("目标sheet", 275, targetTop + 3, 60);
+                cmbTargetSheet.SetBounds(340, targetTop, 105, 23); cmbTargetSheet.Text = "";
                 cmbTargetSheet.DropDownStyle = ComboBoxStyle.DropDown; // 可选可填
                 cmbTargetSheet.DropDown += delegate { ReloadTargetSheets(); };
-                AddLabel("目标列", 455, 82, 50);
-                txtColumn.SetBounds(505, 79, 40, 23); txtColumn.Text = "";
-                AddLabel("目标单元", 555, 82, 60);
-                cmbTargetUnit.SetBounds(620, 79, 80, 23); cmbTargetUnit.Text = "_ZGS_02";
+                AddLabel("目标列", 455, targetTop + 3, 50);
+                txtColumn.SetBounds(505, targetTop, 40, 23); txtColumn.Text = "";
+                AddLabel("目标单元", 555, targetTop + 3, 60);
+                cmbTargetUnit.SetBounds(620, targetTop, 80, 23); cmbTargetUnit.Text = "_ZGS_02";
                 cmbTargetUnit.DropDownStyle = ComboBoxStyle.DropDown; // 可选可填
                 cmbTargetUnit.DropDown += delegate { ReloadTargetUnits(); };
-                btnPreview.SetBounds(710, 78, 60, 25); btnPreview.Text = "预览";
+                btnPreview.SetBounds(710, targetTop - 1, 60, 25); btnPreview.Text = "预览";
                 btnPreview.Click += delegate { OnPreview(); };
-                btnApply.SetBounds(780, 78, 108, 25); btnApply.Text = "写入目标单元";
+                btnApply.SetBounds(780, targetTop - 1, 108, 25); btnApply.Text = "写入目标单元";
                 btnApply.Click += delegate { OnApply(); };
 
                 Label reminder = new Label
@@ -131,11 +145,11 @@ namespace RecoNet
                     Text = "写入＝复制定额到“目标单元”的对应条目（条目序号全局共享）。写入后请在软件点一次“计算”刷新单价与汇总。",
                     ForeColor = Color.Firebrick, AutoSize = false
                 };
-                reminder.SetBounds(12, 108, 876, 18);
+                reminder.SetBounds(12, targetTop + 29, 876, 18);
                 reminder.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
                 // —— 左侧条目树 + 右侧预览表：SplitContainer 分栏，可拖动调整宽度 ——
-                split.SetBounds(12, 132, 876, 436);
+                split.SetBounds(12, targetTop + 53, 876, ClientSize.Height - (targetTop + 53) - 12);
                 split.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
                 split.Orientation = Orientation.Vertical;
                 split.Panel1MinSize = 100;
@@ -202,6 +216,19 @@ namespace RecoNet
                     Log("Template fill grid data error: " + (e.Exception == null ? "unknown" : e.Exception.Message));
                     e.ThrowException = false;
                 };
+                // 一量对多定额:工程量名列的续行不画文字与上分隔线,视觉上与首行合并成一个单元格。
+                grid.CellPainting += delegate(object sender, DataGridViewCellPaintingEventArgs e)
+                {
+                    if (e.RowIndex <= 0 || e.ColumnIndex < 0) return;
+                    if (!String.Equals(grid.Columns[e.ColumnIndex].Name, "tname", StringComparison.Ordinal)) return;
+                    FillPreviewItem cur = grid.Rows[e.RowIndex].Tag as FillPreviewItem;
+                    FillPreviewItem prev = grid.Rows[e.RowIndex - 1].Tag as FillPreviewItem;
+                    if (cur == null || prev == null || !cur.IsNameDriven) return;
+                    if (cur.TargetRow != prev.TargetRow || cur.GroupOrder <= 0) return;
+                    e.AdvancedBorderStyle.Top = DataGridViewAdvancedCellBorderStyle.None;
+                    e.PaintBackground(e.ClipBounds, true);
+                    e.Handled = true;
+                };
 
                 ContextMenuStrip gridMenu = new ContextMenuStrip();
                 ToolStripMenuItem miBindSelected = new ToolStripMenuItem("绑定软件选中的定额到此行");
@@ -223,8 +250,12 @@ namespace RecoNet
                 split.Panel1.Controls.Add(itemTree);
                 split.Panel2.Controls.Add(grid);
 
-                Controls.Add(txtUnit); Controls.Add(cmbSourceSheet); Controls.Add(txtName); Controls.Add(btnBuild);
-                Controls.Add(cmbTemplate); Controls.Add(btnDeleteTemplate); Controls.Add(cmbMode); Controls.Add(cmbTargetWorkbook); Controls.Add(cmbTargetSheet); Controls.Add(txtColumn);
+                if (!smartOnly)
+                {
+                    Controls.Add(txtUnit); Controls.Add(cmbSourceSheet); Controls.Add(txtName); Controls.Add(btnBuild);
+                    Controls.Add(cmbTemplate); Controls.Add(btnDeleteTemplate); Controls.Add(cmbMode);
+                }
+                Controls.Add(cmbTargetWorkbook); Controls.Add(cmbTargetSheet); Controls.Add(txtColumn);
                 Controls.Add(cmbTargetUnit);
                 Controls.Add(btnPreview); Controls.Add(btnApply); Controls.Add(reminder); Controls.Add(split);
             }
@@ -462,18 +493,18 @@ namespace RecoNet
                 SetBusy(true, "预览中...");
                 try
                 {
-                    // 模式三·智能铺量:不需要模板,直接走学习库漏斗。
+                    // 模式三·推荐定额:不需要模板,直接走学习库漏斗。
                     if (cmbMode.SelectedIndex == 2)
                     {
                         string smartWorkbook = GetSelectedTargetWorkbookPath();
                         if (String.IsNullOrWhiteSpace(smartWorkbook) || !File.Exists(smartWorkbook))
                         {
-                            MessageBox.Show(this, "没有可用的目标 Excel，请先打开并保存工作簿。", "智能铺量");
+                            MessageBox.Show(this, "没有可用的目标 Excel，请先打开并保存工作簿。", "推荐定额");
                             return;
                         }
                         string smartWarning = null;
                         preview = BuildPreview_SmartFill(mainForm, smartWorkbook, cmbTargetSheet.Text.Trim(), txtColumn.Text.Trim(), out smartWarning);
-                        if (!String.IsNullOrEmpty(smartWarning)) MessageBox.Show(this, smartWarning, "智能铺量");
+                        if (!String.IsNullOrEmpty(smartWarning)) MessageBox.Show(this, smartWarning, "推荐定额");
                         RebuildItemTree();
                         FillGrid();
                         return;
@@ -1035,16 +1066,17 @@ namespace RecoNet
             panel.Show(mainForm); panel.Activate();
         }
 
-        // 智能铺量入口:同一面板,预选"三·智能铺量(学习库)"模式。
+        private static readonly Dictionary<Form, TemplateFillPanel> SmartFillPanels = new Dictionary<Form, TemplateFillPanel>();
+
+        // 推荐定额入口:学习库智能铺量独立窗口(上部只有目标一行),与模板铺量窗口互不干扰。
         private static void ShowSmartFillPanel(Form mainForm)
         {
             TemplateFillPanel panel;
-            if (!TemplateFillPanels.TryGetValue(mainForm, out panel) || panel == null || panel.IsDisposed)
+            if (!SmartFillPanels.TryGetValue(mainForm, out panel) || panel == null || panel.IsDisposed)
             {
-                panel = new TemplateFillPanel(mainForm);
-                TemplateFillPanels[mainForm] = panel;
+                panel = new TemplateFillPanel(mainForm, true);
+                SmartFillPanels[mainForm] = panel;
             }
-            panel.SelectSmartFillMode();
             panel.Show(mainForm); panel.Activate();
         }
     }

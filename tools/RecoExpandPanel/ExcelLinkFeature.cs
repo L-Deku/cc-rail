@@ -162,10 +162,10 @@ namespace RecoNet
                     menu.Items.Insert(Math.Min(baseIndex, menu.Items.Count), openTemplateFill);
                     baseIndex++;
                 }
-                ToolStripMenuItem openSmartFill = FindMenuItem(menu, "打开智能铺量面板");
+                ToolStripMenuItem openSmartFill = FindMenuItem(menu, "推荐定额");
                 if (openSmartFill == null)
                 {
-                    openSmartFill = new ToolStripMenuItem("打开智能铺量面板");
+                    openSmartFill = new ToolStripMenuItem("推荐定额");
                     openSmartFill.Visible = true;
                     openSmartFill.Available = true;
                     openSmartFill.Enabled = true;
