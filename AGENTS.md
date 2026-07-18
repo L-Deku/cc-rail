@@ -55,16 +55,18 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 在 PowerShell 中再调用 `powershell.exe -Command` 且子命令包含 `$变量` 时，优先把子命令保存为脚本后用 `-File`，或用单引号整体隔离子命令；不要让父级 PowerShell 提前展开子命令变量。
 - PowerShell 直接调用 `csc.exe` 时，先把输出和引用文件路径赋给变量，再传 `/out:$变量`、`/reference:$变量`；不要写 `/out:(Join-Path ...)` 或 `/reference:(Join-Path ...)`，否则 `csc` 会收到空路径参数。
 - `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 默认加载 `RecoQuotaRecommend/bin/RecoExpandPanel.dll`，不会自动编译当前源码；做源码级红绿回归时，应先把当前 14 个 C# 文件编译到工作区 `obj` 验证目录并设置 `RECO_EXPAND_DLL`，避免把旧 DLL 的结果误判为新代码结果。
+- `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 在非交互 WinForms 环境可能卡在“定额候选下拉与组件组界面确认”之后的滚动视口用例；连续停在该位置时应按“综合回归未完成”报告，终止并核对本次测试启动的精确进程，不得把前半段 PASS 当作全部通过，也不要反复无上限重跑。
 - 读取 UTF-8 附件或中文文本时，如 PowerShell `Get-Content` 输出乱码，先设置 `[Console]::OutputEncoding`，并优先用 `[System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes(...))` 按字节解码验证内容。
 - PowerShell 部署/验证脚本需要格式化多段 `foreach` 输出时，优先先收集到数组或 `List[object]` 再统一 `Format-Table`；不要把脚本块闭合后直接接管道，容易触发 `An empty pipe element is not allowed` 解析错误。
 - Windows PowerShell 中用 `rg` 搜索指定目录文件时，优先写 `rg -n "pattern" -S path` 或用 `rg --files -g "*.cs"` 先列文件；不要把 `目录\*.cs` 当作路径参数传给 `rg`，容易被解析成非法路径。
+- PowerShell 中用 `rg` 同时搜索含中文引号、括号或反斜杠的多个模式时，优先拆成多个简单的 `rg -n -F "literal" path`；不要在一条双引号命令里拼复杂分组正则，避免 PowerShell 截断引号后产生伪语法错误。
 - GitHub 推送报 `Failed to connect ... via 127.0.0.1` 时，先分别检查 Git `http.proxy`/`https.proxy` 与 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 环境变量；若本地代理端口失效或不一致，先在单次命令中临时清空环境代理并用 `git -c http.proxy= -c https.proxy=` 做 `ls-remote` 直连验证；不要未经用户确认修改全局代理配置。
 - Git 暂存范围包含中文或其他非 ASCII 路径时，使用 `git -c core.quotepath=false diff --cached --name-only` 获取可比较的真实路径；不要直接比较默认的八进制转义输出。
 - PowerShell 接收原生命令输出后需要使用 `.Count` 或 `[0]` 校验时，应写成 `[string[]]$items = @(...)`；单行输出若保留为普通字符串，`[0]` 只会得到首字符，可能造成错误的范围校验失败。
 - Windows 上用 `git archive` + `tar` 生成干净构建快照时，如果仓库包含大量中文文件名，应把归档范围限制为实际参与构建的源码子树（如 `tools/RecoExpandPanel`），并核对源码文件数量；不要无条件归档整个仓库，避免 `tar` 因中文路径解码失败。
 - 修改已含中文字符串的 C# 源码时，避免用 PowerShell `Set-Content` 默认编码整文件重写；优先用补丁方式，必要时用 `.NET UTF8Encoding(false)` 并把新增中文字符串写成 `\u` 转义，防止产生无关编码差异。
 - C# 5 代码中不要在 `||`/`&&` 短路条件里依赖 `out` 参数一定赋值；用于错误文案的 `out` 变量先给默认值，避免 `CS0165`。
-- 用 Windows PowerShell 5 反射调用 WinForms 私有构造器做冒烟测试时，先设 `$ErrorActionPreference = 'Stop'`，并把 `New-Object` 返回控件的 `.PSObject.BaseObject` 传给反射 API；泛型 `List<T>`、`HashSet<T>` 等参数也要拆包，否则类型包装错误可能只产生非终止错误并让命令假通过。反射方法只接收一个泛型集合参数时，不要直接用 `[object[]]@($list)`，应先创建长度为 1 的 `object[]` 再将 `.PSObject.BaseObject` 赋给第 0 项，避免 PowerShell 把集合展开成多个参数。
+- 用 Windows PowerShell 5 反射调用 WinForms 私有构造器做冒烟测试时，先设 `$ErrorActionPreference = 'Stop'`，并把 `New-Object` 返回控件的 `.PSObject.BaseObject` 传给反射 API；泛型 `List<T>`、`HashSet<T>` 等参数也要拆包，否则类型包装错误可能只产生非终止错误并让命令假通过。反射方法只接收一个泛型集合参数时，不要直接用 `[object[]]@($list)`，应先创建长度为 1 的 `object[]` 再将 `.PSObject.BaseObject` 赋给第 0 项，避免 PowerShell 把集合展开成多个参数。反射读取 `List<T>` 后若经辅助函数返回并继续使用 `.Count`/索引，辅助函数应使用 `Write-Output -NoEnumerate`，避免单元素集合被自动展开成标量。
 - 2024 软件预算项目输入 2020 概算/估算定额时，首要检查 `项目设置 -> 定额选择` 是否勾选了迁移书号，或数据库 `项目信息.标准定额应用` 是否包含对应书号。未勾选时会出现“定额编号无效或费用类型不匹配”、计算单价为 0 或“无法找到定额消耗数据”等现象；勾选后 2024 原生辅助查询、输入和计算即可使用迁移定额。
 - 2020 概算/估算定额迁移到 2024 后，正式方案不需要给 2024 客户端部署兼容插件或 Harmony/Prefix 钩子。不得把钩子部署到 `RecoNet.DEBase.FindDe` 作为正式方案；实测 `FindDe_Patch1` 会影响原预算查询/输入并触发运行时异常。每次发布前必须回归验证 `LY_2024`、`DY_2024` 等原预算定额的查询、输入和计算。
 - 给新下载的 2024 客户端使用已迁移的概算/估算定额时，只要连接同一个已迁移的 `RecoData2024` 数据库，并在项目设置中勾选对应书号即可；插件 DLL 和 `RecoPluginLoader.AutoLoadDomainManager` 只属于推荐定额插件能力，不是概算/估算定额原生查询、输入、计算的必要条件。

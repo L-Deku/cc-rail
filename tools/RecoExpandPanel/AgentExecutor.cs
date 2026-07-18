@@ -66,6 +66,8 @@ namespace RecoNet
             public object TotalPrice;    // double 或 DBNull
             public string AdjustText;    // 定额调整(ntext)
             public long UnitId;
+            public long ItemSequence;
+            public int OrderNo;
         }
 
         // 通用字段更新：一条 UPDATE，支持任意表/任意列。
@@ -693,11 +695,13 @@ namespace RecoNet
             row.TotalPrice = record.IsDBNull(7) ? (object)DBNull.Value : record.GetValue(7);
             row.UnitId = record.IsDBNull(8) ? 0 : Convert.ToInt64(record.GetValue(8), CultureInfo.InvariantCulture);
             row.AdjustText = record.IsDBNull(9) ? "" : Convert.ToString(record.GetValue(9)).Trim();
+            row.ItemSequence = record.IsDBNull(10) ? 0 : Convert.ToInt64(record.GetValue(10), CultureInfo.InvariantCulture);
+            row.OrderNo = record.IsDBNull(11) ? 0 : Convert.ToInt32(record.GetValue(11), CultureInfo.InvariantCulture);
             return row;
         }
 
         private const string AgentTargetRowSelect =
-            "select DE.定额序号, ZJ.条目编号, DE.工程或费用项目名称, DE.定额编号, DE.工程数量输入, DE.工程数量, DE.单价, DE.合价, DE.总概算序号, cast(DE.定额调整 as nvarchar(max)) " +
+            "select DE.定额序号, ZJ.条目编号, DE.工程或费用项目名称, DE.定额编号, DE.工程数量输入, DE.工程数量, DE.单价, DE.合价, DE.总概算序号, cast(DE.定额调整 as nvarchar(max)), DE.条目序号, DE.顺号 " +
             "from 定额输入 DE inner join 章节表 ZJ on DE.条目序号=ZJ.条目序号 ";
 
         private static List<AgentTargetRow> ResolveAgentTargetRows(SqlConnection conn, AgentSelectionSnapshot selection,
@@ -863,8 +867,8 @@ namespace RecoNet
 
                 switch (command.Type)
                 {
-                    case "set_unit_price_by_name":
-                        BuildSetUnitPriceByNamePlan(conn, command, unitIds, plan);
+                    case "set_unit_price":
+                        BuildSetUnitPricePlan(conn, selection, command, unitIds, plan);
                         break;
                     case "multiply_quantity":
                         BuildMultiplyPlan(conn, selection, command, unitIds, plan);
@@ -889,6 +893,9 @@ namespace RecoNet
                         break;
                     case "copy_quotas":
                         BuildCopyPlan(conn, selection, command, unitIds, plan);
+                        break;
+                    case "move_quotas":
+                        BuildMovePlan(conn, selection, command, unitIds, plan);
                         break;
                     case "insert_quotas":
                         BuildInsertPlan(conn, selection, command, plan);
@@ -923,7 +930,7 @@ namespace RecoNet
 
         private static void BuildMultiplyPlan(SqlConnection conn, AgentSelectionSnapshot selection, AgentCommand command, List<long> unitIds, AgentPlan plan)
         {
-            List<AgentTargetRow> targets = ResolveAgentTargetRows(conn, selection, command.Items, command.IncludeChildren, command.QuotaFilter, unitIds);
+            List<AgentTargetRow> targets = ResolveAgentValueTargetRows(conn, selection, command, unitIds);
             int skipped = 0;
             foreach (AgentTargetRow row in targets)
             {
@@ -1019,7 +1026,7 @@ namespace RecoNet
             return value.ToString("0.###", CultureInfo.InvariantCulture);
         }
 
-        private static void BuildSetUnitPriceByNamePlan(SqlConnection conn, AgentCommand command, List<long> unitIds, AgentPlan plan)
+        private static void BuildSetUnitPricePlan(SqlConnection conn, AgentSelectionSnapshot selection, AgentCommand command, List<long> unitIds, AgentPlan plan)
         {
             decimal parsedPrice;
             try
@@ -1028,49 +1035,27 @@ namespace RecoNet
             }
             catch (Exception)
             {
-                throw new AgentPlanException("改单价的新单价无法计算：" + command.Value);
+                throw new AgentPlanException("单价的新值无法计算：" + command.Value);
             }
 
             if (parsedPrice < 0m)
             {
-                throw new AgentPlanException("改单价的新单价不能为负数：" + command.Value);
+                throw new AgentPlanException("单价的新值不能为负数：" + command.Value);
             }
 
             double newPrice = Convert.ToDouble(Decimal.Round(parsedPrice, 3, MidpointRounding.AwayFromZero), CultureInfo.InvariantCulture);
-            string quotaName = (command.QuotaName ?? "").Trim();
-            List<AgentTargetRow> matched = new List<AgentTargetRow>();
-            int skippedByCode = 0;
+            List<AgentTargetRow> targets = ResolveAgentValueTargetRows(conn, selection, command, unitIds);
+            if (targets.Count == 0)
+            {
+                string target = String.IsNullOrEmpty(command.QuotaName)
+                    ? String.Join("、", command.QuotaFilter.ToArray())
+                    : command.QuotaName;
+                throw new AgentPlanException("没有找到要修改单价的定额：" + target + "。请核对定额编号、精确定额名称、条目和单元。");
+            }
+
             int skippedSame = 0;
-
-            using (SqlCommand cmd = conn.CreateCommand())
-            {
-                cmd.CommandText = AgentTargetRowSelect +
-                    "where ltrim(rtrim(DE.工程或费用项目名称))=@name" +
-                    BuildAgentUnitCondition(unitIds) +
-                    " order by DE.总概算序号, ZJ.条目编号, DE.顺号";
-                cmd.Parameters.AddWithValue("@name", quotaName);
-                using (SqlDataReader reader = cmd.ExecuteReader())
-                {
-                    while (reader.Read())
-                    {
-                        AgentTargetRow row = ReadAgentTargetRow(reader);
-                        if (!IsAgentManualUnitPriceCode(row.QuotaCode))
-                        {
-                            skippedByCode++;
-                            continue;
-                        }
-
-                        matched.Add(row);
-                    }
-                }
-            }
-
-            if (matched.Count == 0)
-            {
-                throw new AgentPlanException("没有找到名称精确等于\"" + quotaName + "\"且定额编号为 SH/SQ/ZLF/LF/SF 的定额行。请核对名称和单元。");
-            }
-
-            foreach (AgentTargetRow row in matched)
+            int computedCodes = 0;
+            foreach (AgentTargetRow row in targets)
             {
                 double oldPrice = AgentToDouble(row.UnitPrice);
                 if (Math.Abs(oldPrice - newPrice) < 0.0005)
@@ -1079,18 +1064,27 @@ namespace RecoNet
                     continue;
                 }
 
+                if (!IsAgentManualUnitPriceCode(row.QuotaCode))
+                {
+                    computedCodes++;
+                }
+
                 double newTotal = Math.Round(newPrice * AgentToDouble(row.Quantity), 2, MidpointRounding.AwayFromZero);
-                plan.FieldUpdates.Add(BuildQuotaFieldUpdate(row, "改单价",
+                plan.FieldUpdates.Add(BuildQuotaFieldUpdate(row, "单价设值",
                     new Dictionary<string, object> { { "单价", newPrice }, { "合价", newTotal } },
                     new Dictionary<string, object> { { "单价", row.UnitPrice }, { "合价", row.TotalPrice } },
                     FormatAgentUnitPrice(oldPrice), FormatAgentUnitPrice(newPrice)));
             }
 
             plan.NeedsRecalc = true;
-            plan.Warnings.Add("按名称改单价只匹配定额输入表\"工程或费用项目名称\"完全相同的行；本命令仅允许 SH/SQ/ZLF/LF/SF（含 * 或 / 系数后缀）的手填单价行。单价保留三位小数，合价按工程数量重算为两位小数。");
-            if (skippedByCode > 0)
+            if (!String.IsNullOrEmpty(command.QuotaName))
             {
-                plan.Warnings.Add("有 " + skippedByCode.ToString(CultureInfo.InvariantCulture) + " 行名称相同但定额编号不属于 SH/SQ/ZLF/LF/SF，已跳过。");
+                plan.Warnings.Add("定额名称按定额输入表\"工程或费用项目名称\"去掉首尾空格后完全匹配；单价保留三位小数，合价按工程数量重算为两位小数。");
+            }
+
+            if (computedCodes > 0)
+            {
+                plan.Warnings.Add("有 " + computedCodes.ToString(CultureInfo.InvariantCulture) + " 行不是 SH/SQ/ZLF/LF/SF 手填单价定额，主程序重算时可能覆盖本次单价。");
             }
 
             if (skippedSame > 0)
@@ -1108,13 +1102,13 @@ namespace RecoNet
             }
             catch (Exception)
             {
-                throw new AgentPlanException("设数量的数值无法计算：" + command.Value);
+                throw new AgentPlanException("工程数量的新值无法计算：" + command.Value);
             }
 
-            List<AgentTargetRow> targets = ResolveAgentTargetRows(conn, selection, command.Items, command.IncludeChildren, command.QuotaFilter, unitIds);
+            List<AgentTargetRow> targets = ResolveAgentValueTargetRows(conn, selection, command, unitIds);
             foreach (AgentTargetRow row in targets)
             {
-                plan.FieldUpdates.Add(BuildQuotaFieldUpdate(row, "设数量",
+                plan.FieldUpdates.Add(BuildQuotaFieldUpdate(row, "数量设值",
                     new Dictionary<string, object> { { "工程数量输入", command.Value }, { "工程数量", newQuantity } },
                     new Dictionary<string, object> { { "工程数量输入", row.QuantityInput }, { "工程数量", row.Quantity } },
                     row.QuantityInput, command.Value));
@@ -1269,6 +1263,53 @@ namespace RecoNet
             {
                 plan.Warnings.Add("有 " + skipped.ToString(CultureInfo.InvariantCulture) + " 行不含\"" + fragment + "\"或去掉后无法计算，已跳过。");
             }
+        }
+
+        private static List<AgentTargetRow> ResolveAgentValueTargetRows(SqlConnection conn, AgentSelectionSnapshot selection,
+            AgentCommand command, List<long> unitIds)
+        {
+            if (String.IsNullOrEmpty(command.QuotaName))
+            {
+                return ResolveAgentTargetRows(conn, selection, command.Items, command.IncludeChildren, command.QuotaFilter, unitIds);
+            }
+
+            string quotaName = command.QuotaName.Trim();
+            if (command.Items != null && command.Items.Count > 0)
+            {
+                List<AgentTargetRow> itemMatched = ResolveAgentTargetRows(conn, selection, command.Items, command.IncludeChildren, new List<string>(), unitIds)
+                    .Where(row => String.Equals((row.ItemName ?? "").Trim(), quotaName, StringComparison.Ordinal))
+                    .ToList();
+                if (itemMatched.Count == 0)
+                {
+                    throw new AgentPlanException("没有找到名称精确等于\"" + quotaName + "\"的定额。请核对定额名称、条目和单元。");
+                }
+
+                return itemMatched;
+            }
+
+            List<AgentTargetRow> matched = new List<AgentTargetRow>();
+            using (SqlCommand cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = AgentTargetRowSelect +
+                    "where ltrim(rtrim(DE.工程或费用项目名称))=@name" +
+                    BuildAgentUnitCondition(unitIds) +
+                    " order by DE.总概算序号, ZJ.条目编号, DE.顺号";
+                cmd.Parameters.AddWithValue("@name", quotaName);
+                using (SqlDataReader reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        matched.Add(ReadAgentTargetRow(reader));
+                    }
+                }
+            }
+
+            if (matched.Count == 0)
+            {
+                throw new AgentPlanException("没有找到名称精确等于\"" + quotaName + "\"的定额。请核对定额名称和单元。");
+            }
+
+            return matched;
         }
 
         private static string RemoveAgentQuantityFragment(string oldExpr, string fragment)
@@ -1461,6 +1502,82 @@ namespace RecoNet
                 group.ItemNo = itemNo;
                 group.Quotas = command.Quotas;
                 plan.Inserts.Add(group);
+            }
+        }
+
+        private static void BuildMovePlan(SqlConnection conn, AgentSelectionSnapshot selection, AgentCommand command, List<long> unitIds, AgentPlan plan)
+        {
+            string targetItem = command.TargetItems[0];
+            if (String.Equals(command.SourceItem, targetItem, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new AgentPlanException("移动定额的来源条目和目标条目不能相同。");
+            }
+
+            long targetItemSequence;
+            string targetItemName;
+            ResolveAgentExactItem(conn, targetItem, out targetItemSequence, out targetItemName);
+
+            List<AgentTargetRow> source = ResolveAgentTargetRows(conn, selection,
+                new List<string> { command.SourceItem }, false, command.QuotaFilter, unitIds)
+                .OrderBy(row => row.UnitId)
+                .ThenBy(row => row.OrderNo)
+                .ThenBy(row => row.QuotaSequence)
+                .ToList();
+            if (source.Count == 0)
+            {
+                throw new AgentPlanException("来源条目 " + command.SourceItem + " 下没有可移动的定额。");
+            }
+
+            Dictionary<long, int> nextOrderByUnit = new Dictionary<long, int>();
+            foreach (AgentTargetRow row in source)
+            {
+                int nextOrder;
+                if (!nextOrderByUnit.TryGetValue(row.UnitId, out nextOrder))
+                {
+                    nextOrder = GetMaxShun(conn, row.UnitId, targetItemSequence) + 1;
+                }
+
+                AgentFieldUpdate update = BuildQuotaFieldUpdate(row, "移动定额",
+                    new Dictionary<string, object> { { "条目序号", targetItemSequence }, { "顺号", nextOrder } },
+                    new Dictionary<string, object> { { "条目序号", row.ItemSequence }, { "顺号", row.OrderNo } },
+                    "条目 " + row.ItemNo,
+                    "条目 " + targetItem + (String.IsNullOrEmpty(targetItemName) ? "" : " " + targetItemName));
+                update.ItemNo = targetItem;
+                plan.FieldUpdates.Add(update);
+                nextOrderByUnit[row.UnitId] = nextOrder + 1;
+            }
+
+            plan.NeedsRecalc = true;
+        }
+
+        private static void ResolveAgentExactItem(SqlConnection conn, string itemNo, out long itemSequence, out string itemName)
+        {
+            itemSequence = 0;
+            itemName = "";
+            int matches = 0;
+            using (SqlCommand cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "select 条目序号, 工程或费用项目名称 from 章节表 where 条目编号=@bh";
+                cmd.Parameters.AddWithValue("@bh", itemNo);
+                using (SqlDataReader reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        matches++;
+                        itemSequence = Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture);
+                        itemName = reader.IsDBNull(1) ? "" : Convert.ToString(reader.GetValue(1)).Trim();
+                    }
+                }
+            }
+
+            if (matches == 0)
+            {
+                throw new AgentPlanException("条目编号 \"" + itemNo + "\" 在本项目章节表中不存在，已中止。请核对编号。");
+            }
+
+            if (matches > 1)
+            {
+                throw new AgentPlanException("条目编号 \"" + itemNo + "\" 在章节表中存在多条记录，无法确定移动目标，已中止。");
             }
         }
 
@@ -1870,7 +1987,7 @@ namespace RecoNet
                 if (plan.NeedsRecalc)
                 {
                     if (message.Length > 0) { message.AppendLine(); }
-                    message.Append("⚠ 本次改动涉及定额编号/单价/方案，主程序需要手工触发\"重算\"后造价才会更新。");
+                    message.Append("⚠ 本次改动涉及条目归属/定额编号/单价/方案，主程序需要手工触发\"重算\"后造价才会更新。");
                 }
 
                 if (undo.Rows.Count > 0)

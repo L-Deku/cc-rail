@@ -27,7 +27,7 @@ namespace RecoNet
             public bool IncludeChildren = true;
             public List<string> QuotaFilter = new List<string>();
             public List<string> Units = new List<string>();   // 单元(总概算)过滤：名称/_ZGS_编号/序号；空=当前单元
-            public string QuotaName;                          // set_unit_price_by_name 用：定额输入.工程或费用项目名称
+            public string QuotaName;                          // 单价/工程数量按名称定位：定额输入.工程或费用项目名称
             public string Operator = "*";
             public string Factor;
             public string SourceItem;
@@ -69,7 +69,9 @@ namespace RecoNet
                     case "create_unit":
                         return "复制单元 " + SourceItem + " 新建为 \"" + NewName + "\"";
                     case "set_quantity":
-                        return "把条目 " + String.Join(",", Items.ToArray()) + " 的工程数量设为 " + Value + filter;
+                        return String.IsNullOrEmpty(QuotaName)
+                            ? "把条目 " + String.Join(",", Items.ToArray()) + " 的工程数量设为 " + Value + filter
+                            : "把名称为 \"" + QuotaName + "\" 的工程数量设为 " + Value + filter;
                     case "remove_text":
                         return "从条目 " + String.Join(",", Items.ToArray()) + " 的" + TargetLabel + "里去掉 \"" + RemoveText + "\"" + filter;
                     case "set_adjustment":
@@ -82,16 +84,22 @@ namespace RecoNet
                             (String.IsNullOrEmpty(TransportParam) ? "" : "（参数 " + TransportParam + "）") + filter;
                     case "set_material_scheme":
                         return "把单元 " + String.Join(",", Units.ToArray()) + " 的" + SchemeKind + "费方案设为 \"" + SchemeName + "\"";
-                    case "set_unit_price_by_name":
-                        return "把名称为 \"" + QuotaName + "\" 的补充定额单价设为 " + Value + filter;
+                    case "set_unit_price":
+                        return String.IsNullOrEmpty(QuotaName)
+                            ? "把条目 " + String.Join(",", Items.ToArray()) + " 的单价设为 " + Value + filter
+                            : "把名称为 \"" + QuotaName + "\" 的单价设为 " + Value + filter;
                     case "multiply_quantity":
-                        return "条目 " + String.Join(",", Items.ToArray()) + " 的" + TargetLabel + " " + Operator + Factor + filter;
+                        return String.IsNullOrEmpty(QuotaName)
+                            ? "条目 " + String.Join(",", Items.ToArray()) + " 的" + TargetLabel + " " + Operator + Factor + filter
+                            : "名称为 \"" + QuotaName + "\" 的" + TargetLabel + " " + Operator + Factor + filter;
                     case "clear_quantity":
                         return "清空条目 " + String.Join(",", Items.ToArray()) + " 的工程数量" + filter;
                     case "delete_quotas":
                         return "删除条目 " + String.Join(",", Items.ToArray()) + " 的定额" + filter;
                     case "copy_quotas":
                         return "把条目 " + SourceItem + " 的定额复制到 " + String.Join(",", TargetItems.ToArray()) + filter;
+                    case "move_quotas":
+                        return "把条目 " + SourceItem + " 的定额移动到 " + String.Join(",", TargetItems.ToArray()) + filter;
                     case "insert_quotas":
                         StringBuilder sb = new StringBuilder();
                         foreach (AgentQuotaInput q in Quotas)
@@ -288,6 +296,80 @@ namespace RecoNet
             }
         }
 
+        private static bool LooksLikeAgentQuotaCode(string token)
+        {
+            if (String.IsNullOrEmpty(token))
+            {
+                return false;
+            }
+
+            bool hasLetterOrDigit = false;
+            foreach (char c in token)
+            {
+                if (c > 127 || Char.IsWhiteSpace(c))
+                {
+                    return false;
+                }
+
+                if (Char.IsLetterOrDigit(c))
+                {
+                    hasLetterOrDigit = true;
+                }
+                else if (c != '-' && c != '_' && c != '.' && c != '*' && c != '/')
+                {
+                    return false;
+                }
+            }
+
+            return hasLetterOrDigit;
+        }
+
+        // 单价/工程数量统一定位：可选条目 + 定额编号，或可选条目 + 精确定额名称。
+        // 不写条目时，编号仍落到当前条目；名称则在当前单元内全表精确匹配。
+        private static void ApplyAgentValueTargetLead(AgentCommand command, List<string> lead)
+        {
+            if (command.QuotaFilter.Count > 0)
+            {
+                ApplyAgentItemQuotaLead(command, lead);
+                return;
+            }
+
+            if (lead.Count == 0)
+            {
+                command.Items = AgentSelectedItems();
+                return;
+            }
+
+            bool hasItem = LooksLikeAgentItemNo(lead[0]) || LooksLikeAgentRemoveItemList(lead[0]);
+            int targetStart = 0;
+            if (hasItem)
+            {
+                command.Items = SplitAgentList(lead[0]);
+                targetStart = 1;
+            }
+
+            if (targetStart >= lead.Count)
+            {
+                return;
+            }
+
+            List<string> targetTokens = lead.Skip(targetStart).ToList();
+            List<string> targetList = SplitAgentList(String.Join(",", targetTokens.ToArray()));
+            bool quotaCodes = targetTokens.Count == 1 && targetList.Count > 0 && targetList.All(LooksLikeAgentQuotaCode);
+            if (quotaCodes)
+            {
+                command.QuotaFilter = targetList;
+                if (!hasItem)
+                {
+                    command.Items = new List<string> { AgentCurrentItemToken };
+                }
+            }
+            else
+            {
+                command.QuotaName = String.Join(" ", targetTokens.ToArray()).Trim();
+            }
+        }
+
         private static bool IsAgentDigits(string token)
         {
             if (String.IsNullOrEmpty(token))
@@ -401,6 +483,18 @@ namespace RecoNet
             tokens.RemoveAt(0);
             tokens = ExtractAgentUnitFilter(tokens, command);
 
+            if (keyword == "改单价" || keyword == "设单价")
+            {
+                result.Error = "旧指令\"" + keyword + "\"已删除，请改用：单价 [条目编号] [定额编号或精确定额名称] 数字、*系数或/系数。";
+                return true;
+            }
+
+            if (keyword == "设数量")
+            {
+                result.Error = "旧指令\"设数量\"已删除，请改用：工程数量 [条目编号] [定额编号或精确定额名称] 数字、*系数或/系数。";
+                return true;
+            }
+
             if (keyword == "新建单元" || keyword == "复制单元")
             {
                 command.Type = "create_unit";
@@ -437,45 +531,6 @@ namespace RecoNet
                 return true;
             }
 
-            if (keyword == "改单价" || keyword == "设单价")
-            {
-                command.Type = "set_unit_price_by_name";
-                command.Target = "unit_price";
-                if (command.Units.Count == 0)
-                {
-                    result.Error = "用法：改单价 精确定额名称 数字 单元=单元名称，或 单元=所有。为避免误改，必须明确指定单元。";
-                    return true;
-                }
-
-                if (tokens.Count < 2)
-                {
-                    result.Error = "用法：改单价 精确定额名称 数字 单元=单元名称，例如：改单价 ≤25t自卸汽车运土 增运1km 615.98 单元=南江路泵房。";
-                    return true;
-                }
-
-                string priceText = tokens[tokens.Count - 1].Trim();
-                tokens.RemoveAt(tokens.Count - 1);
-                decimal price;
-                if ((!Decimal.TryParse(priceText, NumberStyles.Float, CultureInfo.InvariantCulture, out price) &&
-                        !Decimal.TryParse(priceText, NumberStyles.Float, CultureInfo.CurrentCulture, out price)) ||
-                    price < 0m)
-                {
-                    result.Error = "改单价的新单价必须是非负数字：" + priceText;
-                    return true;
-                }
-
-                command.QuotaName = String.Join(" ", tokens.ToArray()).Trim();
-                if (command.QuotaName.Length == 0)
-                {
-                    result.Error = "改单价缺少精确定额名称。";
-                    return true;
-                }
-
-                command.Value = price.ToString(CultureInfo.InvariantCulture);
-                result.Commands.Add(command);
-                return true;
-            }
-
             if (keyword == "工程数量" || keyword == "定额编号" || keyword == "单价" ||
                 keyword == "乘系数" || keyword == "乘数量" || keyword == "乘定额编号" || keyword == "乘单价")
             {
@@ -504,7 +559,14 @@ namespace RecoNet
                     tokens.RemoveAt(tokens.Count - 1);
                 }
 
-                ApplyAgentItemQuotaLead(command, tokens);
+                if (isRemove || target == "quota_code")
+                {
+                    ApplyAgentItemQuotaLead(command, tokens);
+                }
+                else
+                {
+                    ApplyAgentValueTargetLead(command, tokens);
+                }
 
                 if (isRemove)
                 {
@@ -522,6 +584,36 @@ namespace RecoNet
 
                     command.Type = "remove_text";
                     command.RemoveText = opToken;
+                    result.Commands.Add(command);
+                    return true;
+                }
+
+                bool explicitMultiply = opToken.StartsWith("*", StringComparison.Ordinal) ||
+                    opToken.StartsWith("×", StringComparison.Ordinal) ||
+                    opToken.StartsWith("/", StringComparison.Ordinal) ||
+                    opToken.StartsWith("÷", StringComparison.Ordinal);
+                bool unifiedValueCommand = keyword == "工程数量" || keyword == "单价";
+                if (unifiedValueCommand && !explicitMultiply)
+                {
+                    if (target == "unit_price")
+                    {
+                        decimal price;
+                        if ((!Decimal.TryParse(opToken, NumberStyles.Float, CultureInfo.InvariantCulture, out price) &&
+                                !Decimal.TryParse(opToken, NumberStyles.Float, CultureInfo.CurrentCulture, out price)) || price < 0m)
+                        {
+                            result.Error = "单价的新值必须是非负数字；乘除请在数字前写 * 或 /：" + opToken;
+                            return true;
+                        }
+
+                        command.Type = "set_unit_price";
+                        command.Value = price.ToString(CultureInfo.InvariantCulture);
+                    }
+                    else
+                    {
+                        command.Type = "set_quantity";
+                        command.Value = opToken;
+                    }
+
                     result.Commands.Add(command);
                     return true;
                 }
@@ -568,9 +660,10 @@ namespace RecoNet
                 return true;
             }
 
-            if (keyword == "复制定额")
+            if (keyword == "复制定额" || keyword == "移动定额")
             {
-                command.Type = "copy_quotas";
+                bool move = keyword == "移动定额";
+                command.Type = move ? "move_quotas" : "copy_quotas";
                 tokens = ExtractAgentQuotaFilter(tokens, command);
                 int toIndex = tokens.IndexOf("到");
                 if (toIndex < 0)
@@ -590,15 +683,37 @@ namespace RecoNet
 
                 if (toIndex < 1 || toIndex >= tokens.Count - 1)
                 {
-                    result.Error = "用法：复制定额 来源条目编号 到 目标条目编号[,目标条目编号]";
+                    result.Error = move
+                        ? "用法：移动定额 来源条目编号 [定额编号、定额编号] 到 目标条目编号"
+                        : "用法：复制定额 来源条目编号 到 目标条目编号[,目标条目编号]";
                     return true;
                 }
 
-                command.SourceItem = tokens[toIndex - 1].Trim();
-                command.TargetItems = SplitAgentList(String.Join(",", tokens.Skip(toIndex + 1).ToArray()));
-                if (String.IsNullOrEmpty(command.SourceItem) || command.TargetItems.Count == 0)
+                if (move)
                 {
-                    result.Error = "用法：复制定额 来源条目编号 到 目标条目编号[,目标条目编号]";
+                    command.SourceItem = tokens[0].Trim();
+                    if (toIndex > 1)
+                    {
+                        command.QuotaFilter.AddRange(SplitAgentList(String.Join(",", tokens.Skip(1).Take(toIndex - 1).ToArray())));
+                    }
+                }
+                else
+                {
+                    command.SourceItem = tokens[toIndex - 1].Trim();
+                }
+
+                command.TargetItems = SplitAgentList(String.Join(",", tokens.Skip(toIndex + 1).ToArray()));
+                if (String.IsNullOrEmpty(command.SourceItem) || command.TargetItems.Count == 0 || (move && command.TargetItems.Count != 1))
+                {
+                    result.Error = move
+                        ? "移动定额必须指定一个来源条目和一个目标条目。用法：移动定额 来源条目编号 [定额编号、定额编号] 到 目标条目编号"
+                        : "用法：复制定额 来源条目编号 到 目标条目编号[,目标条目编号]";
+                    return true;
+                }
+
+                if (move && String.Equals(command.SourceItem, command.TargetItems[0], StringComparison.OrdinalIgnoreCase))
+                {
+                    result.Error = "移动定额的来源条目和目标条目不能相同。";
                     return true;
                 }
 
@@ -660,25 +775,6 @@ namespace RecoNet
                     result.Error = "没有解析到任何定额编号。用法：输入定额 [条目编号] 定额编号=数量 ...（省略条目编号时第一个参数就写 定额编号=数量）";
                     return true;
                 }
-
-                result.Commands.Add(command);
-                return true;
-            }
-
-            if (keyword == "设数量")
-            {
-                command.Type = "set_quantity";
-                tokens = ExtractAgentQuotaFilter(tokens, command);
-                if (tokens.Count < 1)
-                {
-                    result.Error = "用法：设数量 [条目编号] [定额编号] 数值，例如：设数量 0101-01 LY-21 100；省略条目和定额则作用于当前选中定额。";
-                    return true;
-                }
-
-                // 末尾是数值；之前的位置参数依次是 [条目编号] [定额编号]，规则同工程数量等。
-                command.Value = tokens[tokens.Count - 1].Trim();
-                tokens.RemoveAt(tokens.Count - 1);
-                ApplyAgentItemQuotaLead(command, tokens);
 
                 result.Commands.Add(command);
                 return true;
@@ -1016,16 +1112,11 @@ namespace RecoNet
         {
             switch (command.Type)
             {
-                case "set_unit_price_by_name":
+                case "set_unit_price":
                 {
-                    if (String.IsNullOrEmpty(command.QuotaName))
+                    if (command.Items.Count == 0 && String.IsNullOrEmpty(command.QuotaName))
                     {
-                        return "按名称改单价命令缺少精确定额名称。";
-                    }
-
-                    if (command.Units.Count == 0)
-                    {
-                        return "按名称改单价命令必须指定单元=单元名称，或 单元=所有。";
+                        return "单价命令缺少定额编号、定额名称或当前选择。";
                     }
 
                     decimal price;
@@ -1034,15 +1125,15 @@ namespace RecoNet
                             !Decimal.TryParse(command.Value, NumberStyles.Float, CultureInfo.CurrentCulture, out price)) ||
                             price < 0m))
                     {
-                        return "按名称改单价命令缺少有效的新单价。";
+                        return "单价命令缺少有效的新单价。";
                     }
 
                     return null;
                 }
                 case "multiply_quantity":
-                    if (command.Items.Count == 0)
+                    if (command.Items.Count == 0 && String.IsNullOrEmpty(command.QuotaName))
                     {
-                        return "乘系数命令缺少条目。";
+                        return "乘系数命令缺少定额编号、定额名称或当前选择。";
                     }
 
                     decimal factor;
@@ -1068,6 +1159,20 @@ namespace RecoNet
                     }
 
                     return command.TargetItems.Count == 0 ? "复制定额命令缺少目标条目。" : null;
+                case "move_quotas":
+                    if (String.IsNullOrEmpty(command.SourceItem))
+                    {
+                        return "移动定额命令缺少来源条目。";
+                    }
+
+                    if (command.TargetItems.Count != 1)
+                    {
+                        return "移动定额命令必须且只能指定一个目标条目。";
+                    }
+
+                    return String.Equals(command.SourceItem, command.TargetItems[0], StringComparison.OrdinalIgnoreCase)
+                        ? "移动定额的来源条目和目标条目不能相同。"
+                        : null;
                 case "insert_quotas":
                     if (command.Items.Count == 0)
                     {
@@ -1083,12 +1188,12 @@ namespace RecoNet
 
                     return String.IsNullOrEmpty(command.NewName) ? "新建单元命令缺少新名称。" : null;
                 case "set_quantity":
-                    if (command.Items.Count == 0)
+                    if (command.Items.Count == 0 && String.IsNullOrEmpty(command.QuotaName))
                     {
-                        return "设数量命令缺少条目。";
+                        return "工程数量命令缺少定额编号、定额名称或当前选择。";
                     }
 
-                    return String.IsNullOrEmpty(command.Value) ? "设数量命令缺少数值。" : null;
+                    return String.IsNullOrEmpty(command.Value) ? "工程数量命令缺少数值。" : null;
                 case "remove_text":
                     if (command.Items.Count == 0)
                     {
