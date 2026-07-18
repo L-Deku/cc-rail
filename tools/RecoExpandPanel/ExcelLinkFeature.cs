@@ -2044,7 +2044,7 @@ namespace RecoNet
 
             MappingFeedbackGroup group = new MappingFeedbackGroup { QuantityName = fullQuantityName };
             group.Targets.Add(new MappingFeedbackTarget { Kind = "quota", Code = link.QuotaCode, Name = link.QuotaName, Unit = "" });
-            RecordMappingGroupsToStore(new List<MappingFeedbackGroup> { group });
+            RecordMappingGroupsToStore(new List<MappingFeedbackGroup> { group }, "excel-bind");
         }
 
         private static void RecordBindingsToMappingStore(Dictionary<ExcelQuotaLink, string> fullNames)
@@ -2058,16 +2058,16 @@ namespace RecoNet
                 group.Targets.Add(new MappingFeedbackTarget { Kind = "quota", Code = link.QuotaCode, Name = link.QuotaName, Unit = "" });
                 groups.Add(group);
             }
-            RecordMappingGroupsToStore(groups);
+            RecordMappingGroupsToStore(groups, "excel-bind-batch");
         }
 
         // 名字驱动写入后合批回写：每个工程量组保持完整目标集合，共享同一个 box_id。
         private static void RecordNameMatchesToMappingStore(List<MappingFeedbackGroup> groups)
         {
-            RecordMappingGroupsToStore(groups);
+            RecordMappingGroupsToStore(groups, "name-match");
         }
 
-        private static void RecordMappingGroupsToStore(List<MappingFeedbackGroup> groups)
+        private static void RecordMappingGroupsToStore(List<MappingFeedbackGroup> groups, string source = "mapping-store")
         {
             if (groups == null || groups.Count == 0) return;
             try
@@ -2095,7 +2095,11 @@ namespace RecoNet
                 }, 5000))
                 {
                     Log("Record name matches to mapping store skipped: mapping-boxes lock timeout.");
+                    return;
                 }
+
+                // jsonl 保存成功后再向学习库追加流水,保持"绑定库成功才学习"的既有原则。
+                RecordBindingEventsToLearningDb(source, groups);
             }
             catch (Exception ex)
             {
