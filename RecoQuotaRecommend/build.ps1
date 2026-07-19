@@ -140,6 +140,13 @@ Get-ChildItem -LiteralPath $root -Directory -Recurse |
   Sort-Object FullName |
   ForEach-Object { Add-SoftwareTarget -Targets $targets -Path $_.FullName }
 
+# 仓库外的额外部署目标(存在才加入)
+foreach ($externalDir in @("D:\AI文件\铁路工程云计价系统网络版V1.0")) {
+  if (Test-Path -LiteralPath (Join-Path $externalDir "NPOI.dll")) {
+    Add-SoftwareTarget -Targets $targets -Path $externalDir
+  }
+}
+
 if ($targets.Count -eq 0) {
   throw "Could not find any supported software directory under $root"
 }
@@ -242,7 +249,9 @@ foreach ($softwareDir in $targets) {
 
   $dataTarget = Join-Path $softwareDir "RecoQuotaData"
   New-Item -ItemType Directory -Path $dataTarget -Force | Out-Null
-  if ($softwareDir -notmatch "2024") {
+  # 2024 判定按 exe 而非路径名:合装目录路径可能不含"2024",误判会覆盖其本地学习文件。
+  $has2024Exe = (Test-Path -LiteralPath (Join-Path $softwareDir "ReJJGSNet2024.exe")) -or (Test-Path -LiteralPath (Join-Path $softwareDir "ReJJQDNet2024.exe"))
+  if (-not $has2024Exe -and $softwareDir -notmatch "2024") {
     $dataSource = Join-Path $root "RecoQuotaData"
     if (Test-Path -LiteralPath $dataSource) {
       Copy-Item -Path (Join-Path $dataSource "*") -Destination $dataTarget -Force
