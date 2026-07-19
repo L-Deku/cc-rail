@@ -52,6 +52,9 @@ namespace RecoNet
             // 定额编号 -> 同办法历史项目里的来源行(跨库整行复制用,取最新)
             public Dictionary<string, SmartQuotaSource> CrossSourceByQuota =
                 new Dictionary<string, SmartQuotaSource>(StringComparer.OrdinalIgnoreCase);
+            // 签名+"\n"+定额编号 -> 该工程量配该定额时历史实际放过的条目(最强条目证据,按样本数降序)
+            public Dictionary<string, List<SmartEntryStat>> EntryBySignatureQuota =
+                new Dictionary<string, List<SmartEntryStat>>(StringComparer.OrdinalIgnoreCase);
         }
 
         private static string SmartNameSegment(string signature)
@@ -198,6 +201,39 @@ namespace RecoNet
                                 }
                             }
                         }
+                        // 签名级条目证据:该工程量配该定额历史上实际放过的条目。
+                        using (SqlCommand cmd = conn.CreateCommand())
+                        {
+                            cmd.CommandTimeout = 15;
+                            cmd.CommandText =
+                                "SELECT signature, target_code, entry_code, entry_name, sample_count FROM dbo.SignatureEntryMap " +
+                                "WHERE method = @m3 OR method = ''";
+                            cmd.Parameters.AddWithValue("@m3", snapshot.Method);
+                            using (SqlDataReader reader = cmd.ExecuteReader())
+                            {
+                                while (reader.Read())
+                                {
+                                    string key = reader.GetString(0) + "\n" + reader.GetString(1);
+                                    List<SmartEntryStat> stats;
+                                    if (!snapshot.EntryBySignatureQuota.TryGetValue(key, out stats))
+                                    {
+                                        stats = new List<SmartEntryStat>();
+                                        snapshot.EntryBySignatureQuota[key] = stats;
+                                    }
+                                    stats.Add(new SmartEntryStat
+                                    {
+                                        EntryCode = reader.GetString(2),
+                                        EntryName = reader.GetString(3),
+                                        ProjectCount = 10000 + reader.GetInt32(4)
+                                    });
+                                }
+                            }
+                        }
+                        foreach (List<SmartEntryStat> stats in snapshot.EntryBySignatureQuota.Values)
+                        {
+                            stats.Sort(delegate(SmartEntryStat a, SmartEntryStat b) { return b.ProjectCount.CompareTo(a.ProjectCount); });
+                        }
+
                         // 跨库复制溯源:同办法历史绑定的来源库与源定额行(ORDER BY id,后者覆盖=取最新)。
                         using (SqlCommand cmd = conn.CreateCommand())
                         {
@@ -323,11 +359,49 @@ namespace RecoNet
             }
         }
 
-        // 为一组定额目标解析放置条目:取组内各定额在该办法下 project_count 最高、且目标项目存在的条目。
+        // 为一组定额目标解析放置条目。证据优先级:①签名级(该工程量配该定额历史放过的条目)
+        // ②定额级(EntryByQuota),带工程前缀过滤(过滤后为空则放开)。
         private static bool TryResolveSmartEntry(SmartLearningSnapshot snapshot, Dictionary<string, long> projectEntries,
-            List<SmartBoxTarget> targets, out string entryCode, out long entrySeq)
+            List<SmartBoxTarget> targets, string signature, HashSet<string> preferredPrefixes,
+            out string entryCode, out long entrySeq, out bool fromSignature)
         {
-            entryCode = ""; entrySeq = 0;
+            entryCode = ""; entrySeq = 0; fromSignature = false;
+
+            // ① 签名级证据:先试完整签名,再试去单位签名(存量老数据单位为空)。
+            string[] sigKeys = new string[] { signature ?? "", SmartNameSegment(signature ?? "") + "|" };
+            foreach (SmartBoxTarget target in targets)
+            {
+                if (target == null || !String.Equals(target.Kind, "quota", StringComparison.OrdinalIgnoreCase)) continue;
+                foreach (string sigKey in sigKeys)
+                {
+                    List<SmartEntryStat> stats;
+                    if (!snapshot.EntryBySignatureQuota.TryGetValue(sigKey + "\n" + (target.Code ?? ""), out stats)) continue;
+                    foreach (SmartEntryStat stat in stats)
+                    {
+                        if (!projectEntries.ContainsKey(stat.EntryCode)) continue;
+                        entryCode = stat.EntryCode;
+                        entrySeq = projectEntries[stat.EntryCode];
+                        fromSignature = true;
+                        return true;
+                    }
+                }
+            }
+
+            // ② 定额级证据,先带前缀过滤,过滤后为空再放开。
+            SmartEntryStat best = FindBestQuotaEntry(snapshot, projectEntries, targets, preferredPrefixes);
+            if (best == null && preferredPrefixes != null && preferredPrefixes.Count > 0)
+            {
+                best = FindBestQuotaEntry(snapshot, projectEntries, targets, null);
+            }
+            if (best == null) return false;
+            entryCode = best.EntryCode;
+            entrySeq = projectEntries[best.EntryCode];
+            return true;
+        }
+
+        private static SmartEntryStat FindBestQuotaEntry(SmartLearningSnapshot snapshot, Dictionary<string, long> projectEntries,
+            List<SmartBoxTarget> targets, HashSet<string> preferredPrefixes)
+        {
             SmartEntryStat best = null;
             foreach (SmartBoxTarget target in targets)
             {
@@ -337,14 +411,13 @@ namespace RecoNet
                 foreach (SmartEntryStat stat in stats)
                 {
                     if (!projectEntries.ContainsKey(stat.EntryCode)) continue;
+                    if (preferredPrefixes != null && preferredPrefixes.Count > 0 &&
+                        (stat.EntryCode.Length < 2 || !preferredPrefixes.Contains(stat.EntryCode.Substring(0, 2)))) continue;
                     if (best == null || stat.ProjectCount > best.ProjectCount) best = stat;
-                    break; // stats 已按 project_count 降序,该定额取第一个存在的即可
+                    break; // stats 已按证据强度降序,该定额取第一个满足条件的即可
                 }
             }
-            if (best == null) return false;
-            entryCode = best.EntryCode;
-            entrySeq = projectEntries[best.EntryCode];
-            return true;
+            return best;
         }
 
         // 目标项目 定额输入 的列集合(跨库复制时过滤源行里目标库没有的列)。
@@ -409,13 +482,38 @@ namespace RecoNet
             return null;
         }
 
+        // 命中多个定额组时:优先取"签名级条目证据落在投票工程前缀内"的组,否则按权重取首个。
+        private static SmartMapEntry PickSmartMapEntry(SmartLearningSnapshot snapshot, List<SmartMapEntry> hits,
+            string signature, HashSet<string> preferredPrefixes, Dictionary<string, long> projectEntries)
+        {
+            if (hits.Count == 1 || preferredPrefixes == null || preferredPrefixes.Count == 0) return hits[0];
+            foreach (SmartMapEntry hit in hits)
+            {
+                string entryCode; long entrySeq; bool fromSignature;
+                if (TryResolveSmartEntry(snapshot, projectEntries, hit.Targets, signature, preferredPrefixes, out entryCode, out entrySeq, out fromSignature) &&
+                    fromSignature && entryCode.Length >= 2 && preferredPrefixes.Contains(entryCode.Substring(0, 2)))
+                {
+                    return hit;
+                }
+            }
+            return hits[0];
+        }
+
         // 由一个映射命中构建预览项(每个定额目标一行,首行承载工程量名)。
         private static void AppendSmartItems(List<FillPreviewItem> items, TargetQtyRow row, SmartMapEntry entry,
             SmartLearningSnapshot snapshot, Dictionary<string, long> projectEntries,
-            Dictionary<string, ProjectQuota> projectQuotaByCode, bool needConfirm, string note)
+            Dictionary<string, ProjectQuota> projectQuotaByCode, bool needConfirm, string note,
+            string signature, HashSet<string> preferredPrefixes, Dictionary<string, int> prefixVotes)
         {
-            string entryCode; long entrySeq;
-            bool hasEntry = TryResolveSmartEntry(snapshot, projectEntries, entry.Targets, out entryCode, out entrySeq);
+            string entryCode; long entrySeq; bool fromSignature;
+            bool hasEntry = TryResolveSmartEntry(snapshot, projectEntries, entry.Targets, signature, preferredPrefixes, out entryCode, out entrySeq, out fromSignature);
+            if (hasEntry && fromSignature && entryCode.Length >= 2 && prefixVotes != null)
+            {
+                string prefix = entryCode.Substring(0, 2);
+                int votes;
+                prefixVotes.TryGetValue(prefix, out votes);
+                prefixVotes[prefix] = votes + 1;
+            }
             int order = 0;
             foreach (SmartBoxTarget target in entry.Targets)
             {
@@ -524,6 +622,13 @@ namespace RecoNet
 
             List<FillPreviewItem> items = new List<FillPreviewItem>();
             int hitExact = 0, hitNameOnly = 0, fuzzyRows = 0, manualRows = 0;
+            HashSet<string> preferredPrefixes = new HashSet<string>(StringComparer.Ordinal);
+            // 两遍扫描:第一遍用签名级证据对整表做工程前缀投票;第二遍用投票前缀消歧条目候选与多组歧义。
+            for (int pass = 0; pass < 2; pass++)
+            {
+            items = new List<FillPreviewItem>();
+            hitExact = 0; hitNameOnly = 0; fuzzyRows = 0; manualRows = 0;
+            Dictionary<string, int> prefixVotes = new Dictionary<string, int>(StringComparer.Ordinal);
             foreach (TargetQtyRow row in targetRows)
             {
                 string nameSig = NormalizeForSignature(row.RawName);
@@ -534,15 +639,19 @@ namespace RecoNet
                 List<SmartMapEntry> hits;
                 if (snapshot.BySignature.TryGetValue(fullSig, out hits) && hits.Count > 0)
                 {
-                    AppendSmartItems(items, row, hits[0], snapshot, projectEntries, projectQuotaByCode,
-                        false, "签名精确命中(权重" + hits[0].Weight.ToString(CultureInfo.InvariantCulture) + ")");
+                    SmartMapEntry picked = PickSmartMapEntry(snapshot, hits, fullSig, preferredPrefixes, projectEntries);
+                    AppendSmartItems(items, row, picked, snapshot, projectEntries, projectQuotaByCode,
+                        false, "签名精确命中(权重" + picked.Weight.ToString(CultureInfo.InvariantCulture) + ")",
+                        fullSig, preferredPrefixes, prefixVotes);
                     hitExact++;
                     continue;
                 }
                 if (snapshot.ByNameOnly.TryGetValue(nameSig, out hits) && hits.Count > 0)
                 {
-                    AppendSmartItems(items, row, hits[0], snapshot, projectEntries, projectQuotaByCode,
-                        true, "同名不同单位命中,请确认单位换算");
+                    SmartMapEntry picked = PickSmartMapEntry(snapshot, hits, fullSig, preferredPrefixes, projectEntries);
+                    AppendSmartItems(items, row, picked, snapshot, projectEntries, projectQuotaByCode,
+                        true, "同名不同单位命中,请确认单位换算",
+                        fullSig, preferredPrefixes, prefixVotes);
                     hitNameOnly++;
                     continue;
                 }
@@ -586,7 +695,8 @@ namespace RecoNet
                         };
                         List<FillPreviewItem> groupItems = new List<FillPreviewItem>();
                         AppendSmartItems(groupItems, row, candHits[0], snapshot, projectEntries, projectQuotaByCode,
-                            true, "模糊候选:" + group.Label);
+                            true, "模糊候选:" + group.Label,
+                            fullSig, preferredPrefixes, null);
                         group.Items = groupItems;
                         manual.NameQuotaCandidates.Add(group);
                     }
@@ -601,11 +711,19 @@ namespace RecoNet
                 items.Add(manual);
             }
 
+            if (pass == 0)
+            {
+                preferredPrefixes = new HashSet<string>(prefixVotes.Keys, StringComparer.Ordinal);
+                if (preferredPrefixes.Count == 0) break;   // 无签名级证据,一遍结果即最终结果
+            }
+            }
+
             string sourceLabel = snapshot.FromSql ? "学习库(SQL)" : "本地映射(jsonl回退)";
             warning = sourceLabel + ":精确 " + hitExact.ToString(CultureInfo.InvariantCulture) +
                 " 行,同名 " + hitNameOnly.ToString(CultureInfo.InvariantCulture) +
                 " 行,模糊候选 " + fuzzyRows.ToString(CultureInfo.InvariantCulture) +
                 " 行,待手挂 " + manualRows.ToString(CultureInfo.InvariantCulture) + " 行。" +
+                (preferredPrefixes.Count > 0 ? " 工程前缀:" + String.Join("/", preferredPrefixes.ToArray()) + "。" : "") +
                 (snapshotNote != null ? " " + snapshotNote : "");
             return items;
         }

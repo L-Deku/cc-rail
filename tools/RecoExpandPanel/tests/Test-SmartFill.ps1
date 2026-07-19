@@ -15,6 +15,9 @@ if ($smart -notmatch 'BuildMappingBoxIndex|LoadMappingBoxRows') { throw '缺少 
 if ($smart -notmatch 'IsLibraryQuota = true') { throw '缺少库内定额原生粘贴路径' }
 if ($smart -notmatch 'IsNameDriven = true') { throw '推荐定额项必须 IsNameDriven=true,否则不回流学习库' }
 if ($smart -notmatch 'TemplateName = "推荐定额"') { throw '预览项名称未改为推荐定额' }
+if ($smart -notmatch 'EntryBySignatureQuota') { throw '缺少签名级条目证据' }
+if ($smart -notmatch 'prefixVotes') { throw '缺少工程前缀投票' }
+if ($smart -notmatch 'preferredPrefixes') { throw '缺少前缀过滤消歧' }
 if ($panel -notmatch '三·推荐定额') { throw 'cmbMode 缺少第三模式(推荐定额)' }
 if ($panel -notmatch 'BuildPreview_SmartFill') { throw 'OnPreview 未挂接推荐定额分支' }
 if ($panel -notmatch 'smartOnly') { throw '缺少 smartOnly 独立窗口模式' }
