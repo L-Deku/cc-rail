@@ -231,7 +231,7 @@ namespace RecoNet
                         if (i < e.RowIndex) above += grid.Rows[i].Height;
                         total += grid.Rows[i].Height;
                     }
-                    Rectangle union = new Rectangle(e.CellBounds.Left + 4, e.CellBounds.Top - above, e.CellBounds.Width - 8, total);
+                    Rectangle union = new Rectangle(e.CellBounds.Left, e.CellBounds.Top - above, e.CellBounds.Width, total);
 
                     // 组内横线全部压掉:非首行不画上边线,非末行不画下边线。
                     if (e.RowIndex > start) e.AdvancedBorderStyle.Top = DataGridViewAdvancedCellBorderStyle.None;
@@ -1075,7 +1075,8 @@ namespace RecoNet
                 Cursor = busy ? Cursors.WaitCursor : Cursors.Default;
                 btnPreview.Enabled = !busy;
                 btnApply.Enabled = !busy;
-                Text = busy && !String.IsNullOrEmpty(action) ? "模板铺量 - " + action : "模板铺量";
+                string baseTitle = smartOnly ? "推荐定额" : "模板铺量";
+                Text = busy && !String.IsNullOrEmpty(action) ? baseTitle + " - " + action : baseTitle;
                 Refresh();
             }
         }
