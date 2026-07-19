@@ -6,7 +6,7 @@
 #   box_id 优先沿用 mapping-boxes 原始编号(extra.box_id),否则 auto- + 目标集合哈希前 16 位。
 . "$PSScriptRoot\Common.ps1"
 
-$log = Invoke-RecoQuery -Sql "SELECT occurred_at, quantity_name, quantity_unit, target_kind, target_code, target_name, target_unit, group_key, extra FROM dbo.BindingLog WHERE quantity_name <> ''"
+$log = Invoke-RecoQuery -Sql "SELECT occurred_at, quantity_name, quantity_unit, target_kind, target_code, target_name, target_unit, group_key, extra, method, entry_code, entry_name FROM dbo.BindingLog WHERE quantity_name <> ''"
 Write-Host ("流水行数: " + $log.Rows.Count)
 
 # 1) 按 group_key 聚成"绑定事件组"
@@ -14,10 +14,11 @@ $groups = @{}
 foreach ($row in $log.Rows) {
   $gk = [string]$row.group_key
   if (-not $groups.ContainsKey($gk)) {
-    $groups[$gk] = @{ Name = [string]$row.quantity_name; Unit = [string]$row.quantity_unit; At = $row.occurred_at; Extra = [string]$row.extra; Targets = @{} }
+    $groups[$gk] = @{ Name = [string]$row.quantity_name; Unit = [string]$row.quantity_unit; At = $row.occurred_at; Extra = [string]$row.extra; Targets = @{}; Method = ''; EntryCode = '' }
   }
   $g = $groups[$gk]
   if ($row.occurred_at -gt $g.At) { $g.At = $row.occurred_at }
+  if ($g.EntryCode -eq '' -and [string]$row.entry_code -ne '') { $g.EntryCode = [string]$row.entry_code; $g.Method = [string]$row.method }
   $tk = ([string]$row.target_kind) + ':' + ([string]$row.target_code)
   if (-not $g.Targets.ContainsKey($tk)) { $g.Targets[$tk] = @{ Kind = [string]$row.target_kind; Code = [string]$row.target_code; Name = [string]$row.target_name; Unit = [string]$row.target_unit } }
 }
@@ -107,4 +108,44 @@ foreach ($m in $maps.Values) {
 }
 Invoke-RecoBulkCopy -Table $dtMap -TargetTable 'dbo.SignatureBoxMap'
 
-Write-Host ("聚合完成: QuotaBox " + $dtBox.Rows.Count + " / QuotaBoxTarget " + $dtTarget.Rows.Count + " / QuantityAlias " + $dtAlias.Rows.Count + " / SignatureBoxMap " + $dtMap.Rows.Count)
+# 4) 签名级条目证据:某工程量(签名)+某定额 历史上实际放过的条目,按办法分组计数。
+$sigEntry = @{}
+foreach ($row in $log.Rows) {
+  if ([string]$row.entry_code -eq '' -or [string]$row.target_kind -ne 'quota' -or [string]$row.target_code -eq '') { continue }
+  $sig = Get-QuantitySignature ([string]$row.quantity_name) ([string]$row.quantity_unit)
+  $key = $sig + "`n" + [string]$row.target_code + "`n" + [string]$row.method + "`n" + [string]$row.entry_code
+  if (-not $sigEntry.ContainsKey($key)) {
+    $sigEntry[$key] = @{ Sig = $sig; Code = [string]$row.target_code; Method = [string]$row.method; Entry = [string]$row.entry_code; EntryName = [string]$row.entry_name; Count = 0; Last = $row.occurred_at }
+  }
+  $s = $sigEntry[$key]; $s.Count++
+  if ($row.occurred_at -gt $s.Last) { $s.Last = $row.occurred_at }
+  if ($s.EntryName -eq '' -and [string]$row.entry_name -ne '') { $s.EntryName = [string]$row.entry_name }
+}
+$dtSig = New-Object System.Data.DataTable
+foreach ($c in 'signature','target_code','method','entry_code','entry_name') { [void]$dtSig.Columns.Add($c, [string]) }
+[void]$dtSig.Columns.Add('sample_count', [int]); [void]$dtSig.Columns.Add('last_used_at', [datetime])
+foreach ($s in $sigEntry.Values) { [void]$dtSig.Rows.Add($s.Sig, $s.Code, $s.Method, $s.Entry, $s.EntryName, $s.Count, $s.Last) }
+[void](Invoke-RecoNonQuery -Sql "TRUNCATE TABLE dbo.SignatureEntryMap")
+Invoke-RecoBulkCopy -Table $dtSig -TargetTable 'dbo.SignatureEntryMap'
+
+# 5) 工程模板归集:条目前缀(前2位)=工程类型,统计每个工程类型下条目与定额组的共现。
+$tmpl = @{}
+foreach ($g in $groups.Values) {
+  if ($g.EntryCode -eq '' -or $g.EntryCode.Length -lt 2) { continue }
+  $prefix = $g.EntryCode.Substring(0, 2)
+  $boxId = $boxes[$g.SetHash].Id
+  $key = $g.Method + "`n" + $prefix + "`n" + $g.EntryCode + "`n" + $boxId
+  if (-not $tmpl.ContainsKey($key)) {
+    $tmpl[$key] = @{ Method = $g.Method; Prefix = $prefix; Entry = $g.EntryCode; BoxId = $boxId; Count = 0; Last = $g.At }
+  }
+  $t = $tmpl[$key]; $t.Count++
+  if ($g.At -gt $t.Last) { $t.Last = $g.At }
+}
+$dtTmpl = New-Object System.Data.DataTable
+foreach ($c in 'method','engineering_type','entry_code','box_id') { [void]$dtTmpl.Columns.Add($c, [string]) }
+[void]$dtTmpl.Columns.Add('sample_count', [int]); [void]$dtTmpl.Columns.Add('last_seen', [datetime])
+foreach ($t in $tmpl.Values) { [void]$dtTmpl.Rows.Add($t.Method, $t.Prefix, $t.Entry, $t.BoxId, $t.Count, $t.Last) }
+[void](Invoke-RecoNonQuery -Sql "TRUNCATE TABLE dbo.EngineeringTemplate")
+Invoke-RecoBulkCopy -Table $dtTmpl -TargetTable 'dbo.EngineeringTemplate'
+
+Write-Host ("聚合完成: QuotaBox " + $dtBox.Rows.Count + " / QuotaBoxTarget " + $dtTarget.Rows.Count + " / QuantityAlias " + $dtAlias.Rows.Count + " / SignatureBoxMap " + $dtMap.Rows.Count + " / SignatureEntryMap " + $dtSig.Rows.Count + " / EngineeringTemplate " + $dtTmpl.Rows.Count)

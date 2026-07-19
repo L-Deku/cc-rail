@@ -3,7 +3,7 @@
 . "$PSScriptRoot\Common.ps1"
 
 Write-Host "=== RecoLearning 学习库统计 ==="
-foreach ($t in 'BindingLog','QuantityAlias','QuotaBox','QuotaBoxTarget','SignatureBoxMap','EntryQuota','ChapterEntry','EngineeringTemplate') {
+foreach ($t in 'BindingLog','QuantityAlias','QuotaBox','QuotaBoxTarget','SignatureBoxMap','SignatureEntryMap','EntryQuota','ChapterEntry','EngineeringTemplate') {
   $n = Invoke-RecoScalar -Sql ("SELECT COUNT(*) FROM dbo." + $t)
   Write-Host ("{0,-20} {1,10:N0} 行" -f $t, [long]$n)
 }

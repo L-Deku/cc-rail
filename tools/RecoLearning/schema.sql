@@ -101,6 +101,18 @@ CREATE TABLE dbo.ChapterEntry (
   CONSTRAINT PK_ChapterEntry PRIMARY KEY (method, entry_code)
 );
 
+IF OBJECT_ID('dbo.SignatureEntryMap') IS NULL
+CREATE TABLE dbo.SignatureEntryMap (
+  signature    NVARCHAR(450) NOT NULL,
+  target_code  NVARCHAR(100) NOT NULL,
+  method       NVARCHAR(50) NOT NULL DEFAULT(''),
+  entry_code   NVARCHAR(100) NOT NULL,
+  entry_name   NVARCHAR(500) NOT NULL DEFAULT(''),
+  sample_count INT NOT NULL DEFAULT(0),
+  last_used_at DATETIME2(0) NULL,
+  CONSTRAINT PK_SignatureEntryMap PRIMARY KEY (signature, target_code, method, entry_code)
+);
+
 IF OBJECT_ID('dbo.EngineeringTemplate') IS NULL
 CREATE TABLE dbo.EngineeringTemplate (
   method           NVARCHAR(50) NOT NULL,
