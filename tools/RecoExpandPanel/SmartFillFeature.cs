@@ -63,6 +63,7 @@ namespace RecoNet
                     string text = raw != null ? raw.ToString() : "";
                     if (text.IndexOf("2024", StringComparison.Ordinal) >= 0) return "2024";
                     if (text.IndexOf("2020", StringComparison.Ordinal) >= 0) return "2020";
+                    if (text.IndexOf("30号文", StringComparison.Ordinal) >= 0) return "2020"; // 30号文=2020办法文号
                     return text.Trim();
                 }
             }
@@ -188,6 +189,36 @@ namespace RecoNet
                                 }
                             }
                         }
+                        // 绑定流水里的条目证据:同定额在历史绑定中实际放过的条目,权重高于扫描共现。
+                        using (SqlCommand cmd = conn.CreateCommand())
+                        {
+                            cmd.CommandTimeout = 15;
+                            cmd.CommandText =
+                                "SELECT target_code, entry_code, MAX(entry_name) AS entry_name, COUNT(*) AS n FROM dbo.BindingLog " +
+                                "WHERE entry_code <> '' AND target_kind = 'quota' AND (method = @method OR method = '') " +
+                                "GROUP BY target_code, entry_code";
+                            cmd.Parameters.AddWithValue("@method", snapshot.Method);
+                            using (SqlDataReader reader = cmd.ExecuteReader())
+                            {
+                                while (reader.Read())
+                                {
+                                    string quotaCode = reader.GetString(0);
+                                    List<SmartEntryStat> stats;
+                                    if (!snapshot.EntryByQuota.TryGetValue(quotaCode, out stats))
+                                    {
+                                        stats = new List<SmartEntryStat>();
+                                        snapshot.EntryByQuota[quotaCode] = stats;
+                                    }
+                                    stats.Add(new SmartEntryStat
+                                    {
+                                        EntryCode = reader.GetString(1),
+                                        EntryName = reader.GetString(2),
+                                        ProjectCount = 1000 + reader.GetInt32(3)
+                                    });
+                                }
+                            }
+                        }
+
                         foreach (List<SmartEntryStat> stats in snapshot.EntryByQuota.Values)
                         {
                             stats.Sort(delegate(SmartEntryStat a, SmartEntryStat b) { return b.ProjectCount.CompareTo(a.ProjectCount); });

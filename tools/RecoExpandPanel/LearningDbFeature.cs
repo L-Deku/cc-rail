@@ -50,11 +50,12 @@ namespace RecoNet
                             using (SqlCommand cmd = conn.CreateCommand())
                             {
                                 cmd.CommandTimeout = 5;
-                                cmd.CommandText = "INSERT INTO dbo.BindingLog (occurred_at, source, quantity_name, quantity_unit, target_kind, target_code, target_name, target_unit, group_key, event_hash) " +
-                                    "VALUES (SYSDATETIME(), @source, @qn, @qu, @tk, @tc, @tn, @tu, @gk, @eh)";
+                                cmd.CommandText = "INSERT INTO dbo.BindingLog (occurred_at, source, quantity_name, quantity_unit, entry_code, target_kind, target_code, target_name, target_unit, group_key, event_hash) " +
+                                    "VALUES (SYSDATETIME(), @source, @qn, @qu, @ec, @tk, @tc, @tn, @tu, @gk, @eh)";
                                 cmd.Parameters.AddWithValue("@source", "plugin:" + (source ?? ""));
                                 cmd.Parameters.AddWithValue("@qn", group.QuantityName ?? "");
-                                cmd.Parameters.AddWithValue("@qu", "");
+                                cmd.Parameters.AddWithValue("@qu", group.QuantityUnit ?? "");
+                                cmd.Parameters.AddWithValue("@ec", group.EntryCode ?? "");
                                 cmd.Parameters.AddWithValue("@tk", String.IsNullOrEmpty(target.Kind) ? "quota" : target.Kind);
                                 cmd.Parameters.AddWithValue("@tc", target.Code ?? "");
                                 cmd.Parameters.AddWithValue("@tn", target.Name ?? "");

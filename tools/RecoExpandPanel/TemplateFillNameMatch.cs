@@ -1249,6 +1249,8 @@ namespace RecoNet
                     .FirstOrDefault(n => !String.IsNullOrWhiteSpace(n));
                 if (String.IsNullOrWhiteSpace(name)) continue;
                 MappingFeedbackGroup mappingGroup = new MappingFeedbackGroup { QuantityName = name };
+                mappingGroup.QuantityUnit = g.Select(x => x.TargetUnit).FirstOrDefault(u => !String.IsNullOrWhiteSpace(u)) ?? "";
+                mappingGroup.EntryCode = g.Select(x => x.ItemNo).FirstOrDefault(no => !String.IsNullOrWhiteSpace(no)) ?? "";
                 foreach (FillPreviewItem it in g)
                 {
                     mappingGroup.Targets.Add(new MappingFeedbackTarget

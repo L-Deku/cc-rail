@@ -7,13 +7,13 @@ $script:RecoPassword = 'Des_Reco_2006'
 $script:LearningDb   = 'RecoLearning'
 
 function Get-RecoConnectionString {
-  param([string]$Database = $script:LearningDb)
-  "Server=$($script:RecoServer);Database=$Database;User ID=$($script:RecoUser);Password=$($script:RecoPassword);Connect Timeout=15"
+  param([string]$Database = $script:LearningDb, [string]$Server = $script:RecoServer)
+  "Server=$Server;Database=$Database;User ID=$($script:RecoUser);Password=$($script:RecoPassword);Connect Timeout=15"
 }
 
 function Invoke-RecoNonQuery {
-  param([Parameter(Mandatory)][string]$Sql, [string]$Database = $script:LearningDb, [hashtable]$Parameters = @{})
-  $conn = New-Object System.Data.SqlClient.SqlConnection (Get-RecoConnectionString -Database $Database)
+  param([Parameter(Mandatory)][string]$Sql, [string]$Database = $script:LearningDb, [hashtable]$Parameters = @{}, [string]$Server = $script:RecoServer)
+  $conn = New-Object System.Data.SqlClient.SqlConnection (Get-RecoConnectionString -Database $Database -Server $Server)
   try {
     $conn.Open()
     $cmd = $conn.CreateCommand(); $cmd.CommandText = $Sql; $cmd.CommandTimeout = 300
@@ -23,8 +23,8 @@ function Invoke-RecoNonQuery {
 }
 
 function Invoke-RecoScalar {
-  param([Parameter(Mandatory)][string]$Sql, [string]$Database = $script:LearningDb, [hashtable]$Parameters = @{})
-  $conn = New-Object System.Data.SqlClient.SqlConnection (Get-RecoConnectionString -Database $Database)
+  param([Parameter(Mandatory)][string]$Sql, [string]$Database = $script:LearningDb, [hashtable]$Parameters = @{}, [string]$Server = $script:RecoServer)
+  $conn = New-Object System.Data.SqlClient.SqlConnection (Get-RecoConnectionString -Database $Database -Server $Server)
   try {
     $conn.Open()
     $cmd = $conn.CreateCommand(); $cmd.CommandText = $Sql; $cmd.CommandTimeout = 300
@@ -34,8 +34,8 @@ function Invoke-RecoScalar {
 }
 
 function Invoke-RecoQuery {
-  param([Parameter(Mandatory)][string]$Sql, [string]$Database = $script:LearningDb, [hashtable]$Parameters = @{})
-  $conn = New-Object System.Data.SqlClient.SqlConnection (Get-RecoConnectionString -Database $Database)
+  param([Parameter(Mandatory)][string]$Sql, [string]$Database = $script:LearningDb, [hashtable]$Parameters = @{}, [string]$Server = $script:RecoServer)
+  $conn = New-Object System.Data.SqlClient.SqlConnection (Get-RecoConnectionString -Database $Database -Server $Server)
   try {
     $conn.Open()
     $cmd = $conn.CreateCommand(); $cmd.CommandText = $Sql; $cmd.CommandTimeout = 300

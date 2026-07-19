@@ -2041,6 +2041,8 @@ namespace RecoNet
         private sealed class MappingFeedbackGroup
         {
             public string QuantityName;
+            public string QuantityUnit;   // Excel 侧单位(有则学习库能精确签名命中)
+            public string EntryCode;      // 写入条目号(学习条目定位)
             public List<MappingFeedbackTarget> Targets = new List<MappingFeedbackTarget>();
         }
 
