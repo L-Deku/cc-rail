@@ -70,11 +70,7 @@ namespace RecoNet
                 StartPosition = FormStartPosition.CenterParent;
                 ClientSize = new Size(900, 580);
                 BuildLayout();
-                if (smartOnly)
-                {
-                    cmbMode.SelectedIndex = 2;
-                }
-                else
+                if (!smartOnly)
                 {
                     ReloadTemplateList();
                     ReloadSourceSheets();
@@ -110,15 +106,16 @@ namespace RecoNet
                 btnDeleteTemplate.Click += delegate { OnDeleteTemplate(); };
                 AddLabel("取数模式", 320, 50, 60);
                 cmbMode.SetBounds(385, 47, 150, 23); cmbMode.DropDownStyle = ComboBoxStyle.DropDownList;
+                }
+                // 选项与模式联动放在条件块外:推荐定额窗口虽不显示该下拉,仍靠 SelectedIndex==2 驱动预览分支。
                 cmbMode.Items.AddRange(new object[] { "一·列锚点", "二·名字驱动", "三·推荐定额(学习库)" });
-                cmbMode.SelectedIndex = 0;
+                cmbMode.SelectedIndex = smartOnly ? 2 : 0;
                 cmbMode.SelectedIndexChanged += delegate
                 {
                     bool smart = cmbMode.SelectedIndex == 2;
                     cmbTemplate.Enabled = !smart;
                     btnDeleteTemplate.Enabled = !smart;
                 };
-                }
                 AddLabel("目标Excel", 12, targetTop + 3, 60);
                 cmbTargetWorkbook.SetBounds(75, targetTop, 190, 23);
                 cmbTargetWorkbook.DropDownWidth = 420;
