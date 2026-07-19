@@ -75,7 +75,7 @@ namespace RecoQuotaRecommend
             private readonly ChapterLibraryStore chapterLibrary;
             private readonly Dictionary<string, List<PoolItem>> poolByEntry; // method_no|matchedEntryCode -> 富字段定额池
             private readonly Dictionary<string, QuotaInfo> quotaIndex; // 定额编号(大写) -> 名称/单位/基价/工作内容（取自 quota-index.jsonl）
-            private readonly Dictionary<string, bool> methodCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            private readonly Dictionary<string, string> methodNoCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             private DataGridView refGrid; // 我们自管的只读表格，叠放进"参考定额"框
             private Panel hostPanel;      // 容纳工具条 + refGrid，整体叠放进"参考定额"框
             private DataGridView nativeGrid; // tabPageCommon 里宿主原生 dg_Common，隐藏它以免盖住我们的表
@@ -351,7 +351,7 @@ namespace RecoQuotaRecommend
                 BindItems(quotas);
             }
 
-            // 解析当前定额输入行/属性/树节点所属的章节条目，并映射到库内条目（含编制办法匹配校验）
+            // 解析当前定额输入行/属性/树节点所属的章节条目，并按当前项目编制办法映射到库内条目。
             private EntryScope ResolveCurrentScope()
             {
                 if (chapterLibrary == null || chapterLibrary.IsEmpty)
@@ -359,13 +359,10 @@ namespace RecoQuotaRecommend
                     return null;
                 }
                 SqlConnection conn = GetField<SqlConnection>(mainForm, "m_ProjectConn");
-                if (conn != null && !ProjectUsesLibraryMethod(conn))
-                {
-                    return null;
-                }
+                string methodNo = ProjectMethodNo(conn);
                 string entryName;
                 string entryCode = ResolveCurrentChapterNo(conn, out entryName);
-                EntryScope scope = String.IsNullOrWhiteSpace(entryCode) ? null : chapterLibrary.ResolveScopeForUserEdit(entryCode, entryName);
+                EntryScope scope = String.IsNullOrWhiteSpace(entryCode) ? null : chapterLibrary.ResolveScopeForUserEdit(methodNo, entryCode, entryName);
                 string poolEntryKey = scope == null ? "" : ReferencePoolEntryKey(scope.MethodNo, scope.MatchedEntryCode);
                 string diag = "entryCode=" + (entryCode ?? "<null>") + " entryName=" + (entryName ?? "")
                     + " scope=" + (scope == null ? "<null>" : scope.MatchedEntryCode)
@@ -826,21 +823,14 @@ namespace RecoQuotaRecommend
 
             // ===== 当前章节条目解析（精简复制自 QuotaInlineSearchFeature，保持本文件独立）=====
 
-            private bool ProjectUsesLibraryMethod(SqlConnection conn)
+            private string ProjectMethodNo(SqlConnection conn)
             {
-                if (conn == null || String.IsNullOrWhiteSpace(chapterLibrary.MethodNo))
-                {
-                    return true;
-                }
+                if (conn == null) return "";
                 string dbName;
                 try { dbName = conn.Database ?? ""; }
-                catch { return true; }
-                bool cached;
-                if (methodCache.TryGetValue(dbName, out cached))
-                {
-                    return cached;
-                }
-                bool matches = true;
+                catch { return ""; }
+                string cached;
+                if (methodNoCache.TryGetValue(dbName, out cached)) return cached;
                 string projectMethodNo = "";
                 try
                 {
@@ -851,19 +841,15 @@ namespace RecoQuotaRecommend
                         cmd.CommandText = "select \u7f16\u5236\u529e\u6cd5\u6587\u53f7 from \u9879\u76ee\u4fe1\u606f";
                         object result = cmd.ExecuteScalar();
                         projectMethodNo = result == null || result == DBNull.Value ? "" : Convert.ToString(result, CultureInfo.InvariantCulture).Trim();
-                        if (!String.IsNullOrEmpty(projectMethodNo))
-                        {
-                            matches = String.Equals(NormalizeMethodNo(projectMethodNo), NormalizeMethodNo(chapterLibrary.MethodNo), StringComparison.OrdinalIgnoreCase);
-                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    QuotaRecommendPanel.Log("Reference quota project method check failed (treat as match): " + ex.Message);
+                    QuotaRecommendPanel.Log("Reference quota project method query failed: " + ex.Message);
                 }
-                QuotaRecommendPanel.Log("Reference method check: db=" + dbName + " projectMethodNo=[" + projectMethodNo + "] libMethodNo=[" + chapterLibrary.MethodNo + "] matches=" + matches.ToString());
-                methodCache[dbName] = matches;
-                return matches;
+                QuotaRecommendPanel.Log("Reference project method resolved: db=" + dbName + " projectMethodNo=[" + projectMethodNo + "]");
+                methodNoCache[dbName] = projectMethodNo;
+                return projectMethodNo;
             }
 
             private string ResolveCurrentChapterNo(SqlConnection conn, out string entryName)
@@ -1186,10 +1172,6 @@ namespace RecoQuotaRecommend
                         continue;
                     }
                     Dictionary<string, string> values = LearningStore.ParseFlatJson(line);
-                    if (!String.Equals(LearningStore.Get(values, "method"), methodKey, StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
                     string entry = LearningStore.Get(values, "entry_code").Trim();
                     string methodNo = LearningStore.Get(values, "method_no").Trim();
                     string code = QuotaEntry.NormalizeCode(LearningStore.Get(values, "quota_code").Trim());
@@ -1535,8 +1517,6 @@ namespace RecoQuotaRecommend
         }
 
         private static bool IsAllDigits(string text) { return !String.IsNullOrEmpty(text) && text.All(Char.IsDigit); }
-        // 归一化编制办法文号：各种破折号统一成 '-'；'–'=–, '—'=—, '－'=－
-        private static string NormalizeMethodNo(string text) { return (text ?? "").Replace('\u2013', '-').Replace('\u2014', '-').Replace('\uff0d', '-').Replace(" ", "").Trim(); }
         private static void EnsureConnectionOpen(SqlConnection conn) { if (conn != null && conn.State != ConnectionState.Open) conn.Open(); }
 
         private static T GetField<T>(object target, string name) where T : class

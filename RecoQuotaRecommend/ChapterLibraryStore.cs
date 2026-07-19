@@ -83,8 +83,8 @@ namespace RecoQuotaRecommend
     // chapter-entries.jsonl 不存在时 IsEmpty=true，推荐行为与历史版本完全一致。
     internal sealed class ChapterLibraryStore
     {
-        private readonly Dictionary<string, string> entryNames = new Dictionary<string, string>(StringComparer.Ordinal);
-        private readonly Dictionary<string, string> entryTypes = new Dictionary<string, string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> entryNames = new Dictionary<string, string>(StringComparer.Ordinal); // method_no|entry_code -> name
+        private readonly Dictionary<string, string> entryTypes = new Dictionary<string, string>(StringComparer.Ordinal); // method_no|entry_code -> type
         private readonly Dictionary<string, HashSet<string>> pools = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         // 规范化条目名称 → 小计/指标条目编号列表（识别用户复制条目的来源）
         private readonly Dictionary<string, List<string>> nameIndex = new Dictionary<string, List<string>>(StringComparer.Ordinal);
@@ -147,19 +147,16 @@ namespace RecoQuotaRecommend
                     }
 
                     Dictionary<string, string> values = LearningStore.ParseFlatJson(line);
-                    if (!String.Equals(LearningStore.Get(values, "method"), store.MethodKey, StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-
                     string code = LearningStore.Get(values, "entry_code").Trim();
-                    if (!String.IsNullOrEmpty(code) && !store.entryNames.ContainsKey(code))
+                    string methodNo = LearningStore.Get(values, "method_no").Trim();
+                    string entryKey = PoolKey(methodNo, code);
+                    if (!String.IsNullOrEmpty(code) && !store.entryNames.ContainsKey(entryKey))
                     {
-                        store.entryNames[code] = LearningStore.Get(values, "entry_name").Trim();
-                        store.entryTypes[code] = LearningStore.Get(values, "entry_type").Trim();
+                        store.entryNames[entryKey] = LearningStore.Get(values, "entry_name").Trim();
+                        store.entryTypes[entryKey] = LearningStore.Get(values, "entry_type").Trim();
                         if (String.IsNullOrEmpty(store.MethodNo))
                         {
-                            store.MethodNo = LearningStore.Get(values, "method_no").Trim();
+                            store.MethodNo = methodNo;
                         }
                     }
                 }
@@ -174,11 +171,6 @@ namespace RecoQuotaRecommend
                     }
 
                     Dictionary<string, string> values = LearningStore.ParseFlatJson(line);
-                    if (!String.Equals(LearningStore.Get(values, "method"), store.MethodKey, StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-
                     string entryCode = LearningStore.Get(values, "entry_code").Trim();
                     string code = QuotaEntry.NormalizeCode(LearningStore.Get(values, "quota_code").Trim());
                     string methodNo = LearningStore.Get(values, "method_no").Trim();
@@ -194,7 +186,7 @@ namespace RecoQuotaRecommend
 
                     string entryName = LearningStore.Get(values, "entry_name").Trim();
                     string knownEntryName;
-                    if (String.IsNullOrEmpty(entryName) && store.entryNames.TryGetValue(entryCode, out knownEntryName))
+                    if (String.IsNullOrEmpty(entryName) && store.entryNames.TryGetValue(PoolKey(methodNo, entryCode), out knownEntryName))
                     {
                         entryName = knownEntryName;
                     }
@@ -298,34 +290,52 @@ namespace RecoQuotaRecommend
             }
         }
 
-        // 与 SearchIndexStore.ResolveDatabaseName 同一套判断：按运行目录/进程判定 2020 还是 2024
+        // 2020/2024 可共存在同一目录，必须优先按当前实际进程判定宿主版本。
         private static string ResolveMethodKey()
         {
             try
             {
                 string baseDir = Path.GetDirectoryName(typeof(QuotaRecommendPanel).Assembly.Location) ?? "";
-                string processPath = "";
+                string processIdentity = "";
                 try
                 {
-                    processPath = Process.GetCurrentProcess().MainModule.FileName ?? "";
+                    Process process = Process.GetCurrentProcess();
+                    processIdentity = process.ProcessName ?? "";
+                    try
+                    {
+                        processIdentity += " " + (process.MainModule.FileName ?? "");
+                    }
+                    catch
+                    {
+                    }
                 }
                 catch
                 {
                 }
 
-                string probe = (baseDir + " " + processPath).ToLowerInvariant();
-                if (probe.Contains("2024") ||
-                    File.Exists(Path.Combine(baseDir, "ReJJGSNet2024.exe")) ||
-                    File.Exists(Path.Combine(baseDir, "ReJJQDNet2024.exe")))
-                {
-                    return "2024";
-                }
+                return ResolveMethodKeyForHost(
+                    baseDir,
+                    processIdentity,
+                    File.Exists(Path.Combine(baseDir, "RejjNet2020.exe")),
+                    File.Exists(Path.Combine(baseDir, "ReJJGSNet2024.exe")) || File.Exists(Path.Combine(baseDir, "ReJJQDNet2024.exe")));
             }
             catch
             {
             }
 
             return "2020";
+        }
+
+        internal static string ResolveMethodKeyForHost(string baseDir, string processIdentity, bool has2020Executable, bool has2024Executable)
+        {
+            string processProbe = (processIdentity ?? "").ToLowerInvariant();
+            if (processProbe.Contains("rejjnet2020")) return "2020";
+            if (processProbe.Contains("rejjgsnet2024") || processProbe.Contains("rejjqdnet2024")) return "2024";
+            if (has2020Executable && !has2024Executable) return "2020";
+            if (has2024Executable && !has2020Executable) return "2024";
+
+            string directoryProbe = (baseDir ?? "").ToLowerInvariant();
+            return directoryProbe.Contains("2024") ? "2024" : "2020";
         }
 
         private static string NormalizePoolMethodNo(string text)
@@ -551,14 +561,15 @@ namespace RecoQuotaRecommend
                     continue;
                 }
 
+                string entryKey = PoolKey(methodNo, entryCode);
                 string entryType;
-                if (!entryTypes.TryGetValue(entryCode, out entryType) || !IsQuotaInputEntryType(entryType))
+                if (!entryTypes.TryGetValue(entryKey, out entryType) || !IsQuotaInputEntryType(entryType))
                 {
                     continue;
                 }
 
                 string entryName;
-                if (!entryNames.TryGetValue(entryCode, out entryName))
+                if (!entryNames.TryGetValue(entryKey, out entryName))
                 {
                     continue;
                 }
@@ -628,7 +639,7 @@ namespace RecoQuotaRecommend
             }
 
             // 编号不在库内（用户新建/复制的条目）⇒ 按名称找复制来源条目，用它的定额池
-            if (!entryNames.ContainsKey(current))
+            if (!entryNames.ContainsKey(PoolKey(methodNo, current)))
             {
                 string nameKey = NameIndexKey(methodNo, NormalizeEntryName(projectEntryName));
                 List<string> sameName;
@@ -709,7 +720,7 @@ namespace RecoQuotaRecommend
             scope.ProjectEntryCode = projectEntryCode;
             scope.MatchedEntryCode = matchedCode;
             string entryName;
-            scope.EntryName = entryNames.TryGetValue(matchedCode, out entryName) && !String.IsNullOrEmpty(entryName) ? entryName : (fallbackEntryName ?? "");
+            scope.EntryName = entryNames.TryGetValue(PoolKey(methodNo, matchedCode), out entryName) && !String.IsNullOrEmpty(entryName) ? entryName : (fallbackEntryName ?? "");
             scope.Method = MethodKey;
             scope.MethodNo = methodNo;
             scope.PoolKeys = pool;
@@ -722,7 +733,7 @@ namespace RecoQuotaRecommend
             scope.ProjectEntryCode = projectEntryCode;
             scope.MatchedEntryCode = matchedCode;
             string entryName;
-            scope.EntryName = entryNames.TryGetValue(matchedCode, out entryName) && !String.IsNullOrEmpty(entryName) ? entryName : (fallbackEntryName ?? "");
+            scope.EntryName = entryNames.TryGetValue(PoolKey(methodNo, matchedCode), out entryName) && !String.IsNullOrEmpty(entryName) ? entryName : (fallbackEntryName ?? "");
             scope.Method = MethodKey;
             scope.MethodNo = methodNo;
             HashSet<string> pool;
