@@ -231,17 +231,20 @@ namespace RecoNet
                         if (i < e.RowIndex) above += grid.Rows[i].Height;
                         total += grid.Rows[i].Height;
                     }
-                    Rectangle union = new Rectangle(e.CellBounds.Left, e.CellBounds.Top - above, e.CellBounds.Width, total);
+                    Rectangle union = new Rectangle(e.CellBounds.Left + 4, e.CellBounds.Top - above, e.CellBounds.Width - 8, total);
 
+                    // 组内横线全部压掉:非首行不画上边线,非末行不画下边线。
                     if (e.RowIndex > start) e.AdvancedBorderStyle.Top = DataGridViewAdvancedCellBorderStyle.None;
+                    if (e.RowIndex < end) e.AdvancedBorderStyle.Bottom = DataGridViewAdvancedCellBorderStyle.None;
                     e.PaintBackground(e.ClipBounds, true);
                     string text = Convert.ToString(grid.Rows[start].Cells[e.ColumnIndex].Value);
                     if (!String.IsNullOrEmpty(text))
                     {
                         bool selected = (e.State & DataGridViewElementStates.Selected) != 0;
                         Color foreColor = selected ? e.CellStyle.SelectionForeColor : e.CellStyle.ForeColor;
+                        // 靠左 + 垂直居中,与普通行的左对齐保持一致。
                         TextRenderer.DrawText(e.Graphics, text, e.CellStyle.Font, union, foreColor,
-                            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
+                            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
                     }
                     e.Handled = true;
                 };
