@@ -2458,6 +2458,11 @@ namespace RecoNet
             TreeNode node = FindAgentTreeNode(tree.Nodes, seq, itemNo);
             if (node == null)
             {
+                // 章节树懒加载:按条目编号前缀逐级展开祖先,触发软件加载子级后再找。
+                node = ExpandAgentTreePath(tree, conn, itemNo, seq);
+            }
+            if (node == null)
+            {
                 return false;
             }
 
@@ -2471,6 +2476,69 @@ namespace RecoNet
             {
                 Log("Agent navigate tree failed: " + ex.Message);
                 return false;
+            }
+        }
+
+        // 生成条目编号的祖先前缀链:0821-01-04-09-03 -> 08, 0821, 0821-01, 0821-01-04, 0821-01-04-09。
+        internal static List<string> BuildAgentItemAncestorPrefixes(string itemNo)
+        {
+            List<string> prefixes = new List<string>();
+            string[] parts = (itemNo ?? "").Trim().Split('-');
+            if (parts.Length == 0 || String.IsNullOrEmpty(parts[0])) return prefixes;
+            string head = parts[0];
+            if (head.Length >= 4)
+            {
+                prefixes.Add(head.Substring(0, 2));   // 章:08
+                prefixes.Add(head);                   // 节:0821
+            }
+            else
+            {
+                prefixes.Add(head);
+            }
+            StringBuilder sb = new StringBuilder(head);
+            for (int i = 1; i < parts.Length - 1; i++)
+            {
+                sb.Append('-').Append(parts[i]);
+                prefixes.Add(sb.ToString());
+            }
+            // 末段是目标条目自身,不算祖先。
+            if (prefixes.Count > 0 && String.Equals(prefixes[prefixes.Count - 1], (itemNo ?? "").Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                prefixes.RemoveAt(prefixes.Count - 1);
+            }
+            return prefixes;
+        }
+
+        private static TreeNode ExpandAgentTreePath(TreeView tree, SqlConnection conn, string itemNo, string seq)
+        {
+            try
+            {
+                foreach (string prefix in BuildAgentItemAncestorPrefixes(itemNo))
+                {
+                    string ancestorSeq;
+                    using (SqlCommand cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "select top 1 条目序号 from 章节表 where 条目编号=@bh";
+                        cmd.Parameters.AddWithValue("@bh", prefix);
+                        object result = cmd.ExecuteScalar();
+                        if (result == null || result == DBNull.Value) continue;
+                        ancestorSeq = Convert.ToString(result, CultureInfo.InvariantCulture).Trim();
+                    }
+
+                    TreeNode parent = FindAgentTreeNode(tree.Nodes, ancestorSeq, prefix);
+                    if (parent == null) continue;
+                    tree.SelectedNode = parent;   // 部分层级在选中时才加载子级
+                    WaitAgentUiIdle(200);
+                    if (!parent.IsExpanded) parent.Expand();
+                    WaitAgentUiIdle(300);
+                }
+
+                return FindAgentTreeNode(tree.Nodes, seq, itemNo);
+            }
+            catch (Exception ex)
+            {
+                Log("Agent expand tree path failed: " + ex.Message);
+                return null;
             }
         }
 
