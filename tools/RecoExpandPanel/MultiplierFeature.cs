@@ -269,35 +269,60 @@ namespace RecoNet
                 return;
             }
 
-            EnsureFactorTargetItem(root, mainForm, isDeMenu, isTreeMenu, "乘到原来的工程量", "quantity");
-            EnsureFactorTargetItem(root, mainForm, isDeMenu, isTreeMenu, "乘到定额编号", "quotaCode");
+            RemoveDropDownMenuItem(root, "乘到原来的工程量");
+            RemoveDropDownMenuItem(root, "乘到定额编号");
+
+            ToolStripMenuItem quantity = EnsureFactorFieldItem(root, "工程数量");
+            EnsureFactorActionItem(quantity, mainForm, isDeMenu, isTreeMenu, "乘系数", "quantity", "multiply");
+            EnsureFactorActionItem(quantity, mainForm, isDeMenu, isTreeMenu, "删系数", "quantity", "remove");
+
+            ToolStripMenuItem quotaCode = EnsureFactorFieldItem(root, "定额编号");
+            EnsureFactorActionItem(quotaCode, mainForm, isDeMenu, isTreeMenu, "乘系数", "quota_code", "multiply");
+            EnsureFactorActionItem(quotaCode, mainForm, isDeMenu, isTreeMenu, "删系数", "quota_code", "remove");
+
+            ToolStripMenuItem unitPrice = EnsureFactorFieldItem(root, "单价");
+            EnsureFactorActionItem(unitPrice, mainForm, isDeMenu, isTreeMenu, "乘系数", "unit_price", "multiply");
+            RemoveDropDownMenuItem(unitPrice, "删系数");
+
+            ToolStripMenuItem adjustment = EnsureFactorFieldItem(root, "定额调整");
+            EnsureFactorActionItem(adjustment, mainForm, isDeMenu, isTreeMenu, "调整输入", "adjustment", "set_adjustment");
+            EnsureFactorActionItem(adjustment, mainForm, isDeMenu, isTreeMenu, "删除调整", "adjustment", "remove_adjustment");
         }
 
-        private static void EnsureFactorTargetItem(ToolStripMenuItem parent, Form mainForm, bool isDeMenu, bool isTreeMenu, string text, string target)
+        private static ToolStripMenuItem EnsureFactorFieldItem(ToolStripMenuItem parent, string text)
+        {
+            ToolStripMenuItem item = FindDropDownMenuItem(parent, text);
+            if (item == null)
+            {
+                item = new ToolStripMenuItem(text);
+                parent.DropDownItems.Add(item);
+            }
+
+            return item;
+        }
+
+        private static void EnsureFactorActionItem(ToolStripMenuItem parent, Form mainForm, bool isDeMenu, bool isTreeMenu, string text, string target, string action)
         {
             if (FindDropDownMenuItem(parent, text) != null)
             {
                 return;
             }
 
-            AddFactorTargetItem(parent, mainForm, isDeMenu, isTreeMenu, text, target);
+            ToolStripMenuItem item = new ToolStripMenuItem(text);
+            item.Click += delegate { ApplyContextMenuAction(mainForm, isDeMenu, isTreeMenu, target, action); };
+            parent.DropDownItems.Add(item);
         }
 
-        private static void AddFactorTargetItem(ToolStripMenuItem parent, Form mainForm, bool isDeMenu, bool isTreeMenu, string text, string target)
+        private static void RemoveDropDownMenuItem(ToolStripMenuItem parent, string text)
         {
-            ToolStripMenuItem item = new ToolStripMenuItem(text);
-            item.Click += delegate
+            ToolStripMenuItem item = FindDropDownMenuItem(parent, text);
+            if (item == null)
             {
-                if (isDeMenu)
-                {
-                    ApplyToSelectedQuotaRows(mainForm, target);
-                }
-                else if (isTreeMenu)
-                {
-                    ApplyToTree(mainForm, target);
-                }
-            };
-            parent.DropDownItems.Add(item);
+                return;
+            }
+
+            parent.DropDownItems.Remove(item);
+            item.Dispose();
         }
 
         private static ToolStripMenuItem FindDropDownMenuItem(ToolStripMenuItem menu, string text)
@@ -338,21 +363,53 @@ namespace RecoNet
                 return;
             }
 
-            EnsureLegacyTargetItem(multiply, "乘到原来的工程量", mainForm, "quantity");
-            EnsureLegacyTargetItem(multiply, "乘到定额编号", mainForm, "quotaCode");
+            ConfigureLegacyFactorTargetMenu(multiply, mainForm);
         }
 
         private static void AddLegacyTreeMultiplierItem(ContextMenu menu, Form mainForm, int insertIndex)
         {
             MenuItem multiply = new MenuItem("乘系数");
-            EnsureLegacyTargetItem(multiply, "乘到原来的工程量", mainForm, "quantity");
-            EnsureLegacyTargetItem(multiply, "乘到定额编号", mainForm, "quotaCode");
+            ConfigureLegacyFactorTargetMenu(multiply, mainForm);
             int index = Math.Max(0, Math.Min(insertIndex, menu.MenuItems.Count));
             menu.MenuItems.Add(index, multiply);
             Log("Legacy tree multiplier inserted. index=" + index.ToString(CultureInfo.InvariantCulture));
         }
 
-        private static void EnsureLegacyTargetItem(MenuItem parent, string text, Form mainForm, string target)
+        private static void ConfigureLegacyFactorTargetMenu(MenuItem root, Form mainForm)
+        {
+            RemoveLegacyMenuItem(root, "乘到原来的工程量");
+            RemoveLegacyMenuItem(root, "乘到定额编号");
+
+            MenuItem quantity = EnsureLegacyFieldItem(root, "工程数量");
+            EnsureLegacyActionItem(quantity, "乘系数", mainForm, "quantity", "multiply");
+            EnsureLegacyActionItem(quantity, "删系数", mainForm, "quantity", "remove");
+
+            MenuItem quotaCode = EnsureLegacyFieldItem(root, "定额编号");
+            EnsureLegacyActionItem(quotaCode, "乘系数", mainForm, "quota_code", "multiply");
+            EnsureLegacyActionItem(quotaCode, "删系数", mainForm, "quota_code", "remove");
+
+            MenuItem unitPrice = EnsureLegacyFieldItem(root, "单价");
+            EnsureLegacyActionItem(unitPrice, "乘系数", mainForm, "unit_price", "multiply");
+            RemoveLegacyMenuItem(unitPrice, "删系数");
+
+            MenuItem adjustment = EnsureLegacyFieldItem(root, "定额调整");
+            EnsureLegacyActionItem(adjustment, "调整输入", mainForm, "adjustment", "set_adjustment");
+            EnsureLegacyActionItem(adjustment, "删除调整", mainForm, "adjustment", "remove_adjustment");
+        }
+
+        private static MenuItem EnsureLegacyFieldItem(MenuItem parent, string text)
+        {
+            MenuItem item = FindLegacyMenuItem(parent, text);
+            if (item == null)
+            {
+                item = new MenuItem(text);
+                parent.MenuItems.Add(item);
+            }
+
+            return item;
+        }
+
+        private static void EnsureLegacyActionItem(MenuItem parent, string text, Form mainForm, string target, string action)
         {
             if (FindLegacyMenuItem(parent, text) != null)
             {
@@ -360,8 +417,20 @@ namespace RecoNet
             }
 
             MenuItem item = new MenuItem(text);
-            item.Click += delegate { ApplyToTree(mainForm, target); };
+            item.Click += delegate { ApplyContextMenuAction(mainForm, false, true, target, action); };
             parent.MenuItems.Add(item);
+        }
+
+        private static void RemoveLegacyMenuItem(Menu parent, string text)
+        {
+            MenuItem item = FindLegacyMenuItem(parent, text);
+            if (item == null)
+            {
+                return;
+            }
+
+            parent.MenuItems.Remove(item);
+            item.Dispose();
         }
 
         private static MenuItem FindLegacyMenuItem(Menu menu, string text)
@@ -460,8 +529,13 @@ namespace RecoNet
             private const uint MF_STRING = 0x0000;
             private const uint MF_POPUP = 0x0010;
             private const uint MF_BYPOSITION = 0x0400;
-            private const int NativeQuantityCommand = 28433;
-            private const int NativeQuotaCodeCommand = 28434;
+            private const int NativeQuantityMultiplyCommand = 28433;
+            private const int NativeQuotaCodeMultiplyCommand = 28434;
+            private const int NativeQuantityRemoveCommand = 28435;
+            private const int NativeQuotaCodeRemoveCommand = 28436;
+            private const int NativeUnitPriceMultiplyCommand = 28437;
+            private const int NativeAdjustmentSetCommand = 28438;
+            private const int NativeAdjustmentRemoveCommand = 28439;
 
             private readonly Form mainForm;
             private bool scanScheduled;
@@ -488,14 +562,39 @@ namespace RecoNet
                 if (m.Msg == WM_COMMAND)
                 {
                     int command = unchecked((int)((long)m.WParam & 0xFFFF));
-                    if (command == NativeQuantityCommand)
+                    if (command == NativeQuantityMultiplyCommand)
                     {
-                        ApplyToTree(mainForm, "quantity");
+                        ApplyContextMenuAction(mainForm, false, true, "quantity", "multiply");
                         return true;
                     }
-                    if (command == NativeQuotaCodeCommand)
+                    if (command == NativeQuantityRemoveCommand)
                     {
-                        ApplyToTree(mainForm, "quotaCode");
+                        ApplyContextMenuAction(mainForm, false, true, "quantity", "remove");
+                        return true;
+                    }
+                    if (command == NativeQuotaCodeMultiplyCommand)
+                    {
+                        ApplyContextMenuAction(mainForm, false, true, "quota_code", "multiply");
+                        return true;
+                    }
+                    if (command == NativeQuotaCodeRemoveCommand)
+                    {
+                        ApplyContextMenuAction(mainForm, false, true, "quota_code", "remove");
+                        return true;
+                    }
+                    if (command == NativeUnitPriceMultiplyCommand)
+                    {
+                        ApplyContextMenuAction(mainForm, false, true, "unit_price", "multiply");
+                        return true;
+                    }
+                    if (command == NativeAdjustmentSetCommand)
+                    {
+                        ApplyContextMenuAction(mainForm, false, true, "adjustment", "set_adjustment");
+                        return true;
+                    }
+                    if (command == NativeAdjustmentRemoveCommand)
+                    {
+                        ApplyContextMenuAction(mainForm, false, true, "adjustment", "remove_adjustment");
                         return true;
                     }
                 }
@@ -531,13 +630,30 @@ namespace RecoNet
                 }
 
                 IntPtr submenu = CreatePopupMenu();
-                if (submenu == IntPtr.Zero)
+                IntPtr quantity = CreatePopupMenu();
+                IntPtr quotaCode = CreatePopupMenu();
+                IntPtr unitPrice = CreatePopupMenu();
+                IntPtr adjustment = CreatePopupMenu();
+                if (submenu == IntPtr.Zero || quantity == IntPtr.Zero || quotaCode == IntPtr.Zero ||
+                    unitPrice == IntPtr.Zero || adjustment == IntPtr.Zero)
                 {
                     return;
                 }
 
-                AppendMenu(submenu, MF_STRING, new UIntPtr((uint)NativeQuantityCommand), "乘到原来的工程量");
-                AppendMenu(submenu, MF_STRING, new UIntPtr((uint)NativeQuotaCodeCommand), "乘到定额编号");
+                AppendMenu(quantity, MF_STRING, new UIntPtr((uint)NativeQuantityMultiplyCommand), "乘系数");
+                AppendMenu(quantity, MF_STRING, new UIntPtr((uint)NativeQuantityRemoveCommand), "删系数");
+                AppendPopupMenu(submenu, quantity, "工程数量");
+
+                AppendMenu(quotaCode, MF_STRING, new UIntPtr((uint)NativeQuotaCodeMultiplyCommand), "乘系数");
+                AppendMenu(quotaCode, MF_STRING, new UIntPtr((uint)NativeQuotaCodeRemoveCommand), "删系数");
+                AppendPopupMenu(submenu, quotaCode, "定额编号");
+
+                AppendMenu(unitPrice, MF_STRING, new UIntPtr((uint)NativeUnitPriceMultiplyCommand), "乘系数");
+                AppendPopupMenu(submenu, unitPrice, "单价");
+
+                AppendMenu(adjustment, MF_STRING, new UIntPtr((uint)NativeAdjustmentSetCommand), "调整输入");
+                AppendMenu(adjustment, MF_STRING, new UIntPtr((uint)NativeAdjustmentRemoveCommand), "删除调整");
+                AppendPopupMenu(submenu, adjustment, "定额调整");
 
                 UIntPtr popupId = UIntPtr.Size == 8
                     ? new UIntPtr((ulong)submenu.ToInt64())
@@ -545,6 +661,14 @@ namespace RecoNet
                 int index = Math.Max(0, FindNativeInsertIndex(menu));
                 InsertMenu(menu, (uint)index, MF_BYPOSITION | MF_POPUP, popupId, "乘系数");
                 Log("Native tree multiplier inserted. index=" + index.ToString(CultureInfo.InvariantCulture) + ", visible=" + NativeMenuText(menu));
+            }
+
+            private static void AppendPopupMenu(IntPtr parent, IntPtr child, string text)
+            {
+                UIntPtr popupId = UIntPtr.Size == 8
+                    ? new UIntPtr((ulong)child.ToInt64())
+                    : new UIntPtr((uint)child.ToInt32());
+                AppendMenu(parent, MF_POPUP, popupId, text);
             }
 
             private static bool PatchVisibleToolStripTreeMenus(Form mainForm)
@@ -684,95 +808,142 @@ namespace RecoNet
             return String.Join("|", texts.ToArray());
         }
 
-        private static void ApplyToTree(Form mainForm)
+        private static void ApplyContextMenuAction(Form mainForm, bool isDeMenu, bool isTreeMenu, string target, string action)
         {
-            ApplyToTree(mainForm, "quantity");
+            if (mainForm == null || (!isDeMenu && !isTreeMenu))
+            {
+                return;
+            }
+
+            string title = ContextMenuActionTitle(action);
+            string value;
+            if (action == "multiply" || action == "remove")
+            {
+                FactorInfo factor = PromptFactor(mainForm, title);
+                if (factor == null)
+                {
+                    return;
+                }
+
+                value = factor.Suffix;
+            }
+            else
+            {
+                value = PromptContextText(mainForm, title, action == "set_adjustment" ? "请输入调整：" : "请输入要删除的调整：");
+                if (value == null)
+                {
+                    return;
+                }
+            }
+
+            try
+            {
+                AgentSelectionSnapshot selection = CaptureAgentSelection(mainForm);
+                AgentCommand command = BuildContextMenuCommand(target, action, value, isTreeMenu, selection.CurrentUnitId);
+                AgentPlan plan;
+                using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
+                {
+                    plan = BuildAgentPlan(conn, selection, new List<AgentCommand> { command });
+                }
+
+                string warnings = plan.Warnings.Count == 0 ? "" : Environment.NewLine + Environment.NewLine + String.Join(Environment.NewLine, plan.Warnings.ToArray());
+                if (plan.AffectedCount == 0)
+                {
+                    MessageBox.Show(mainForm, "没有需要执行的改动。" + warnings, title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                string message = ExecuteAgentPlan(mainForm, plan, null);
+                MessageBox.Show(mainForm, message + warnings, title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                Log("Context menu action executed. Scope=" + (isTreeMenu ? "tree" : "quota") +
+                    ", UnitId=" + selection.CurrentUnitId.ToString(CultureInfo.InvariantCulture) +
+                    ", Target=" + target + ", Action=" + action + ", Affected=" + plan.AffectedCount.ToString(CultureInfo.InvariantCulture));
+            }
+            catch (AgentPlanException ex)
+            {
+                MessageBox.Show(mainForm, ex.Message, title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            catch (Exception ex)
+            {
+                Log("Context menu action failed. Target=" + target + ", Action=" + action + " " + ex);
+                MessageBox.Show(mainForm, "执行失败：" + ex.Message, title, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
-        private static void ApplyToTree(Form mainForm, string target)
+        private static AgentCommand BuildContextMenuCommand(string target, string action, string value, bool isTreeMenu, long currentUnitId)
         {
-            FactorInfo factor = PromptFactor(mainForm);
-            if (factor == null)
+            AgentCommand command = new AgentCommand();
+            command.Items = new List<string> { isTreeMenu ? AgentCurrentItemToken : AgentSelectedToken };
+            command.IncludeChildren = isTreeMenu;
+            command.Target = target;
+            if (isTreeMenu)
             {
-                return;
+                if (currentUnitId <= 0)
+                {
+                    throw new AgentPlanException("无法识别当前单元。为避免误改其他单元，已中止操作。");
+                }
+
+                command.Units = new List<string> { currentUnitId.ToString(CultureInfo.InvariantCulture) };
             }
 
-            TreeView tree = GetField<TreeView>(mainForm, "Tv_tree");
-            TreeNode node = tree != null ? tree.SelectedNode : GetField<TreeNode>(mainForm, "CurrNode");
-            if (node == null)
+            if (action == "multiply")
             {
-                MessageBox.Show(mainForm, "请先选择左侧条目。", "乘系数", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
+                FactorInfo factor;
+                string error;
+                if (!TryParseFactor(value, out factor, out error))
+                {
+                    throw new AgentPlanException(error);
+                }
+
+                command.Type = "multiply_quantity";
+                command.Operator = factor.Operator;
+                command.Factor = factor.Factor;
+            }
+            else if (action == "remove")
+            {
+                if (target == "unit_price")
+                {
+                    throw new AgentPlanException("单价不支持删系数。");
+                }
+
+                FactorInfo factor;
+                string error;
+                if (!TryParseFactor(value, out factor, out error))
+                {
+                    throw new AgentPlanException(error);
+                }
+
+                command.Type = "remove_text";
+                command.RemoveText = factor.Suffix;
+            }
+            else if (action == "set_adjustment" && target == "adjustment")
+            {
+                command.Type = "set_adjustment";
+                command.Mode = "set";
+                command.Value = value;
+            }
+            else if (action == "remove_adjustment" && target == "adjustment")
+            {
+                command.Type = "remove_text";
+                command.RemoveText = value;
+            }
+            else
+            {
+                throw new AgentPlanException("不支持的右键操作。");
             }
 
-            SqlConnection conn = GetProjectConnection(mainForm);
-            if (conn == null)
-            {
-                MessageBox.Show(mainForm, "没有找到当前项目数据库连接。", "乘系数", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            string itemNo = ResolveChapterNo(mainForm, conn, node);
-            if (String.IsNullOrEmpty(itemNo))
-            {
-                MessageBox.Show(mainForm, "无法识别当前条目的编号，请切换条目后再试。", "乘系数", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            long unitId = ResolveMultiplierCurrentUnitId(mainForm);
-            if (unitId <= 0)
-            {
-                MessageBox.Show(mainForm, "无法识别当前单元。为避免误改其他单元，请先切换到目标单元后再试。", "乘系数", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            int changed = ApplyFactorByChapterNo(conn, itemNo, factor, target, unitId);
-            RefreshCurrentQuotaGrid(mainForm);
-            Log("Tree factor applied. UnitId=" + unitId.ToString(CultureInfo.InvariantCulture) + ", ChapterNo=" + itemNo + ", Target=" + target + ", Factor=" + factor.Suffix + ", Changed=" + changed.ToString(CultureInfo.InvariantCulture));
-            MessageBox.Show(mainForm, "已处理 " + changed.ToString(CultureInfo.InvariantCulture) + " 条定额。", "乘系数", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return command;
         }
 
-        private static void ApplyToSelectedQuotaRows(Form mainForm)
+        private static string ContextMenuActionTitle(string action)
         {
-            ApplyToSelectedQuotaRows(mainForm, "quantity");
+            if (action == "remove") { return "删系数"; }
+            if (action == "set_adjustment") { return "调整输入"; }
+            if (action == "remove_adjustment") { return "删除调整"; }
+            return "乘系数";
         }
 
-        private static void ApplyToSelectedQuotaRows(Form mainForm, string target)
-        {
-            FactorInfo factor = PromptFactor(mainForm);
-            if (factor == null)
-            {
-                return;
-            }
-
-            DataGridView grid = GetField<DataGridView>(mainForm, "dataGridViewDE");
-            if (grid == null)
-            {
-                MessageBox.Show(mainForm, "没有找到定额输入表格。", "乘系数", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            List<QuotaKey> keys = GetSelectedQuotaKeys(grid);
-            if (keys.Count == 0)
-            {
-                MessageBox.Show(mainForm, "请先选择需要调整的定额行。", "乘系数", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            SqlConnection conn = GetProjectConnection(mainForm);
-            if (conn == null)
-            {
-                MessageBox.Show(mainForm, "没有找到当前项目数据库连接。", "乘系数", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            int changed = ApplyFactorByQuotaKeys(conn, keys, factor, target);
-            RefreshCurrentQuotaGrid(mainForm);
-            Log("Grid factor applied. Target=" + target + ", Factor=" + factor.Suffix + ", Changed=" + changed.ToString(CultureInfo.InvariantCulture));
-            MessageBox.Show(mainForm, "已处理 " + changed.ToString(CultureInfo.InvariantCulture) + " 条定额。", "乘系数", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-
-        private static FactorInfo PromptFactor(IWin32Window owner)
+        private static FactorInfo PromptFactor(IWin32Window owner, string title)
         {
             using (Form dialog = new Form())
             using (Label label = new Label())
@@ -780,7 +951,7 @@ namespace RecoNet
             using (Button ok = new Button())
             using (Button cancel = new Button())
             {
-                dialog.Text = "乘系数";
+                dialog.Text = title;
                 dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
                 dialog.StartPosition = FormStartPosition.CenterParent;
                 dialog.MinimizeBox = false;
@@ -824,8 +995,67 @@ namespace RecoNet
                         return factor;
                     }
 
-                    MessageBox.Show(owner, error, "乘系数", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show(owner, error, title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     textBox.SelectAll();
+                    textBox.Focus();
+                }
+            }
+
+            return null;
+        }
+
+        private static string PromptContextText(IWin32Window owner, string title, string prompt)
+        {
+            using (Form dialog = new Form())
+            using (Label label = new Label())
+            using (TextBox textBox = new TextBox())
+            using (Button ok = new Button())
+            using (Button cancel = new Button())
+            {
+                dialog.Text = title;
+                dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dialog.StartPosition = FormStartPosition.CenterParent;
+                dialog.MinimizeBox = false;
+                dialog.MaximizeBox = false;
+                dialog.ClientSize = new System.Drawing.Size(380, 110);
+
+                label.Text = prompt;
+                label.Left = 12;
+                label.Top = 15;
+                label.Width = 150;
+
+                textBox.Left = 160;
+                textBox.Top = 12;
+                textBox.Width = 200;
+
+                ok.Text = "确定";
+                ok.Left = 204;
+                ok.Top = 62;
+                ok.Width = 75;
+                ok.DialogResult = DialogResult.OK;
+
+                cancel.Text = "取消";
+                cancel.Left = 285;
+                cancel.Top = 62;
+                cancel.Width = 75;
+                cancel.DialogResult = DialogResult.Cancel;
+
+                dialog.Controls.Add(label);
+                dialog.Controls.Add(textBox);
+                dialog.Controls.Add(ok);
+                dialog.Controls.Add(cancel);
+                dialog.AcceptButton = ok;
+                dialog.CancelButton = cancel;
+
+                while (dialog.ShowDialog(owner) == DialogResult.OK)
+                {
+                    string value = textBox.Text == null ? "" : textBox.Text.Trim();
+                    if (value.Length > 0)
+                    {
+                        return value;
+                    }
+
+                    MessageBox.Show(owner, "输入内容不能为空。", title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     textBox.Focus();
                 }
             }
@@ -875,167 +1105,6 @@ namespace RecoNet
             factor.Operator = op;
             factor.Factor = parsed.ToString(CultureInfo.InvariantCulture);
             return true;
-        }
-
-        private static long ResolveMultiplierCurrentUnitId(Form mainForm)
-        {
-            try
-            {
-                DataGridView grid = GetField<DataGridView>(mainForm, "dataGridViewDE");
-                if (grid != null)
-                {
-                    foreach (DataGridViewRow row in grid.Rows)
-                    {
-                        if (row.IsNewRow)
-                        {
-                            continue;
-                        }
-
-                        string text = GetRowValue(row, "总概算序号de", "总概算序号");
-                        long unitId;
-                        if (Int64.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out unitId) && unitId > 0)
-                        {
-                            return unitId;
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log("Resolve multiplier unit from grid failed: " + ex.Message);
-            }
-
-            try
-            {
-                TreeView tree = GetField<TreeView>(mainForm, "Tv_tree");
-                TreeNode node = tree != null ? tree.SelectedNode : GetField<TreeNode>(mainForm, "CurrNode");
-                if (node != null)
-                {
-                    string text = TryGetValue(node.Tag, "总概算序号");
-                    long unitId;
-                    if (Int64.TryParse(text ?? "", NumberStyles.Integer, CultureInfo.InvariantCulture, out unitId) && unitId > 0)
-                    {
-                        return unitId;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log("Resolve multiplier unit from tree failed: " + ex.Message);
-            }
-
-            return 0;
-        }
-
-        private static int ApplyFactorByChapterNo(SqlConnection conn, string chapterNo, FactorInfo factor, string target, long unitId)
-        {
-            EnsureOpen(conn);
-            DataTable table = new DataTable();
-            using (SqlCommand cmd = conn.CreateCommand())
-            {
-                cmd.CommandText = String.Equals(target, "quotaCode", StringComparison.OrdinalIgnoreCase)
-                    ? "select 定额序号, 定额编号 from 定额输入 where 总概算序号=@zgs and 条目序号 in (select 条目序号 from 章节表 where 条目编号 like @bh) order by 定额序号"
-                    : "select 定额序号, 工程数量输入 from 定额输入 where 总概算序号=@zgs and 条目序号 in (select 条目序号 from 章节表 where 条目编号 like @bh) order by 定额序号";
-                cmd.Parameters.AddWithValue("@zgs", unitId);
-                cmd.Parameters.AddWithValue("@bh", chapterNo + "%");
-                using (SqlDataAdapter adapter = new SqlDataAdapter(cmd))
-                {
-                    adapter.Fill(table);
-                }
-            }
-
-            return UpdateRows(conn, table, factor, target);
-        }
-
-        private static int ApplyFactorByQuotaKeys(SqlConnection conn, IEnumerable<QuotaKey> quotaKeys, FactorInfo factor, string target)
-        {
-            EnsureOpen(conn);
-            DataTable table = new DataTable();
-            foreach (QuotaKey key in quotaKeys.GroupBy(k => k.Key).Select(g => g.First()))
-            {
-                using (SqlCommand cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = String.Equals(target, "quotaCode", StringComparison.OrdinalIgnoreCase)
-                        ? "select 定额序号, 定额编号 from 定额输入 where 总概算序号=@zgs and 条目序号=@tm and 顺号=@xh"
-                        : "select 定额序号, 工程数量输入 from 定额输入 where 总概算序号=@zgs and 条目序号=@tm and 顺号=@xh";
-                    cmd.Parameters.AddWithValue("@zgs", key.TotalNo);
-                    cmd.Parameters.AddWithValue("@tm", key.ChapterSeq);
-                    cmd.Parameters.AddWithValue("@xh", key.OrderNo);
-                    using (SqlDataAdapter adapter = new SqlDataAdapter(cmd))
-                    {
-                        adapter.Fill(table);
-                    }
-                }
-            }
-
-            return UpdateRows(conn, table, factor, target);
-        }
-
-        private static int UpdateRows(SqlConnection conn, DataTable table, FactorInfo factor, string target)
-        {
-            int changed = 0;
-            using (SqlTransaction transaction = conn.BeginTransaction())
-            using (SqlCommand quantityUpdate = conn.CreateCommand())
-            using (SqlCommand codeUpdate = conn.CreateCommand())
-            {
-                quantityUpdate.Transaction = transaction;
-                quantityUpdate.CommandText = "update 定额输入 set 工程数量输入=@value, 工程数量=@quantity where 定额序号=@id";
-                quantityUpdate.Parameters.Add("@value", SqlDbType.NVarChar, 200);
-                quantityUpdate.Parameters.Add("@quantity", SqlDbType.Float);
-                quantityUpdate.Parameters.Add("@id", SqlDbType.BigInt);
-
-                codeUpdate.Transaction = transaction;
-                codeUpdate.CommandText = "update 定额输入 set 定额编号=@value where 定额序号=@id";
-                codeUpdate.Parameters.Add("@value", SqlDbType.NVarChar, 200);
-                codeUpdate.Parameters.Add("@id", SqlDbType.BigInt);
-
-                try
-                {
-                    foreach (DataRow row in table.Rows)
-                    {
-                        string oldValue = String.Equals(target, "quotaCode", StringComparison.OrdinalIgnoreCase)
-                            ? Convert.ToString(row["定额编号"]).Trim()
-                            : Convert.ToString(row["工程数量输入"]).Trim();
-                        if (String.IsNullOrEmpty(oldValue))
-                        {
-                            continue;
-                        }
-
-                        string expression = String.Equals(target, "quotaCode", StringComparison.OrdinalIgnoreCase)
-                            ? BuildExpression(oldValue, factor)
-                            : BuildExpression("(" + oldValue + ")", factor);
-                        long quotaSequence = Convert.ToInt64(row["定额序号"], CultureInfo.InvariantCulture);
-                        if (String.Equals(target, "quotaCode", StringComparison.OrdinalIgnoreCase))
-                        {
-                            codeUpdate.Parameters["@value"].Value = expression;
-                            codeUpdate.Parameters["@id"].Value = quotaSequence;
-                            changed += codeUpdate.ExecuteNonQuery();
-                        }
-                        else
-                        {
-                            quantityUpdate.Parameters["@value"].Value = expression;
-                            quantityUpdate.Parameters["@quantity"].Value = Convert.ToDouble(EvaluateDecimal(expression), CultureInfo.InvariantCulture);
-                            quantityUpdate.Parameters["@id"].Value = quotaSequence;
-                            changed += quantityUpdate.ExecuteNonQuery();
-                        }
-                    }
-
-                    transaction.Commit();
-                }
-                catch
-                {
-                    transaction.Rollback();
-                    throw;
-                }
-            }
-
-            return changed;
-        }
-
-        private static string BuildExpression(string oldValue, FactorInfo factor)
-        {
-            string cleanOld = oldValue.Trim();
-            return cleanOld + factor.Suffix;
         }
 
         private static List<QuotaKey> GetSelectedQuotaKeys(DataGridView grid)
