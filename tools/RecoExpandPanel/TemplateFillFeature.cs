@@ -88,6 +88,8 @@ namespace RecoNet
             public long NeighborSourceQuotaSeq; // 条目落位锚点(上方最近已匹配行的源定额)
             public int GroupOrder;         // 一量对多定额时组内序(第一行承载工程量名)
             public bool IsLibraryQuota;    // 手挂选中的是库内定额(项目无此编号)，写入走原生粘贴管线
+            public string SourceDb;        // 跨库复制来源库(学习库溯源到的历史项目库)；空=无
+            public long SourceDbQuotaSeq;  // 来源库中的定额序号(跨库整行复制用)
             public long ChosenItemSeq;     // 用户显式选择的放入条目(条目序号)；0=未选(沿用邻居锚点)
             public string ChosenItemNo;    // 对应条目编号(显示/粘贴导航用)
             public bool NeedExactNameConfirmation; // 精确同名已带出定额，但仍需用户确认
@@ -958,16 +960,29 @@ namespace RecoNet
                 {
                     try
                     {
+                        HashSet<string> targetColumns = LoadQuotaInputColumns(conn, transaction);
                         foreach (FillPreviewItem item in selected)
                         {
+                            long copyFrom = item.IsNameDriven ? item.ChosenQuotaSeq : item.SourceQuotaSeq;
+                            Dictionary<string, object> row;
                             if (item.IsLibraryQuota)
                             {
-                                libraryItems.Add(item);
-                                continue;
+                                // 学习库能溯源时优先跨库整行复制(同模板铺量复制路径,不依赖界面树);拉不到再回退原生粘贴。
+                                row = null;
+                                if (item.SourceDbQuotaSeq > 0 && item.ChosenItemSeq > 0 && !String.IsNullOrEmpty(item.SourceDb))
+                                {
+                                    row = LoadCrossDbQuotaRow(conn, item, targetColumns);
+                                }
+                                if (row == null)
+                                {
+                                    libraryItems.Add(item);
+                                    continue;
+                                }
                             }
-
-                            long copyFrom = item.IsNameDriven ? item.ChosenQuotaSeq : item.SourceQuotaSeq;
-                            Dictionary<string, object> row = LoadTemplateFullRow(conn, transaction, copyFrom);
+                            else
+                            {
+                                row = LoadTemplateFullRow(conn, transaction, copyFrom);
+                            }
                             if (row == null) { skipped++; continue; }
                             if (item.IsNameDriven && item.ChosenItemSeq > 0)
                             {

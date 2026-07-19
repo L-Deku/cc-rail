@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Data.SqlClient;
 using System.Globalization;
 using System.IO;
@@ -31,6 +32,11 @@ namespace RecoNet
             public string EntryCode; public string EntryName; public int ProjectCount;
         }
 
+        private sealed class SmartQuotaSource
+        {
+            public string Db; public long QuotaSeq;
+        }
+
         private sealed class SmartLearningSnapshot
         {
             public bool FromSql;
@@ -43,6 +49,9 @@ namespace RecoNet
                 new List<KeyValuePair<string, MatchTextFeatures>>();
             public Dictionary<string, List<SmartEntryStat>> EntryByQuota =
                 new Dictionary<string, List<SmartEntryStat>>(StringComparer.OrdinalIgnoreCase);
+            // 定额编号 -> 同办法历史项目里的来源行(跨库整行复制用,取最新)
+            public Dictionary<string, SmartQuotaSource> CrossSourceByQuota =
+                new Dictionary<string, SmartQuotaSource>(StringComparer.OrdinalIgnoreCase);
         }
 
         private static string SmartNameSegment(string signature)
@@ -189,6 +198,28 @@ namespace RecoNet
                                 }
                             }
                         }
+                        // 跨库复制溯源:同办法历史绑定的来源库与源定额行(ORDER BY id,后者覆盖=取最新)。
+                        using (SqlCommand cmd = conn.CreateCommand())
+                        {
+                            cmd.CommandTimeout = 15;
+                            cmd.CommandText =
+                                "SELECT target_code, project_id, extra FROM dbo.BindingLog " +
+                                "WHERE source = 'import:excel-links' AND project_id <> '' AND target_kind = 'quota' AND method = @m2 ORDER BY id";
+                            cmd.Parameters.AddWithValue("@m2", snapshot.Method);
+                            using (SqlDataReader reader = cmd.ExecuteReader())
+                            {
+                                while (reader.Read())
+                                {
+                                    string quotaCode = reader.GetString(0);
+                                    string sourceDb = reader.GetString(1);
+                                    string extra = reader.IsDBNull(2) ? "" : reader.GetString(2);
+                                    long quotaSeq;
+                                    if (!Int64.TryParse(GetFlat(ParseFlatJson(extra), "quota_sequence"), out quotaSeq) || quotaSeq <= 0) continue;
+                                    snapshot.CrossSourceByQuota[quotaCode] = new SmartQuotaSource { Db = sourceDb, QuotaSeq = quotaSeq };
+                                }
+                            }
+                        }
+
                         // 绑定流水里的条目证据:同定额在历史绑定中实际放过的条目,权重高于扫描共现。
                         using (SqlCommand cmd = conn.CreateCommand())
                         {
@@ -316,6 +347,68 @@ namespace RecoNet
             return true;
         }
 
+        // 目标项目 定额输入 的列集合(跨库复制时过滤源行里目标库没有的列)。
+        private static HashSet<string> LoadQuotaInputColumns(SqlConnection conn, SqlTransaction transaction)
+        {
+            HashSet<string> columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (SqlCommand cmd = conn.CreateCommand())
+            {
+                if (transaction != null) cmd.Transaction = transaction;
+                cmd.CommandText = "select top 0 * from 定额输入";
+                using (SqlDataReader reader = cmd.ExecuteReader())
+                {
+                    for (int i = 0; i < reader.FieldCount; i++) columns.Add(reader.GetName(i));
+                }
+            }
+            return columns;
+        }
+
+        // 跨库整行复制:按学习库溯源从来源项目库拉取源定额行(依次尝试本项目服务器与两台已知服务器)。
+        private static Dictionary<string, object> LoadCrossDbQuotaRow(SqlConnection targetConn, FillPreviewItem item, HashSet<string> targetColumns)
+        {
+            List<string> servers = new List<string>();
+            try { if (!String.IsNullOrEmpty(targetConn.DataSource)) servers.Add(targetConn.DataSource); } catch { }
+            if (!servers.Contains(LearningDbServer)) servers.Add(LearningDbServer);
+            if (!servers.Contains("192.168.2.13,1433")) servers.Add("192.168.2.13,1433");
+
+            foreach (string server in servers)
+            {
+                try
+                {
+                    string connectionString = "Server=" + server + ";Database=" + item.SourceDb + ";User ID=" + AgentDbUser + ";Password=" + AgentDbPassword + ";Connect Timeout=3";
+                    using (SqlConnection src = new SqlConnection(connectionString))
+                    {
+                        src.Open();
+                        using (SqlCommand cmd = src.CreateCommand())
+                        {
+                            cmd.CommandText = "select * from 定额输入 where 定额序号=@id";
+                            cmd.Parameters.AddWithValue("@id", item.SourceDbQuotaSeq);
+                            using (SqlDataAdapter adapter = new SqlDataAdapter(cmd))
+                            {
+                                DataTable table = new DataTable();
+                                adapter.Fill(table);
+                                if (table.Rows.Count == 0) return null;   // 库连上了但源行已删,不再试其他服务器
+                                Dictionary<string, object> values = new Dictionary<string, object>();
+                                foreach (DataColumn column in table.Columns)
+                                {
+                                    if (targetColumns.Contains(column.ColumnName))
+                                    {
+                                        values[column.ColumnName] = table.Rows[0][column];
+                                    }
+                                }
+                                return values;
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log("Cross-db quota row load failed on " + server + "/" + item.SourceDb + ": " + ex.Message);
+                }
+            }
+            return null;
+        }
+
         // 由一个映射命中构建预览项(每个定额目标一行,首行承载工程量名)。
         private static void AppendSmartItems(List<FillPreviewItem> items, TargetQtyRow row, SmartMapEntry entry,
             SmartLearningSnapshot snapshot, Dictionary<string, long> projectEntries,
@@ -355,9 +448,15 @@ namespace RecoNet
                 }
                 else
                 {
-                    item.IsLibraryQuota = true;                 // 项目内没有:原生粘贴(软件自算单价)
+                    item.IsLibraryQuota = true;                 // 项目内没有:优先跨库整行复制,无溯源再原生粘贴
                     item.ChosenItemNo = hasEntry ? entryCode : "";
                     if (hasEntry) item.ChosenItemSeq = entrySeq;
+                    SmartQuotaSource crossSource;
+                    if (snapshot.CrossSourceByQuota.TryGetValue(target.Code, out crossSource))
+                    {
+                        item.SourceDb = crossSource.Db;
+                        item.SourceDbQuotaSeq = crossSource.QuotaSeq;
+                    }
                 }
                 item.ItemNo = hasEntry ? entryCode : "";
                 if (!hasEntry)
