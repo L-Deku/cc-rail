@@ -14,6 +14,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
@@ -24,12 +25,25 @@ namespace RecoQuotaRecommend
         private static readonly object CacheLock = new object();
         private static readonly Dictionary<string, SearchIndexCacheEntry> StoreCache = new Dictionary<string, SearchIndexCacheEntry>(StringComparer.OrdinalIgnoreCase);
         private readonly List<IndexQuota> quotas = new List<IndexQuota>();
-        private readonly List<IndexMaterial> materials = new List<IndexMaterial>();
+        private readonly object materialSnapshotLock = new object();
+        private readonly object materialRefreshLock = new object();
+        private List<IndexMaterial> materials = new List<IndexMaterial>();
         private readonly Dictionary<string, List<IndexQuota>> quotaTokenIndex = new Dictionary<string, List<IndexQuota>>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, IndexQuota> quotasByCode = new Dictionary<string, IndexQuota>(StringComparer.OrdinalIgnoreCase);
+        private string cacheKey;
+        private string quotaIndexPath;
+        private string materialIndexPath;
+        private string materialDatabaseName;
+        private Task materialRefreshTask;
 
         public int QuotaCount { get { return quotas.Count; } }
-        public int MaterialCount { get { return materials.Count; } }
+        public int MaterialCount
+        {
+            get
+            {
+                lock (materialSnapshotLock) return materials.Count;
+            }
+        }
 
         private sealed class SearchIndexCacheEntry
         {
@@ -40,25 +54,49 @@ namespace RecoQuotaRecommend
         public static SearchIndexStore LoadOrBuild()
         {
             string dataDir = LearningStore.FindDataDir();
-            string quotaPath = Path.Combine(dataDir, "quota-index.jsonl");
-            string materialPath = Path.Combine(dataDir, "material-index.jsonl");
+            string materialDatabaseName = ResolveDatabaseName();
+            string quotaPath = ResolveQuotaIndexPath(dataDir, materialDatabaseName);
+            string legacyQuotaPath = Path.Combine(dataDir, "quota-index.jsonl");
+            string materialPath = ResolveMaterialIndexPath(dataDir, materialDatabaseName);
+            string legacyMaterialPath = Path.Combine(dataDir, "material-index.jsonl");
 
-            if (!File.Exists(quotaPath) || !File.Exists(materialPath))
+            string quotaLoadPath = "";
+            if (File.Exists(quotaPath) && QuotaFileMatchesDatabase(quotaPath, materialDatabaseName))
+            {
+                quotaLoadPath = quotaPath;
+            }
+            else if (File.Exists(legacyQuotaPath) && QuotaFileMatchesDatabase(legacyQuotaPath, materialDatabaseName))
+            {
+                quotaLoadPath = legacyQuotaPath;
+            }
+
+            if (String.IsNullOrWhiteSpace(quotaLoadPath))
             {
                 try
                 {
-                    ExportFromSql(dataDir, quotaPath, materialPath);
+                    ExportQuotaFromSql(dataDir, quotaPath, materialDatabaseName);
+                    quotaLoadPath = quotaPath;
                 }
                 catch (Exception ex)
                 {
-                    QuotaRecommendPanel.Log("Build search index failed: " + ex.Message);
+                    QuotaRecommendPanel.Log("Build quota search index failed: " + ex.Message);
                 }
             }
 
-            string cacheKey = Path.GetFullPath(dataDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string materialLoadPath = "";
+            if (File.Exists(materialPath) && MaterialFileMatchesDatabase(materialPath, materialDatabaseName))
+            {
+                materialLoadPath = materialPath;
+            }
+            else if (File.Exists(legacyMaterialPath) && MaterialFileMatchesDatabase(legacyMaterialPath, materialDatabaseName))
+            {
+                materialLoadPath = legacyMaterialPath;
+            }
+
+            string cacheKey = Path.GetFullPath(dataDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + "|" + materialDatabaseName;
             lock (CacheLock)
             {
-                string fingerprint = BuildFileFingerprint(quotaPath) + "|" + BuildFileFingerprint(materialPath);
+                string fingerprint = BuildFileFingerprint(quotaLoadPath) + "|" + BuildFileFingerprint(materialLoadPath);
                 SearchIndexCacheEntry cached;
                 if (StoreCache.TryGetValue(cacheKey, out cached) &&
                     String.Equals(cached.Fingerprint, fingerprint, StringComparison.Ordinal))
@@ -67,10 +105,14 @@ namespace RecoQuotaRecommend
                 }
 
                 SearchIndexStore store = new SearchIndexStore();
-                store.LoadFiles(quotaPath, materialPath);
+                store.cacheKey = cacheKey;
+                store.quotaIndexPath = quotaLoadPath;
+                store.materialIndexPath = materialPath;
+                store.materialDatabaseName = materialDatabaseName;
+                store.LoadFiles(quotaLoadPath, materialLoadPath);
                 StoreCache[cacheKey] = new SearchIndexCacheEntry
                 {
-                    Fingerprint = BuildFileFingerprint(quotaPath) + "|" + BuildFileFingerprint(materialPath),
+                    Fingerprint = BuildFileFingerprint(quotaLoadPath) + "|" + BuildFileFingerprint(materialLoadPath),
                     Store = store
                 };
                 return store;
@@ -88,14 +130,94 @@ namespace RecoQuotaRecommend
             return info.Length.ToString(CultureInfo.InvariantCulture) + ":" + info.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture);
         }
 
+        internal static string ResolveMaterialIndexPath(string dataDir, string databaseName)
+        {
+            string suffix = String.Equals(databaseName, "RecoData2024", StringComparison.OrdinalIgnoreCase) ? "2024" : "2020";
+            return Path.Combine(dataDir ?? "", "material-index-" + suffix + ".jsonl");
+        }
+
+        internal static string ResolveQuotaIndexPath(string dataDir, string databaseName)
+        {
+            string suffix = String.Equals(databaseName, "RecoData2024", StringComparison.OrdinalIgnoreCase) ? "2024" : "2020";
+            return Path.Combine(dataDir ?? "", "quota-index-" + suffix + ".jsonl");
+        }
+
+        private static bool QuotaFileMatchesDatabase(string path, string databaseName)
+        {
+            try
+            {
+                foreach (string line in File.ReadLines(path, Encoding.UTF8))
+                {
+                    if (String.IsNullOrWhiteSpace(line)) continue;
+                    Dictionary<string, string> values = LearningStore.ParseFlatJson(line);
+                    string sourceDatabase = LearningStore.Get(values, "source_database");
+                    if (!String.IsNullOrWhiteSpace(sourceDatabase))
+                    {
+                        return String.Equals(sourceDatabase, databaseName, StringComparison.OrdinalIgnoreCase);
+                    }
+
+                    string bookCode = LearningStore.Get(values, "book_code");
+                    string specialty = LearningStore.Get(values, "specialty");
+                    bool is2024 = (bookCode ?? "").IndexOf("2024", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        (specialty ?? "").IndexOf("2024", StringComparison.OrdinalIgnoreCase) >= 0;
+                    return String.Equals(databaseName, "RecoData2024", StringComparison.OrdinalIgnoreCase) ? is2024 : !is2024;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private static bool MaterialFileMatchesDatabase(string path, string databaseName)
+        {
+            try
+            {
+                foreach (string line in File.ReadLines(path, Encoding.UTF8))
+                {
+                    if (String.IsNullOrWhiteSpace(line)) continue;
+                    Dictionary<string, string> values = LearningStore.ParseFlatJson(line);
+                    string sourceDatabase = LearningStore.Get(values, "source_database");
+                    if (!String.IsNullOrWhiteSpace(sourceDatabase))
+                    {
+                        return String.Equals(sourceDatabase, databaseName, StringComparison.OrdinalIgnoreCase);
+                    }
+
+                    string documentNo = LearningStore.Get(values, "doc_no");
+                    if (String.IsNullOrWhiteSpace(documentNo) || String.Equals(documentNo.Trim(), "\u8865\u5145\u6750\u6599", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    bool is2024 = documentNo.IndexOf("2024", StringComparison.OrdinalIgnoreCase) >= 0;
+                    return String.Equals(databaseName, "RecoData2024", StringComparison.OrdinalIgnoreCase) ? is2024 : !is2024;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
         public List<RecommendationRow> SearchQuotaCandidates(ExcelQuantityItem item, string categoryFilter, EntryScope scope, int limit)
+        {
+            return SearchQuotaCandidatesCore(item, categoryFilter, scope, Math.Max(1, limit));
+        }
+
+        public List<RecommendationRow> SearchAllQuotaCandidates(ExcelQuantityItem item, string categoryFilter, EntryScope scope)
+        {
+            return SearchQuotaCandidatesCore(item, categoryFilter, scope, null);
+        }
+
+        private List<RecommendationRow> SearchQuotaCandidatesCore(ExcelQuantityItem item, string categoryFilter, EntryScope scope, int? limit)
         {
             if (item == null)
             {
                 return new List<RecommendationRow>();
             }
 
-            int max = Math.Max(1, limit);
             string chinesePhrase = ExtractChinesePhrase(item.Name);
             string majorChapter = GetMajorChapterCode(scope);
             List<ScoredQuota> scopedHits = new List<ScoredQuota>();
@@ -130,15 +252,59 @@ namespace RecoQuotaRecommend
                 .Select(q => CreateScoredQuota(q.Quota, q.Score, scope, majorChapter))
                 .Concat(scopedHits);
 
-            return allHits
+            IEnumerable<ScoredQuota> ordered = allHits
                 .GroupBy(q => q.Quota.QuotaCode ?? "", StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.OrderBy(x => x.MajorRank).ThenBy(x => x.PoolRank).ThenByDescending(x => x.Score).ThenBy(x => x.Quota.SortOrder).First())
                 .OrderBy(q => q.MajorRank)
                 .ThenBy(q => q.PoolRank)
                 .ThenByDescending(q => q.Score)
-                .ThenBy(q => q.Quota.SortOrder)
-                .Take(max)
+                .ThenBy(q => q.Quota.SortOrder);
+
+            if (limit.HasValue)
+            {
+                ordered = ordered.Take(limit.Value);
+            }
+
+            return ordered
                 .Select(q => q.Quota.ToRecommendation(item, q.Score))
+                .ToList();
+        }
+
+        public List<RecommendationRow> SearchMaterialCandidates(ExcelQuantityItem item)
+        {
+            if (item == null)
+            {
+                return new List<RecommendationRow>();
+            }
+
+            string query = TextMatcher.Normalize(item.Name).Replace(" ", "");
+            if (String.IsNullOrWhiteSpace(query))
+            {
+                return new List<RecommendationRow>();
+            }
+
+            List<IndexMaterial> snapshot;
+            lock (materialSnapshotLock) snapshot = materials;
+
+            return snapshot
+                .Select(material => new ScoredMaterial
+                {
+                    Material = material,
+                    NormalizedName = TextMatcher.Normalize(material.MaterialName).Replace(" ", "")
+                })
+                .Where(candidate => candidate.NormalizedName.Contains(query))
+                .Select(candidate =>
+                {
+                    candidate.MatchIndex = candidate.NormalizedName.IndexOf(query, StringComparison.Ordinal);
+                    candidate.MatchRank = String.Equals(candidate.NormalizedName, query, StringComparison.Ordinal) ? 0 :
+                        (candidate.MatchIndex == 0 ? 1 : 2);
+                    return candidate;
+                })
+                .OrderBy(candidate => candidate.MatchRank)
+                .ThenBy(candidate => candidate.MatchIndex)
+                .ThenBy(candidate => candidate.NormalizedName.Length)
+                .ThenBy(candidate => candidate.Material.MaterialCode ?? "", StringComparer.OrdinalIgnoreCase)
+                .Select(candidate => candidate.Material.ToRecommendation(item, 300 - candidate.MatchRank * 50 - candidate.MatchIndex))
                 .ToList();
         }
 
@@ -356,27 +522,100 @@ namespace RecoQuotaRecommend
 
             if (File.Exists(materialPath))
             {
-                foreach (string line in File.ReadLines(materialPath, Encoding.UTF8))
+                lock (materialSnapshotLock)
                 {
-                    if (String.IsNullOrWhiteSpace(line))
-                    {
-                        continue;
-                    }
+                    materials = LoadMaterialFile(materialPath);
+                }
+            }
+        }
 
-                    Dictionary<string, string> values = LearningStore.ParseFlatJson(line);
-                    IndexMaterial material = new IndexMaterial();
-                    material.MaterialCode = LearningStore.Get(values, "material_code");
-                    material.MaterialName = LearningStore.Get(values, "material_name");
-                    material.MaterialUnit = LearningStore.Get(values, "material_unit");
-                    material.DocNo = LearningStore.Get(values, "doc_no");
-                    material.IsMainMaterial = LearningStore.Get(values, "is_main_material") == "1";
-                    material.TransportCategory = LearningStore.Get(values, "transport_category");
-                    material.SearchText = LearningStore.Get(values, "search_text");
-                    if (!String.IsNullOrWhiteSpace(material.MaterialCode))
+        private static List<IndexMaterial> LoadMaterialFile(string materialPath)
+        {
+            List<IndexMaterial> loaded = new List<IndexMaterial>();
+            if (!File.Exists(materialPath)) return loaded;
+
+            foreach (string line in File.ReadLines(materialPath, Encoding.UTF8))
+            {
+                if (String.IsNullOrWhiteSpace(line)) continue;
+
+                Dictionary<string, string> values = LearningStore.ParseFlatJson(line);
+                IndexMaterial material = new IndexMaterial();
+                material.MaterialCode = LearningStore.Get(values, "material_code");
+                material.MaterialName = LearningStore.Get(values, "material_name");
+                material.MaterialUnit = LearningStore.Get(values, "material_unit");
+                material.DocNo = LearningStore.Get(values, "doc_no");
+                material.IsMainMaterial = LearningStore.Get(values, "is_main_material") == "1";
+                material.TransportCategory = LearningStore.Get(values, "transport_category");
+                double basePrice;
+                material.BasePrice = Double.TryParse(
+                    LearningStore.Get(values, "base_price"),
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out basePrice) ? basePrice : 0d;
+                double currentPrice;
+                material.CurrentPrice = Double.TryParse(
+                    LearningStore.Get(values, "current_price"),
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out currentPrice) ? currentPrice : 0d;
+                material.SearchText = LearningStore.Get(values, "search_text");
+                if (!String.IsNullOrWhiteSpace(material.MaterialCode)) loaded.Add(material);
+            }
+
+            return loaded;
+        }
+
+        public Task RefreshMaterialsFromSourceAsync()
+        {
+            lock (materialRefreshLock)
+            {
+                if (materialRefreshTask == null)
+                {
+                    materialRefreshTask = Task.Factory.StartNew(
+                        RefreshMaterialsFromSource,
+                        CancellationToken.None,
+                        TaskCreationOptions.None,
+                        TaskScheduler.Default);
+                }
+                return materialRefreshTask;
+            }
+        }
+
+        private void RefreshMaterialsFromSource()
+        {
+            try
+            {
+                string server = ReadServer();
+                if (String.IsNullOrWhiteSpace(server)) server = "127.0.0.1";
+                string databaseName = String.IsNullOrWhiteSpace(materialDatabaseName) ? ResolveDatabaseName() : materialDatabaseName;
+                string connectionString = "Data Source=" + server + ",1433;Initial Catalog=" + databaseName + ";User ID=reco;Password=" + BuildSqlPassword() + ";Connect Timeout=8;Encrypt=False;TrustServerCertificate=True";
+                List<IndexMaterial> refreshed;
+                using (System.Data.SqlClient.SqlConnection connection = new System.Data.SqlClient.SqlConnection(connectionString))
+                {
+                    connection.Open();
+                    refreshed = ReadMaterials(connection);
+                }
+
+                if (refreshed.Count == 0)
+                {
+                    throw new InvalidOperationException("Source material library returned no rows.");
+                }
+
+                WriteMaterialIndexFile(refreshed, materialIndexPath, databaseName);
+                lock (materialSnapshotLock) materials = refreshed;
+                lock (CacheLock)
+                {
+                    SearchIndexCacheEntry cached;
+                    if (!String.IsNullOrWhiteSpace(cacheKey) && StoreCache.TryGetValue(cacheKey, out cached) && Object.ReferenceEquals(cached.Store, this))
                     {
-                        materials.Add(material);
+                        cached.Fingerprint = BuildFileFingerprint(quotaIndexPath) + "|" + BuildFileFingerprint(materialIndexPath);
                     }
                 }
+                QuotaRecommendPanel.Log("Source material library refreshed: database=" + databaseName + " rows=" + refreshed.Count.ToString(CultureInfo.InvariantCulture));
+            }
+            catch (Exception ex)
+            {
+                QuotaRecommendPanel.Log("Source material library refresh failed; cached materials retained: " + ex.Message);
             }
         }
 
@@ -668,7 +907,7 @@ namespace RecoQuotaRecommend
             return score;
         }
 
-        private static void ExportFromSql(string dataDir, string quotaPath, string materialPath)
+        private static void ExportQuotaFromSql(string dataDir, string quotaPath, string databaseName)
         {
             Directory.CreateDirectory(dataDir);
             string server = ReadServer();
@@ -677,14 +916,12 @@ namespace RecoQuotaRecommend
                 server = "127.0.0.1";
             }
 
-            string databaseName = ResolveDatabaseName();
-            QuotaRecommendPanel.Log("Build search index from database: " + databaseName);
+            QuotaRecommendPanel.Log("Build quota search index from database: " + databaseName);
             string connectionString = "Data Source=" + server + ",1433;Initial Catalog=" + databaseName + ";User ID=reco;Password=" + BuildSqlPassword() + ";Connect Timeout=8;Encrypt=False;TrustServerCertificate=True";
             using (System.Data.SqlClient.SqlConnection connection = new System.Data.SqlClient.SqlConnection(connectionString))
             {
                 connection.Open();
-                WriteQuotaIndex(connection, quotaPath);
-                WriteMaterialIndex(connection, materialPath);
+                WriteQuotaIndex(connection, quotaPath, databaseName);
             }
         }
 
@@ -727,22 +964,28 @@ namespace RecoQuotaRecommend
             try
             {
                 string baseDir = Path.GetDirectoryName(typeof(QuotaRecommendPanel).Assembly.Location) ?? "";
-                string processPath = "";
+                string processIdentity = "";
                 try
                 {
-                    processPath = Process.GetCurrentProcess().MainModule.FileName ?? "";
+                    Process process = Process.GetCurrentProcess();
+                    processIdentity = process.ProcessName ?? "";
+                    try
+                    {
+                        processIdentity += " " + (process.MainModule.FileName ?? "");
+                    }
+                    catch
+                    {
+                    }
                 }
                 catch
                 {
                 }
 
-                string probe = (baseDir + " " + processPath).ToLowerInvariant();
-                if (probe.Contains("2024") ||
-                    File.Exists(Path.Combine(baseDir, "ReJJGSNet2024.exe")) ||
-                    File.Exists(Path.Combine(baseDir, "ReJJQDNet2024.exe")))
-                {
-                    return "RecoData2024";
-                }
+                return ResolveDatabaseNameForHost(
+                    baseDir,
+                    processIdentity,
+                    File.Exists(Path.Combine(baseDir, "RejjNet2020.exe")),
+                    File.Exists(Path.Combine(baseDir, "ReJJGSNet2024.exe")) || File.Exists(Path.Combine(baseDir, "ReJJQDNet2024.exe")));
             }
             catch
             {
@@ -751,7 +994,19 @@ namespace RecoQuotaRecommend
             return "RecoData2020";
         }
 
-        private static void WriteQuotaIndex(System.Data.SqlClient.SqlConnection connection, string path)
+        internal static string ResolveDatabaseNameForHost(string baseDir, string processIdentity, bool has2020Executable, bool has2024Executable)
+        {
+            string processProbe = (processIdentity ?? "").ToLowerInvariant();
+            if (processProbe.Contains("rejjnet2020")) return "RecoData2020";
+            if (processProbe.Contains("rejjgsnet2024") || processProbe.Contains("rejjqdnet2024")) return "RecoData2024";
+            if (has2020Executable && !has2024Executable) return "RecoData2020";
+            if (has2024Executable && !has2020Executable) return "RecoData2024";
+
+            string directoryProbe = (baseDir ?? "").ToLowerInvariant();
+            return directoryProbe.Contains("2024") ? "RecoData2024" : "RecoData2020";
+        }
+
+        private static void WriteQuotaIndex(System.Data.SqlClient.SqlConnection connection, string path, string databaseName)
         {
             string temp = path + ".tmp";
             using (StreamWriter writer = new StreamWriter(temp, false, Encoding.UTF8))
@@ -768,6 +1023,7 @@ namespace RecoQuotaRecommend
                     {
                         Dictionary<string, string> row = new Dictionary<string, string>();
                         row["quota_code"] = ReadString(reader, 0);
+                        row["source_database"] = databaseName ?? "";
                         row["quota_name"] = ReadString(reader, 1);
                         row["quota_unit"] = ReadString(reader, 2);
                         row["book_code"] = ReadString(reader, 3);
@@ -788,10 +1044,9 @@ namespace RecoQuotaRecommend
             ReplaceFile(temp, path);
         }
 
-        private static void WriteMaterialIndex(System.Data.SqlClient.SqlConnection connection, string path)
+        private static List<IndexMaterial> ReadMaterials(System.Data.SqlClient.SqlConnection connection)
         {
-            string temp = path + ".tmp";
-            using (StreamWriter writer = new StreamWriter(temp, false, Encoding.UTF8))
+            List<IndexMaterial> result = new List<IndexMaterial>();
             using (System.Data.SqlClient.SqlCommand command = connection.CreateCommand())
             {
                 command.CommandTimeout = 60;
@@ -802,18 +1057,50 @@ namespace RecoQuotaRecommend
                 {
                     while (reader.Read())
                     {
-                        Dictionary<string, string> row = new Dictionary<string, string>();
-                        row["material_code"] = Convert.ToString(reader.GetValue(0), CultureInfo.InvariantCulture);
-                        row["material_name"] = ReadString(reader, 1);
-                        row["material_unit"] = ReadString(reader, 2);
-                        row["doc_no"] = ReadString(reader, 3);
-                        row["is_main_material"] = ReadString(reader, 4) == "1" ? "1" : "0";
-                        row["transport_category"] = ReadString(reader, 5);
-                        row["base_price"] = Convert.ToString(reader.GetDouble(6), CultureInfo.InvariantCulture);
-                        row["current_price"] = Convert.ToString(reader.GetDouble(7), CultureInfo.InvariantCulture);
-                        row["search_text"] = TextMatcher.Normalize(String.Join(" ", new string[] { row["material_code"], row["material_name"], row["material_unit"], row["doc_no"], row["transport_category"] }));
-                        writer.WriteLine(LearningStore.ToJson(row));
+                        IndexMaterial material = new IndexMaterial();
+                        material.MaterialCode = Convert.ToString(reader.GetValue(0), CultureInfo.InvariantCulture);
+                        material.MaterialName = ReadString(reader, 1);
+                        material.MaterialUnit = ReadString(reader, 2);
+                        material.DocNo = ReadString(reader, 3);
+                        material.IsMainMaterial = ReadString(reader, 4) == "1";
+                        material.TransportCategory = ReadString(reader, 5);
+                        material.BasePrice = reader.GetDouble(6);
+                        material.CurrentPrice = reader.GetDouble(7);
+                        material.SearchText = TextMatcher.Normalize(String.Join(" ", new string[]
+                        {
+                            material.MaterialCode,
+                            material.MaterialName,
+                            material.MaterialUnit,
+                            material.DocNo,
+                            material.TransportCategory
+                        }));
+                        if (!String.IsNullOrWhiteSpace(material.MaterialCode)) result.Add(material);
                     }
+                }
+            }
+            return result;
+        }
+
+        private static void WriteMaterialIndexFile(IEnumerable<IndexMaterial> materialsToWrite, string path, string databaseName)
+        {
+            if (String.IsNullOrWhiteSpace(path)) return;
+            string temp = path + ".tmp";
+            using (StreamWriter writer = new StreamWriter(temp, false, Encoding.UTF8))
+            {
+                foreach (IndexMaterial material in materialsToWrite ?? new List<IndexMaterial>())
+                {
+                    Dictionary<string, string> row = new Dictionary<string, string>();
+                    row["material_code"] = material.MaterialCode ?? "";
+                    row["source_database"] = databaseName ?? "";
+                    row["material_name"] = material.MaterialName ?? "";
+                    row["material_unit"] = material.MaterialUnit ?? "";
+                    row["doc_no"] = material.DocNo ?? "";
+                    row["is_main_material"] = material.IsMainMaterial ? "1" : "0";
+                    row["transport_category"] = material.TransportCategory ?? "";
+                    row["base_price"] = Convert.ToString(material.BasePrice, CultureInfo.InvariantCulture);
+                    row["current_price"] = Convert.ToString(material.CurrentPrice, CultureInfo.InvariantCulture);
+                    row["search_text"] = material.SearchText ?? "";
+                    writer.WriteLine(LearningStore.ToJson(row));
                 }
             }
 
@@ -846,7 +1133,8 @@ namespace RecoQuotaRecommend
         {
             if (File.Exists(path))
             {
-                File.Delete(path);
+                File.Replace(temp, path, null);
+                return;
             }
             File.Move(temp, path);
         }
@@ -857,6 +1145,14 @@ namespace RecoQuotaRecommend
             public int Score;
             public int MajorRank;
             public int PoolRank;
+        }
+
+        private sealed class ScoredMaterial
+        {
+            public IndexMaterial Material;
+            public string NormalizedName;
+            public int MatchRank;
+            public int MatchIndex;
         }
 
     }
@@ -904,6 +1200,8 @@ namespace RecoQuotaRecommend
         public string DocNo;
         public bool IsMainMaterial;
         public string TransportCategory;
+        public double BasePrice;
+        public double CurrentPrice;
         public string SearchText;
 
         public RecommendationRow ToRecommendation(ExcelQuantityItem item, int score)
@@ -913,6 +1211,9 @@ namespace RecoQuotaRecommend
             row.QuotaCode = MaterialCode;
             row.QuotaName = MaterialName;
             row.QuotaUnit = MaterialUnit;
+            row.BookCode = DocNo;
+            row.BasePrice = BasePrice;
+            row.WorkContent = DocNo;
             row.ConvertedValueText = RecommendDialog.ConvertQuantityForIndex(item.ValueText, item.Unit, MaterialUnit);
             row.Score = score;
             row.Reason = IsMainMaterial ? "\u4e3b\u8981\u6750\u6599\u7d22\u5f15\u5173\u952e\u8bcd\u5339\u914d" : "\u6750\u6599\u7d22\u5f15\u5173\u952e\u8bcd\u5339\u914d";

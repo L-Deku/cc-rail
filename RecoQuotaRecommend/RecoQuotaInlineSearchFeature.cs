@@ -6,6 +6,7 @@ using System.Drawing;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace RecoQuotaRecommend
@@ -14,12 +15,22 @@ namespace RecoQuotaRecommend
     {
         private const int SearchDelayMs = 200;
         private const int VisibleRows = 8;
-        private const int MaxCandidates = 100;
         private const int PreferredPopupWidth = 820;
         private const int MinimumPopupWidth = 420;
         private const int ResizeGripSize = 6;
         private const string AllCategories = "\u5168\u90e8";
         private static readonly Dictionary<Form, Runtime> Runtimes = new Dictionary<Form, Runtime>();
+
+        private sealed class CandidateSearchResult
+        {
+            public int Version;
+            public string Query;
+            public bool MaterialMode;
+            public List<RecommendationRow> Rows;
+            public DataTable Table;
+            public long SearchMilliseconds;
+            public string Error;
+        }
 
         public static void Install(Form mainForm)
         {
@@ -108,11 +119,14 @@ namespace RecoQuotaRecommend
             private readonly SearchIndexStore searchIndex;
             private readonly ChapterLibraryStore chapterLibrary;
             private readonly Dictionary<string, string> methodNoCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            private List<RecommendationRow> candidateRows = new List<RecommendationRow>();
+            private DataTable candidateTable;
             private Size rememberedPopupSize = Size.Empty;
             private bool settingPopupSize;
             private TextBox editor;
             private int rowIndex = -1;
             private int colIndex = -1;
+            private int searchVersion;
             private bool applying;
             private bool disposed;
 
@@ -128,6 +142,7 @@ namespace RecoQuotaRecommend
                 popup.SizeChanged += PopupSizeChanged;
                 popup.Deactivate += PopupDeactivate;
                 searchIndex = SearchIndexStore.LoadOrBuild();
+                searchIndex.RefreshMaterialsFromSourceAsync();
                 chapterLibrary = ChapterLibraryStore.Load();
             }
 
@@ -179,6 +194,7 @@ namespace RecoQuotaRecommend
             {
                 DataGridViewTextBoxColumn column = new DataGridViewTextBoxColumn();
                 column.Name = name;
+                column.DataPropertyName = name;
                 column.HeaderText = header;
                 column.SortMode = DataGridViewColumnSortMode.NotSortable;
                 if (fillWeight > 0f)
@@ -335,6 +351,7 @@ namespace RecoQuotaRecommend
 
             private void ScheduleSearch()
             {
+                unchecked { searchVersion++; }
                 timer.Stop();
                 timer.Start();
             }
@@ -357,25 +374,135 @@ namespace RecoQuotaRecommend
                     HidePopup();
                     return;
                 }
-                string query = NormalizeText(editor.Text);
-                if (!LooksSearchable(query))
+                string query;
+                bool materialMode;
+                if (!TryParseInlineQuery(editor.Text, out query, out materialMode))
                 {
                     HidePopup();
                     return;
                 }
                 try
                 {
+                    int version = searchVersion;
                     ExcelQuantityItem item = BuildItem(query, rowIndex);
-                    EntryScope scope = ResolveCurrentScope();
-                    List<RecommendationRow> rows = searchIndex.SearchQuotaCandidates(item, AllCategories, scope, MaxCandidates);
-                    if (rows.Count == 0) { HidePopup(); return; }
-                    ShowRows(rows);
+                    EntryScope scope = materialMode ? null : ResolveCurrentScope();
+                    Task<CandidateSearchResult> task = Task.Factory.StartNew(
+                        delegate { return BuildSearchResult(version, query, materialMode, item, scope); },
+                        System.Threading.CancellationToken.None,
+                        TaskCreationOptions.None,
+                        TaskScheduler.Default);
+                    task.ContinueWith(
+                        delegate(Task<CandidateSearchResult> completed)
+                        {
+                            CandidateSearchResult result;
+                            try { result = completed.Result; }
+                            catch (Exception ex)
+                            {
+                                result = new CandidateSearchResult
+                                {
+                                    Version = version,
+                                    Query = query,
+                                    MaterialMode = materialMode,
+                                    Error = ex.GetBaseException().Message
+                                };
+                            }
+                            try
+                            {
+                                mainForm.BeginInvoke((MethodInvoker)delegate { CompleteSearch(result); });
+                            }
+                            catch
+                            {
+                                if (result.Table != null) result.Table.Dispose();
+                            }
+                        },
+                        TaskScheduler.Default);
                 }
                 catch (Exception ex)
                 {
                     HidePopup();
-                    QuotaRecommendPanel.Log("Inline quota search failed: " + ex.Message);
+                    QuotaRecommendPanel.Log("Inline candidate search failed: " + ex.Message);
                 }
+            }
+
+            private CandidateSearchResult BuildSearchResult(
+                int version,
+                string query,
+                bool materialMode,
+                ExcelQuantityItem item,
+                EntryScope scope)
+            {
+                Stopwatch stopwatch = Stopwatch.StartNew();
+                try
+                {
+                    List<RecommendationRow> rows = materialMode
+                        ? searchIndex.SearchMaterialCandidates(item)
+                        : searchIndex.SearchAllQuotaCandidates(item, AllCategories, scope);
+                    return new CandidateSearchResult
+                    {
+                        Version = version,
+                        Query = query,
+                        MaterialMode = materialMode,
+                        Rows = rows,
+                        Table = BuildCandidateTable(rows),
+                        SearchMilliseconds = stopwatch.ElapsedMilliseconds
+                    };
+                }
+                catch (Exception ex)
+                {
+                    return new CandidateSearchResult
+                    {
+                        Version = version,
+                        Query = query,
+                        MaterialMode = materialMode,
+                        Error = ex.Message,
+                        SearchMilliseconds = stopwatch.ElapsedMilliseconds
+                    };
+                }
+            }
+
+            private void CompleteSearch(CandidateSearchResult result)
+            {
+                if (result == null) return;
+                if (disposed || result.Version != searchVersion)
+                {
+                    if (result.Table != null) result.Table.Dispose();
+                    return;
+                }
+                if (editor == null || grid.CurrentCell == null || rowIndex < 0 || rowIndex >= grid.Rows.Count ||
+                    !IsNameColumn(colIndex) || !IsBlankRow(rowIndex))
+                {
+                    if (result.Table != null) result.Table.Dispose();
+                    return;
+                }
+
+                string currentQuery;
+                bool currentMaterialMode;
+                if (!TryParseInlineQuery(editor.Text, out currentQuery, out currentMaterialMode) ||
+                    !String.Equals(currentQuery, result.Query, StringComparison.Ordinal) ||
+                    currentMaterialMode != result.MaterialMode)
+                {
+                    if (result.Table != null) result.Table.Dispose();
+                    return;
+                }
+
+                if (!String.IsNullOrWhiteSpace(result.Error))
+                {
+                    HidePopup();
+                    QuotaRecommendPanel.Log("Inline candidate search failed: " + result.Error);
+                    return;
+                }
+
+                if (result.Rows == null || result.Rows.Count == 0)
+                {
+                    if (result.Table != null) result.Table.Dispose();
+                    HidePopup();
+                    return;
+                }
+
+                ShowRows(result);
+                QuotaRecommendPanel.Log("Inline candidate search completed: mode=" + (result.MaterialMode ? "material" : "quota")
+                    + " rows=" + result.Rows.Count.ToString(CultureInfo.InvariantCulture)
+                    + " searchMs=" + result.SearchMilliseconds.ToString(CultureInfo.InvariantCulture));
             }
 
             private ExcelQuantityItem BuildItem(string query, int sourceRow)
@@ -392,22 +519,18 @@ namespace RecoQuotaRecommend
                 return item;
             }
 
-            private void ShowRows(List<RecommendationRow> rows)
+            private void ShowRows(CandidateSearchResult result)
             {
                 candidateGrid.SuspendLayout();
                 try
                 {
-                    candidateGrid.Rows.Clear();
-                    foreach (RecommendationRow row in rows)
-                    {
-                        int index = candidateGrid.Rows.Add(
-                            row.QuotaCode ?? "",
-                            row.QuotaName ?? "",
-                            row.QuotaUnit ?? "",
-                            row.BasePrice,
-                            row.WorkContent ?? "");
-                        candidateGrid.Rows[index].Tag = row;
-                    }
+                    DataTable previousTable = candidateTable;
+                    candidateRows = result.Rows;
+                    candidateTable = result.Table;
+                    candidateGrid.DataSource = candidateTable;
+                    popup.Text = result.MaterialMode ? "\u5019\u9009\u6750\u6599" : "\u5019\u9009\u5b9a\u989d";
+                    candidateGrid.Columns["WorkContent"].HeaderText = result.MaterialMode ? "\u6587\u53f7" : "\u5185\u5bb9";
+                    if (previousTable != null) previousTable.Dispose();
                     if (candidateGrid.Rows.Count > 0)
                     {
                         candidateGrid.ClearSelection();
@@ -500,7 +623,15 @@ namespace RecoQuotaRecommend
                 if (candidateGrid.CurrentCell == null) return;
                 int selectedIndex = candidateGrid.CurrentCell.RowIndex;
                 if (selectedIndex < 0 || selectedIndex >= candidateGrid.Rows.Count) return;
-                RecommendationRow row = candidateGrid.Rows[selectedIndex].Tag as RecommendationRow;
+                int candidateIndex = selectedIndex;
+                DataRowView rowView = candidateGrid.Rows[selectedIndex].DataBoundItem as DataRowView;
+                if (rowView != null && rowView.DataView.Table.Columns.Contains("CandidateIndex"))
+                {
+                    candidateIndex = Convert.ToInt32(rowView["CandidateIndex"], CultureInfo.InvariantCulture);
+                }
+                RecommendationRow row = candidateIndex >= 0 && candidateIndex < candidateRows.Count
+                    ? candidateRows[candidateIndex]
+                    : null;
                 if (row == null || String.IsNullOrWhiteSpace(row.QuotaCode)) return;
                 try { mainForm.BeginInvoke((MethodInvoker)delegate { ApplyRecommendation(row); }); }
                 catch { ApplyRecommendation(row); }
@@ -763,9 +894,16 @@ namespace RecoQuotaRecommend
 
             private void HidePopup()
             {
+                unchecked { searchVersion++; }
                 timer.Stop();
                 if (popup.Visible) popup.Hide();
-                candidateGrid.Rows.Clear();
+                candidateGrid.DataSource = null;
+                candidateRows = new List<RecommendationRow>();
+                if (candidateTable != null)
+                {
+                    candidateTable.Dispose();
+                    candidateTable = null;
+                }
             }
 
             private void DetachEditor()
@@ -916,6 +1054,50 @@ namespace RecoQuotaRecommend
                 }
                 return null;
             }
+        }
+
+        private static DataTable BuildCandidateTable(List<RecommendationRow> rows)
+        {
+            DataTable table = new DataTable("InlineCandidates");
+            table.Locale = CultureInfo.InvariantCulture;
+            table.Columns.Add("CandidateIndex", typeof(int));
+            table.Columns.Add("QuotaCode", typeof(string));
+            table.Columns.Add("QuotaName", typeof(string));
+            table.Columns.Add("QuotaUnit", typeof(string));
+            table.Columns.Add("BasePrice", typeof(double));
+            table.Columns.Add("WorkContent", typeof(string));
+            table.BeginLoadData();
+            try
+            {
+                int index = 0;
+                foreach (RecommendationRow row in rows ?? new List<RecommendationRow>())
+                {
+                    table.Rows.Add(
+                        index++,
+                        row == null ? "" : row.QuotaCode ?? "",
+                        row == null ? "" : row.QuotaName ?? "",
+                        row == null ? "" : row.QuotaUnit ?? "",
+                        row == null ? 0d : row.BasePrice,
+                        row == null ? "" : row.WorkContent ?? "");
+                }
+            }
+            finally
+            {
+                table.EndLoadData();
+            }
+            return table;
+        }
+
+        internal static bool TryParseInlineQuery(string text, out string query, out bool materialMode)
+        {
+            string value = NormalizeText(text);
+            materialMode = value.EndsWith("/", StringComparison.Ordinal);
+            if (materialMode)
+            {
+                value = NormalizeText(value.Substring(0, value.Length - 1));
+            }
+            query = value;
+            return LooksSearchable(query);
         }
 
         private static bool LooksSearchable(string text)
