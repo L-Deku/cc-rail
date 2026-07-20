@@ -140,13 +140,8 @@ Get-ChildItem -LiteralPath $root -Directory -Recurse |
   Sort-Object FullName |
   ForEach-Object { Add-SoftwareTarget -Targets $targets -Path $_.FullName }
 
-# 仓库外的额外部署目标(存在才加入)
-foreach ($externalDir in @("D:\AI文件\铁路工程云计价系统网络版V1.0")) {
-  if (Test-Path -LiteralPath (Join-Path $externalDir "NPOI.dll")) {
-    Add-SoftwareTarget -Targets $targets -Path $externalDir
-  }
-}
-
+# 不要在此追加仓库外目录:`D:\AI文件\同事模拟目录`(原名 铁路工程云计价系统网络版V1.0)是同事电脑模拟目录,
+# 必须保持为最近一次实际发给同事的版本,只有用户明确要求发布时才手动同步。
 if ($targets.Count -eq 0) {
   throw "Could not find any supported software directory under $root"
 }

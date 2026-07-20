@@ -10,7 +10,8 @@
 - 构建脚本是 `RecoQuotaRecommend/build.ps1`。
 - 插件部署目标目录是 `铁路基本建设工程投资控制系统2020网络版V0503021201/`。
 - 本地定额与学习数据缓存放在软件目录下的 `RecoQuotaData/`。
-- 所有运行目录统一部署时，只允许以当前仓库 `main` 的 `RecoQuotaRecommend/bin/` 为插件 DLL 源头，使用 `tools/DeployUnifiedPlugins.ps1`；目标包括当前仓库内运行目录、`D:\AI文件\铁路工程云计价系统网络版V1.0`，以及实际存在的 `自动预算专用线`、`铁路工程云计价系统网络版V1.0-徐总`，不要从这些目标目录反向覆盖当前仓库输出。
+- 插件构建、工作区运行目录同步和同事发布包更新时，只允许以当前仓库 `main` 的 `RecoQuotaRecommend/bin/` 为插件 DLL 源头；不要从任何运行目录或发布包反向覆盖当前仓库输出。
+- `D:\AI文件\同事模拟目录`（2026-07-20 由 `D:\AI文件\铁路工程云计价系统网络版V1.0` 改名而来）是“同事电脑模拟目录”，必须保持为最近一次实际发给同事的版本；日常构建、工作区部署、发布包刷新和提交均不得自动同步该目录，也不得把它写进 `build.ps1` 的部署目标。
 - Claude Code 可能在 `.claude/worktrees/` 下并行修改；除非用户明确要求，不要主动把当前主工作区改动合入 Claude worktree，也不要从 Claude worktree 部署覆盖当前软件目录。
 
 ## 构建与验证
@@ -23,19 +24,21 @@ powershell.exe -ExecutionPolicy Bypass -File "C:\Users\谢刚\Desktop\自动预�
 
 - 构建成功后，脚本会生成并部署 `RecoQuotaRecommend.dll` 到软件目录。
 - 修改 `tools/RecoExpandPanel/` 后，如果因为目标软件正在运行只编译了 `RecoQuotaRecommend/bin/RecoExpandPanel.dll` 而未部署，必须明确说明运行目录仍是旧 DLL；现场验证前先用 DLL 时间戳或 marker 确认运行目录 `RecoExpandPanel.dll` 已更新。
-- 需要同步当前仓库运行目录、`D:\AI文件\铁路工程云计价系统网络版V1.0`、`自动预算专用线`、`铁路工程云计价系统网络版V1.0-徐总` 等运行目录时，先运行统一部署脚本干跑检查：
+- `tools/DeployUnifiedPlugins.ps1` 当前会识别工作区内外的多个运行目录；日常构建和发布包更新时可先干跑检查，但不得直接加 `-Deploy`：
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\DeployUnifiedPlugins.ps1" -SkipBuild
 ```
 
-- 确认目标软件已关闭后，再显式加 `-Deploy` 部署；脚本会从当前仓库构建输出复制 `RecoQuotaRecommend.dll`、`RecoExpandPanel.dll`、`RecoPluginLoader.dll`、`0Harmony.dll` 并备份旧 DLL，不同步 `RecoQuotaData`、`ExcelLinks` 或项目配置数据：
+- 只有用户明确要求同步干跑列出的全部目标，并确认目标软件已关闭后，才能显式加 `-Deploy`；脚本会复制四个插件 DLL 并备份旧 DLL，不同步 `RecoQuotaData`、`ExcelLinks` 或项目配置数据：
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\DeployUnifiedPlugins.ps1" -Deploy
 ```
 
-- 每次构建或部署插件后，如果 `release/同事插件分层发布/` 已存在，必须同步更新对应功能的首次安装包和 `90-后续更新文件`，重新生成 `文件清单-SHA256.txt`，并验证发布包 DLL 与 `RecoQuotaRecommend/bin/` 源 DLL 哈希一致。仅更新 `RecoExpandPanel.dll` 时不得重建或复制 `RecoQuotaData`、其他插件 DLL 或同事数据；给已安装插件的同事发送时，只发送 `90-后续更新文件/综合扩展更新/RecoExpandPanel.dll`。
+- 每次构建或部署插件后，如果 `release/同事插件分层发布/` 已存在，必须同步更新对应功能的首次安装包和 `90-后续更新文件`，重新生成 `文件清单-SHA256.txt`，并验证发布包 DLL 与 `RecoQuotaRecommend/bin/` 源 DLL 哈希一致；这一步只更新工作区内的发布包，不得同步“同事电脑模拟目录”。仅更新 `RecoExpandPanel.dll` 时不得重建或复制 `RecoQuotaData`、其他插件 DLL 或同事数据；给已安装插件的同事发送时，只发送 `90-后续更新文件/综合扩展更新/RecoExpandPanel.dll`。
+- 每次修改插件并部署后，必须同步刷新发布包 `release/同事插件分层发布`（`pwsh -File tools/BuildColleaguePluginRelease.ps1 -Force`），使发布包始终等于当前最新构建；发布包与同事模拟目录是两回事，刷新发布包时绝不触碰同事模拟目录。
+- 当用户明确说准备给同事发布，或询问“同步最新功能需要把发布包的哪些文件发给同事”时，先对比发布包与同事模拟目录的版本/哈希，列出应发文件；只有在用户明确同意后，才把这些文件同步到 `D:\AI文件\同事模拟目录`，并验证它与当次实际发送文件的哈希一致；未经明确同意不得复制 `RecoQuotaData` 或其他同事数据。同事模拟目录只有在“用户真的把文件发给同事”这一刻才更新，这样它才真实反映同事手里的版本。
 - 运行构建部署前先确认目标软件主程序已关闭；`RejjNet2020.exe`、`ReJJGSNet2024.exe` 等进程占用插件 DLL 时，`Copy-Item` 会因文件被占用而部署失败。
 - 构建用于部署或发布的 `RecoExpandPanel.dll` 前，如果 `tools/RecoExpandPanel/` 还存在本任务范围外的未提交修改，必须从当前已确认提交生成干净源码快照后编译；不得把并行工作或用户未确认的工作树改动混入发布 DLL，也不得还原这些未提交修改。
 - 验证时优先用插件内部检索入口或实际软件界面验证，不只看文本文件搜索结果。
