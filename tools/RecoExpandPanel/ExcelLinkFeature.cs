@@ -32,10 +32,11 @@ namespace RecoNet
         private static readonly HashSet<DataGridView> HookedQuotaGrids = new HashSet<DataGridView>();
         private const int ExpressionSelectionAddressLimit = 50;
         private const int SpreadsheetApplicationCacheMs = 5000;
+        private const int ExcelLinkPollIntervalMs = 5000;
         private const int ExcelLinkUnitCacheMs = 5000;
         private const int ExcelLinkCacheLimit = 800;
         private const string ExcelLinkUnitsFileName = "excel-link-units.txt";
-        private static object CachedSpreadsheetApplication;
+        private static WeakReference CachedSpreadsheetApplication;
         private static DateTime CachedSpreadsheetApplicationUtc = DateTime.MinValue;
         private static readonly Dictionary<string, ExcelLinkStringCacheEntry> ExcelLinkUnitCache = new Dictionary<string, ExcelLinkStringCacheEntry>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, ExcelLinkBoolCacheEntry> ExcelLinkHiddenColumnCache = new Dictionary<string, ExcelLinkBoolCacheEntry>(StringComparer.OrdinalIgnoreCase);
@@ -1995,32 +1996,30 @@ namespace RecoNet
                 return 0;
             }
 
+            List<ExcelQuotaLink> pendingLinks = store.Links
+                .Where(link => link != null && String.IsNullOrWhiteSpace(link.QuantityName))
+                .ToList();
+            if (pendingLinks.Count == 0)
+            {
+                return 0;
+            }
+
             Dictionary<string, HashSet<int>> hiddenColumnCache = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
             Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache = new Dictionary<string, List<ExcelMergedRegion>>(StringComparer.OrdinalIgnoreCase);
             List<ExcelQuotaLink> readLinks = new List<ExcelQuotaLink>();
-            foreach (ExcelQuotaLink link in store.Links)
+            foreach (ExcelQuotaLink link in pendingLinks)
             {
-                if (link == null)
-                {
-                    continue;
-                }
-
                 string expression = String.IsNullOrWhiteSpace(link.Expression) ? link.CellAddress : link.Expression;
                 AddQuantityNameReadLinks(readLinks, link.ExcelPath, link.WorksheetName, expression, hiddenColumnCache, mergedRegionCache);
             }
 
             ExcelSyncReadContext readContext = new ExcelSyncReadContext(readLinks);
             int updated = 0;
-            foreach (ExcelQuotaLink link in store.Links)
+            foreach (ExcelQuotaLink link in pendingLinks)
             {
-                if (link == null)
-                {
-                    continue;
-                }
-
                 string expression = String.IsNullOrWhiteSpace(link.Expression) ? link.CellAddress : link.Expression;
                 string name = ReadRowNameAt(link.ExcelPath, link.WorksheetName, expression, hiddenColumnCache, mergedRegionCache, readContext);
-                if (!String.IsNullOrWhiteSpace(name) && !String.Equals(link.QuantityName ?? "", name, StringComparison.Ordinal))
+                if (!String.IsNullOrWhiteSpace(name))
                 {
                     link.QuantityName = name;
                     updated++;
@@ -2513,30 +2512,31 @@ namespace RecoNet
 
         private static object GetActiveSpreadsheetApplication()
         {
-            if (CachedSpreadsheetApplication != null)
+            object cachedApplication = CachedSpreadsheetApplication == null ? null : CachedSpreadsheetApplication.Target;
+            if (cachedApplication != null)
             {
                 if ((DateTime.UtcNow - CachedSpreadsheetApplicationUtc).TotalMilliseconds <= SpreadsheetApplicationCacheMs)
                 {
-                    return CachedSpreadsheetApplication;
+                    return cachedApplication;
                 }
 
                 // 缓存过期先轻量探测旧对象，仍可用就续期；
                 // 避免每 5 秒 EnumWindows 全量重连（WPS 走不通 ProgID，每次重连还要先抛几个异常），轮询时会卡顿。
                 try
                 {
-                    dynamic cached = CachedSpreadsheetApplication;
+                    dynamic cached = cachedApplication;
                     string probe = Convert.ToString(cached.Name, CultureInfo.InvariantCulture);
                     if (!String.IsNullOrEmpty(probe))
                     {
                         CachedSpreadsheetApplicationUtc = DateTime.UtcNow;
-                        return CachedSpreadsheetApplication;
+                        return cachedApplication;
                     }
                 }
                 catch
                 {
                 }
 
-                ClearCachedSpreadsheetApplication(CachedSpreadsheetApplication);
+                ClearCachedSpreadsheetApplication(cachedApplication);
             }
 
             List<string> diagnostics = new List<string>();
@@ -2559,13 +2559,14 @@ namespace RecoNet
 
         private static void RememberCachedSpreadsheetApplication(object app)
         {
-            CachedSpreadsheetApplication = app;
+            CachedSpreadsheetApplication = app == null ? null : new WeakReference(app);
             CachedSpreadsheetApplicationUtc = DateTime.UtcNow;
         }
 
         private static void ClearCachedSpreadsheetApplication(object app)
         {
-            if (app == null || Object.ReferenceEquals(CachedSpreadsheetApplication, app))
+            object cachedApplication = CachedSpreadsheetApplication == null ? null : CachedSpreadsheetApplication.Target;
+            if (app == null || Object.ReferenceEquals(cachedApplication, app))
             {
                 CachedSpreadsheetApplication = null;
                 CachedSpreadsheetApplicationUtc = DateTime.MinValue;
@@ -2606,7 +2607,7 @@ namespace RecoNet
         private static bool TryGetExcelApplicationByWindowObject(out object app, List<string> diagnostics)
         {
             app = null;
-            List<IntPtr> excelChildWindows = new List<IntPtr>();
+            HashSet<IntPtr> excelChildWindows = new HashSet<IntPtr>();
             EnumWindows(delegate(IntPtr hWnd, IntPtr lParam)
             {
                 CollectExcelChildWindows(hWnd, excelChildWindows);
@@ -2648,7 +2649,7 @@ namespace RecoNet
             return false;
         }
 
-        private static void CollectExcelChildWindows(IntPtr parent, List<IntPtr> excelChildWindows)
+        private static void CollectExcelChildWindows(IntPtr parent, HashSet<IntPtr> excelChildWindows)
         {
             EnumChildWindows(parent, delegate(IntPtr hWnd, IntPtr lParam)
             {
@@ -2658,7 +2659,6 @@ namespace RecoNet
                     excelChildWindows.Add(hWnd);
                 }
 
-                CollectExcelChildWindows(hWnd, excelChildWindows);
                 return true;
             }, IntPtr.Zero);
         }
@@ -5747,10 +5747,9 @@ namespace RecoNet
             {
                 this.mainForm = mainForm;
                 timer = new Timer();
-                timer.Interval = 1800;
+                timer.Interval = ExcelLinkPollIntervalMs;
                 timer.Tick += delegate { Tick(); };
                 Reload();
-                timer.Start();
             }
 
             public void Reload()
@@ -5758,17 +5757,30 @@ namespace RecoNet
                 SqlConnection conn = GetProjectConnection(mainForm);
                 if (conn == null)
                 {
+                    knownWriteTimes.Clear();
+                    timer.Enabled = false;
                     return;
                 }
 
                 ExcelLinkStore store = LoadStore(conn);
-                foreach (ExcelQuotaLink link in store.Links)
+                List<string> paths = store.Links
+                    .Where(link => link != null && !String.IsNullOrWhiteSpace(link.ExcelPath))
+                    .Select(link => link.ExcelPath)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                HashSet<string> activePaths = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);
+                foreach (string stalePath in knownWriteTimes.Keys.Where(path => !activePaths.Contains(path)).ToList())
                 {
-                    if (!String.IsNullOrEmpty(link.ExcelPath) && File.Exists(link.ExcelPath) && !knownWriteTimes.ContainsKey(link.ExcelPath))
+                    knownWriteTimes.Remove(stalePath);
+                }
+                foreach (string path in paths)
+                {
+                    if (!knownWriteTimes.ContainsKey(path))
                     {
-                        knownWriteTimes[link.ExcelPath] = File.GetLastWriteTimeUtc(link.ExcelPath);
+                        knownWriteTimes[path] = File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
                     }
                 }
+                timer.Enabled = knownWriteTimes.Count > 0;
             }
 
             private void Tick()
@@ -5788,24 +5800,29 @@ namespace RecoNet
 
                     ExcelLinkStore store = LoadStore(conn);
                     bool changed = false;
-                    foreach (ExcelQuotaLink link in store.Links)
+                    List<string> paths = store.Links
+                        .Where(link => link != null && !String.IsNullOrWhiteSpace(link.ExcelPath))
+                        .Select(link => link.ExcelPath)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                    foreach (string path in paths)
                     {
-                        if (String.IsNullOrEmpty(link.ExcelPath) || !File.Exists(link.ExcelPath))
+                        if (!File.Exists(path))
                         {
                             continue;
                         }
 
-                        DateTime writeTime = File.GetLastWriteTimeUtc(link.ExcelPath);
+                        DateTime writeTime = File.GetLastWriteTimeUtc(path);
                         DateTime known;
-                        if (!knownWriteTimes.TryGetValue(link.ExcelPath, out known))
+                        if (!knownWriteTimes.TryGetValue(path, out known))
                         {
-                            knownWriteTimes[link.ExcelPath] = writeTime;
+                            knownWriteTimes[path] = writeTime;
                             continue;
                         }
 
                         if (writeTime > known)
                         {
-                            knownWriteTimes[link.ExcelPath] = writeTime;
+                            knownWriteTimes[path] = writeTime;
                             changed = true;
                         }
                     }

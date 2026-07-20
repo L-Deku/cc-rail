@@ -380,7 +380,11 @@ namespace RecoNet
                         targetWorkbookToolTip.SetToolTip(cmbTargetWorkbook, error ?? "");
                     }
                 }
-                catch { /* 取不到时留空，预览时给出明确提示 */ }
+                catch (Exception ex)
+                {
+                    Log("Reload target workbooks failed: " + ex);
+                    targetWorkbookToolTip.SetToolTip(cmbTargetWorkbook, "读取 Excel/WPS 工作簿失败：" + ex.Message);
+                }
                 finally
                 {
                     reloadingTargetWorkbooks = false;
@@ -424,7 +428,11 @@ namespace RecoNet
                     if (String.IsNullOrWhiteSpace(target)) target = selected.SheetNames.FirstOrDefault();
                     cmbTargetSheet.Text = target ?? "";
                 }
-                catch { /* 取不到时留空，预览时给出明确提示 */ }
+                catch (Exception ex)
+                {
+                    Log("Reload target sheets failed: " + ex);
+                    targetWorkbookToolTip.SetToolTip(cmbTargetWorkbook, "读取 Excel/WPS 工作表失败：" + ex.Message);
+                }
             }
 
             // 目标单元 下拉展开时刷新：列出项目全部单元（_ZGS_ 编号，纯编号，供 ResolveAgentUnitIdSimple 精确匹配）。

@@ -26,6 +26,7 @@ $searchIndex = Read-Source 'RecoQuotaRecommend\SearchIndexStore.cs'
 $chapterStore = Read-Source 'RecoQuotaRecommend\ChapterLibraryStore.cs'
 $referencePool = Read-Source 'RecoQuotaRecommend\RecoReferenceQuotaPoolFeature.cs'
 $excelLink = Read-Source 'tools\RecoExpandPanel\ExcelLinkFeature.cs'
+$autoMatch = Read-Source 'tools\RecoExpandPanel\AutoMatchFeature.cs'
 $formPanel = Read-Source 'tools\RecoExpandPanel\FormPanel.cs'
 $agentExecutor = Read-Source 'tools\RecoExpandPanel\AgentExecutor.cs'
 $chapterTool = Read-Source 'tools\ChapterQuotaLibrary\ChapterQuotaLibrary.cs'
@@ -38,6 +39,24 @@ Assert-NotContains $mappingStore "File.Delete(path);`r`n            }`r`n       
 Assert-Contains $excelLink 'private static bool TryWithMappingBoxesLock(Action action, int timeoutMilliseconds)' 'RecoExpandPanel mapping feedback has no lock-timeout guard.'
 Assert-Contains $excelLink 'WriteAllLinesAtomic(path, rows.Select(ToFlatJson).ToArray(), Encoding.UTF8);' 'RecoExpandPanel mapping feedback is not written atomically.'
 Assert-Contains $chapterTool 'throw new TimeoutException("Timed out waiting for mapping-boxes lock.");' 'ChapterQuotaLibrary still continues after a mapping lock timeout.'
+
+Assert-Contains $excelLink 'private static WeakReference CachedSpreadsheetApplication' 'Excel/WPS application cache still keeps a strong global COM reference.'
+Assert-NotContains $excelLink 'private static object CachedSpreadsheetApplication;' 'Strong Excel/WPS application cache was reintroduced.'
+$collectStart = $excelLink.IndexOf('private static void CollectExcelChildWindows', [StringComparison]::Ordinal)
+$collectEnd = $excelLink.IndexOf('private static string GetWindowClassName', $collectStart, [StringComparison]::Ordinal)
+if ($collectStart -lt 0 -or $collectEnd -le $collectStart) {
+    throw 'Could not locate the Excel child-window collector.'
+}
+$collectBody = $excelLink.Substring($collectStart, $collectEnd - $collectStart)
+if (($collectBody.Split(@('CollectExcelChildWindows('), [StringSplitOptions]::None).Count - 1) -ne 1) {
+    throw 'CollectExcelChildWindows still recursively re-enumerates descendants already returned by EnumChildWindows.'
+}
+Assert-Contains $autoMatch 'HashSet<string> scannedApplications = new HashSet<string>(StringComparer.Ordinal);' 'Open-workbook discovery does not deduplicate Excel/WPS application instances.'
+Assert-Contains $autoMatch 'TryMarkSpreadsheetApplicationScanned(activeApplication, scannedApplications)' 'The active Excel/WPS application is not guarded against duplicate scans.'
+Assert-Contains $excelLink 'String.IsNullOrWhiteSpace(link.QuantityName)' 'Opening the Excel link panel still refreshes names for every stored binding.'
+Assert-Contains $excelLink 'private const int ExcelLinkPollIntervalMs = 5000;' 'Excel link background polling is still too aggressive.'
+Assert-Contains $excelLink 'timer.Enabled = knownWriteTimes.Count > 0;' 'Excel link polling does not stop when the project has no active bindings.'
+Assert-Contains $excelLink '.Distinct(StringComparer.OrdinalIgnoreCase)' 'Excel link polling still checks the same workbook path once per binding.'
 
 Assert-Contains $quotaPanel 'private const long MaxLogBytes = 5L * 1024L * 1024L;' 'RecoQuotaRecommend log rotation threshold is missing.'
 Assert-Contains $quotaPanel 'private const int LogBackupCount = 3;' 'RecoQuotaRecommend log backup count is missing.'

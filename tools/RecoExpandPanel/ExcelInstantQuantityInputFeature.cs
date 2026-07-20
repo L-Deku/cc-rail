@@ -1034,7 +1034,7 @@ namespace RecoNet
                         return true;
                     }
 
-                    List<IntPtr> excelWindows = new List<IntPtr>();
+                    HashSet<IntPtr> excelWindows = new HashSet<IntPtr>();
                     CollectExcelChildWindows(windowHandle, excelWindows);
                     return excelWindows.Count > 0;
                 }

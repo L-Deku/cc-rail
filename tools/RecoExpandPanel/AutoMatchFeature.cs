@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Data.SqlClient;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -1154,14 +1155,15 @@ namespace RecoNet
             Dictionary<string, OpenSpreadsheetWorkbookInfo> byPath =
                 new Dictionary<string, OpenSpreadsheetWorkbookInfo>(StringComparer.OrdinalIgnoreCase);
             List<string> diagnostics = new List<string>();
+            HashSet<string> scannedApplications = new HashSet<string>(StringComparer.Ordinal);
 
             object activeApplication = GetActiveSpreadsheetApplication();
-            if (activeApplication != null)
+            if (TryMarkSpreadsheetApplicationScanned(activeApplication, scannedApplications))
             {
                 CollectOpenWorkbooksFromApplication(activeApplication, true, byPath, diagnostics);
             }
 
-            List<IntPtr> spreadsheetWindows = new List<IntPtr>();
+            HashSet<IntPtr> spreadsheetWindows = new HashSet<IntPtr>();
             try
             {
                 EnumWindows(delegate(IntPtr hWnd, IntPtr lParam)
@@ -1185,7 +1187,7 @@ namespace RecoNet
                     if (hr != 0 || nativeObject == null) continue;
                     dynamic window = nativeObject;
                     object application = window.Application;
-                    if (application != null)
+                    if (TryMarkSpreadsheetApplicationScanned(application, scannedApplications))
                     {
                         CollectOpenWorkbooksFromApplication(application, false, byPath, diagnostics);
                     }
@@ -1208,6 +1210,34 @@ namespace RecoNet
                 return false;
             }
             return true;
+        }
+
+        private static bool TryMarkSpreadsheetApplicationScanned(object application, HashSet<string> scannedApplications)
+        {
+            if (application == null || scannedApplications == null)
+            {
+                return false;
+            }
+
+            string key = null;
+            try
+            {
+                dynamic excel = application;
+                long hwnd = Convert.ToInt64(excel.Hwnd, CultureInfo.InvariantCulture);
+                if (hwnd != 0)
+                {
+                    key = "HWND:" + hwnd.ToString(CultureInfo.InvariantCulture);
+                }
+            }
+            catch
+            {
+            }
+
+            if (String.IsNullOrEmpty(key))
+            {
+                key = "RCW:" + RuntimeHelpers.GetHashCode(application).ToString(CultureInfo.InvariantCulture);
+            }
+            return scannedApplications.Add(key);
         }
 
         private static void CollectOpenWorkbooksFromApplication(object application, bool markActiveWorkbook,
