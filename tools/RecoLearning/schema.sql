@@ -101,6 +101,23 @@ CREATE TABLE dbo.ChapterEntry (
   CONSTRAINT PK_ChapterEntry PRIMARY KEY (method, entry_code)
 );
 
+IF OBJECT_ID('dbo.SheetTemplateRow') IS NULL
+CREATE TABLE dbo.SheetTemplateRow (
+  id               BIGINT IDENTITY(1,1) PRIMARY KEY,
+  method           NVARCHAR(50) NOT NULL DEFAULT(''),
+  workbook         NVARCHAR(260) NOT NULL,
+  worksheet        NVARCHAR(100) NOT NULL DEFAULT(''),
+  excel_row        INT NOT NULL DEFAULT(0),
+  signature        NVARCHAR(450) NOT NULL,
+  box_id           NVARCHAR(64) NOT NULL DEFAULT(''),
+  entry_code       NVARCHAR(100) NOT NULL DEFAULT(''),
+  engineering_type NVARCHAR(50) NOT NULL DEFAULT(''),
+  sample_count     INT NOT NULL DEFAULT(0),
+  last_seen        DATETIME2(0) NULL
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_SheetTemplateRow_sheet')
+  CREATE INDEX IX_SheetTemplateRow_sheet ON dbo.SheetTemplateRow(worksheet, workbook);
+
 IF OBJECT_ID('dbo.SignatureEntryMap') IS NULL
 CREATE TABLE dbo.SignatureEntryMap (
   signature    NVARCHAR(450) NOT NULL,

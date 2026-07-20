@@ -1237,7 +1237,8 @@ namespace RecoNet
         }
 
         // 回写：把本次名字驱动确认的"工程量名 -> 定额(可多条)"写进对应框 + 当前模版。
-        private static void FeedbackNameMatches(string templateName, List<FillPreviewItem> written)
+        private static void FeedbackNameMatches(string templateName, List<FillPreviewItem> written,
+            string sourceWorkbook = "", string sourceSheet = "")
         {
             List<MappingFeedbackGroup> mappingGroups = new List<MappingFeedbackGroup>();
             foreach (IGrouping<int, FillPreviewItem> g in written
@@ -1251,6 +1252,9 @@ namespace RecoNet
                 MappingFeedbackGroup mappingGroup = new MappingFeedbackGroup { QuantityName = name };
                 mappingGroup.QuantityUnit = g.Select(x => x.TargetUnit).FirstOrDefault(u => !String.IsNullOrWhiteSpace(u)) ?? "";
                 mappingGroup.EntryCode = g.Select(x => x.ItemNo).FirstOrDefault(no => !String.IsNullOrWhiteSpace(no)) ?? "";
+                mappingGroup.Workbook = sourceWorkbook ?? "";
+                mappingGroup.Worksheet = sourceSheet ?? "";
+                mappingGroup.ExcelRow = g.Key;
                 foreach (FillPreviewItem it in g)
                 {
                     mappingGroup.Targets.Add(new MappingFeedbackTarget

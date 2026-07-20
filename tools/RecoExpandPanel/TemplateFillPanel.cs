@@ -1062,7 +1062,8 @@ namespace RecoNet
                         "模板铺量", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
 
                     SetBusy(true, "写入中...");
-                    string result = ApplyFill(mainForm, targetUnit, preview);
+                    string result = ApplyFill(mainForm, targetUnit, preview,
+                        System.IO.Path.GetFileName(GetSelectedTargetWorkbookPath() ?? ""), cmbTargetSheet.Text.Trim());
                     MessageBox.Show(this, result, "模板铺量");
                 }
                 catch (Exception ex) { MessageBox.Show(this, "写入失败：" + ex.Message, "模板铺量"); }

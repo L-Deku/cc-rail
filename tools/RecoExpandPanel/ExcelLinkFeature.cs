@@ -2043,6 +2043,9 @@ namespace RecoNet
             public string QuantityName;
             public string QuantityUnit;   // Excel 侧单位(有则学习库能精确签名命中)
             public string EntryCode;      // 写入条目号(学习条目定位)
+            public string Workbook;       // 来源工作簿文件名(表级模板沉淀用)
+            public string Worksheet;      // 来源工作表名
+            public int ExcelRow;          // Excel 行号(表内顺序)
             public List<MappingFeedbackTarget> Targets = new List<MappingFeedbackTarget>();
         }
 
@@ -2056,6 +2059,7 @@ namespace RecoNet
             }
 
             MappingFeedbackGroup group = new MappingFeedbackGroup { QuantityName = fullQuantityName };
+            FillGroupSheetContext(group, link);
             group.Targets.Add(new MappingFeedbackTarget { Kind = "quota", Code = link.QuotaCode, Name = link.QuotaName, Unit = "" });
             RecordMappingGroupsToStore(new List<MappingFeedbackGroup> { group }, "excel-bind");
         }
@@ -2068,10 +2072,25 @@ namespace RecoNet
                 ExcelQuotaLink link = pair.Key;
                 if (link == null || !IsAutoMatchQuotaCode(link.QuotaCode) || String.IsNullOrWhiteSpace(pair.Value)) continue;
                 MappingFeedbackGroup group = new MappingFeedbackGroup { QuantityName = pair.Value };
+                FillGroupSheetContext(group, link);
                 group.Targets.Add(new MappingFeedbackTarget { Kind = "quota", Code = link.QuotaCode, Name = link.QuotaName, Unit = "" });
                 groups.Add(group);
             }
             RecordMappingGroupsToStore(groups, "excel-bind-batch");
+        }
+
+        // 绑定事件补充表级上下文(工作簿/工作表/行号),供学习库沉淀"一表一模板"。
+        private static void FillGroupSheetContext(MappingFeedbackGroup group, ExcelQuotaLink link)
+        {
+            if (group == null || link == null) return;
+            try { group.Workbook = Path.GetFileName(link.ExcelPath ?? ""); } catch { group.Workbook = ""; }
+            group.Worksheet = link.WorksheetName ?? "";
+            int row = 0;
+            string cell = (link.CellAddress ?? "").Trim();
+            int digitStart = 0;
+            while (digitStart < cell.Length && !Char.IsDigit(cell[digitStart])) digitStart++;
+            if (digitStart < cell.Length) Int32.TryParse(cell.Substring(digitStart), out row);
+            group.ExcelRow = row;
         }
 
         // 名字驱动写入后合批回写：每个工程量组保持完整目标集合，共享同一个 box_id。

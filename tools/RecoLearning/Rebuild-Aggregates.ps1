@@ -148,4 +148,35 @@ foreach ($t in $tmpl.Values) { [void]$dtTmpl.Rows.Add($t.Method, $t.Prefix, $t.E
 [void](Invoke-RecoNonQuery -Sql "TRUNCATE TABLE dbo.EngineeringTemplate")
 Invoke-RecoBulkCopy -Table $dtTmpl -TargetTable 'dbo.EngineeringTemplate'
 
-Write-Host ("聚合完成: QuotaBox " + $dtBox.Rows.Count + " / QuotaBoxTarget " + $dtTarget.Rows.Count + " / QuantityAlias " + $dtAlias.Rows.Count + " / SignatureBoxMap " + $dtMap.Rows.Count + " / SignatureEntryMap " + $dtSig.Rows.Count + " / EngineeringTemplate " + $dtTmpl.Rows.Count)
+# 6) 表模板行归集(一表一模板原料):带工作簿/工作表上下文的事件组,按表内行号有序沉淀。
+$sheetRows = @{}
+foreach ($g in $groups.Values) {
+  $wb = Get-ExtraText $g.Extra 'workbook'
+  if ($wb -eq '') { continue }
+  $ws = Get-ExtraText $g.Extra 'worksheet'
+  $rowNo = Get-ExtraInt $g.Extra 'excel_row' 0
+  if ($rowNo -eq 0) {
+    $cell = Get-ExtraText $g.Extra 'cell'
+    if ($cell -match '(\d+)') { $rowNo = [int]$Matches[1] }
+  }
+  $boxId = $boxes[$g.SetHash].Id
+  $sig = Get-QuantitySignature $g.Name $g.Unit
+  $prefix = if ($g.EntryCode.Length -ge 2) { $g.EntryCode.Substring(0, 2) } else { '' }
+  $key = $g.Method + "`n" + $wb + "`n" + $ws + "`n" + $rowNo + "`n" + $sig + "`n" + $boxId
+  if (-not $sheetRows.ContainsKey($key)) {
+    $sheetRows[$key] = @{ Method = $g.Method; Wb = $wb; Ws = $ws; RowNo = $rowNo; Sig = $sig; BoxId = $boxId; Entry = $g.EntryCode; Prefix = $prefix; Count = 0; Last = $g.At }
+  }
+  $sr = $sheetRows[$key]; $sr.Count++
+  if ($g.At -gt $sr.Last) { $sr.Last = $g.At }
+  if ($sr.Entry -eq '' -and $g.EntryCode -ne '') { $sr.Entry = $g.EntryCode; $sr.Prefix = $prefix }
+}
+$dtSheet = New-Object System.Data.DataTable
+foreach ($c in 'method','workbook','worksheet') { [void]$dtSheet.Columns.Add($c, [string]) }
+[void]$dtSheet.Columns.Add('excel_row', [int])
+foreach ($c in 'signature','box_id','entry_code','engineering_type') { [void]$dtSheet.Columns.Add($c, [string]) }
+[void]$dtSheet.Columns.Add('sample_count', [int]); [void]$dtSheet.Columns.Add('last_seen', [datetime])
+foreach ($sr in $sheetRows.Values) { [void]$dtSheet.Rows.Add($sr.Method, $sr.Wb, $sr.Ws, $sr.RowNo, $sr.Sig, $sr.BoxId, $sr.Entry, $sr.Prefix, $sr.Count, $sr.Last) }
+[void](Invoke-RecoNonQuery -Sql "TRUNCATE TABLE dbo.SheetTemplateRow")
+Invoke-RecoBulkCopy -Table $dtSheet -TargetTable 'dbo.SheetTemplateRow'
+
+Write-Host ("聚合完成: QuotaBox " + $dtBox.Rows.Count + " / QuotaBoxTarget " + $dtTarget.Rows.Count + " / QuantityAlias " + $dtAlias.Rows.Count + " / SignatureBoxMap " + $dtMap.Rows.Count + " / SignatureEntryMap " + $dtSig.Rows.Count + " / EngineeringTemplate " + $dtTmpl.Rows.Count + " / SheetTemplateRow " + $dtSheet.Rows.Count)

@@ -50,8 +50,8 @@ namespace RecoNet
                             using (SqlCommand cmd = conn.CreateCommand())
                             {
                                 cmd.CommandTimeout = 5;
-                                cmd.CommandText = "INSERT INTO dbo.BindingLog (occurred_at, source, quantity_name, quantity_unit, entry_code, target_kind, target_code, target_name, target_unit, group_key, event_hash) " +
-                                    "VALUES (SYSDATETIME(), @source, @qn, @qu, @ec, @tk, @tc, @tn, @tu, @gk, @eh)";
+                                cmd.CommandText = "INSERT INTO dbo.BindingLog (occurred_at, source, quantity_name, quantity_unit, entry_code, target_kind, target_code, target_name, target_unit, group_key, event_hash, extra) " +
+                                    "VALUES (SYSDATETIME(), @source, @qn, @qu, @ec, @tk, @tc, @tn, @tu, @gk, @eh, @ex)";
                                 cmd.Parameters.AddWithValue("@source", "plugin:" + (source ?? ""));
                                 cmd.Parameters.AddWithValue("@qn", group.QuantityName ?? "");
                                 cmd.Parameters.AddWithValue("@qu", group.QuantityUnit ?? "");
@@ -62,6 +62,17 @@ namespace RecoNet
                                 cmd.Parameters.AddWithValue("@tu", target.Unit ?? "");
                                 cmd.Parameters.AddWithValue("@gk", groupKey);
                                 cmd.Parameters.AddWithValue("@eh", Guid.NewGuid().ToString("N"));
+                                string extra = "";
+                                if (!String.IsNullOrEmpty(group.Workbook) || !String.IsNullOrEmpty(group.Worksheet))
+                                {
+                                    Dictionary<string, string> flat = new Dictionary<string, string>();
+                                    flat["workbook"] = group.Workbook ?? "";
+                                    flat["worksheet"] = group.Worksheet ?? "";
+                                    flat["excel_row"] = group.ExcelRow.ToString();
+                                    extra = ToFlatJson(flat);
+                                }
+                                if (extra.Length > 0) cmd.Parameters.AddWithValue("@ex", extra);
+                                else cmd.Parameters.AddWithValue("@ex", DBNull.Value);
                                 cmd.ExecuteNonQuery();
                             }
                         }

@@ -928,7 +928,8 @@ namespace RecoNet
 
         // 写入：把选中预览项对应的源定额行，直接复制到【目标单元】的对应条目（条目序号全局共享，原样保留），
         // 改 总概算序号/顺号/工程数量、丢弃旧 定额序号(新建标识)。不走界面树。
-        private static string ApplyFill(Form mainForm, string targetUnitNo, List<FillPreviewItem> items)
+        private static string ApplyFill(Form mainForm, string targetUnitNo, List<FillPreviewItem> items,
+            string sourceWorkbook = "", string sourceSheet = "")
         {
             List<FillPreviewItem> selected = items
                 .Where(i => i.Selected &&
@@ -1098,7 +1099,7 @@ namespace RecoNet
                 List<FillPreviewItem> feedbackReady = FilterFullyWrittenNameGroups(selected, writtenOk);
                 if (feedbackReady.Count > 0)
                 {
-                    FeedbackNameMatches(feedbackReady[0].TemplateName, feedbackReady);
+                    FeedbackNameMatches(feedbackReady[0].TemplateName, feedbackReady, sourceWorkbook, sourceSheet);
                 }
                 RefreshCurrentQuotaGrid(mainForm);
 
