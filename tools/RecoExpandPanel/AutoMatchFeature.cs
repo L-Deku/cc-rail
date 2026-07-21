@@ -2169,6 +2169,7 @@ namespace RecoNet
                 {
                     EnsureOpen(conn);
                     string projectId = GetProjectId(conn);
+                    string projectMethod = SmartResolveProjectMethod(conn);
                     totalNo = ResolveAutoMatchTotalNo(node);
                     // 树节点 Tag 里经常没有条目序号，且子节点可能懒加载未展开；
                     // 按当前条目编号从章节表补全本条目及全部子条目的序号。
@@ -2201,7 +2202,7 @@ namespace RecoNet
                                 totalFilter = " and DE.\u603b\u6982\u7b97\u5e8f\u53f7=@zgs";
                             }
 
-                            cmd.CommandText = "select DE.\u5b9a\u989d\u5e8f\u53f7, DE.\u603b\u6982\u7b97\u5e8f\u53f7, DE.\u6761\u76ee\u5e8f\u53f7, DE.\u987a\u53f7, DE.\u5b9a\u989d\u7f16\u53f7, DE.\u5de5\u7a0b\u6216\u8d39\u7528\u9879\u76ee\u540d\u79f0, DE.\u5355\u4f4d, DE.\u5de5\u7a0b\u6570\u91cf\u8f93\u5165, ZJ.\u6761\u76ee\u7f16\u53f7 from \u5b9a\u989d\u8f93\u5165 DE left join \u7ae0\u8282\u8868 ZJ on DE.\u6761\u76ee\u5e8f\u53f7=ZJ.\u6761\u76ee\u5e8f\u53f7 where DE.\u6761\u76ee\u5e8f\u53f7 in (" + String.Join(",", parameterNames.ToArray()) + ")" + totalFilter;
+                            cmd.CommandText = "select DE.\u5b9a\u989d\u5e8f\u53f7, DE.\u603b\u6982\u7b97\u5e8f\u53f7, DE.\u6761\u76ee\u5e8f\u53f7, DE.\u987a\u53f7, DE.\u5b9a\u989d\u7f16\u53f7, DE.\u5de5\u7a0b\u6216\u8d39\u7528\u9879\u76ee\u540d\u79f0, DE.\u5355\u4f4d, DE.\u5de5\u7a0b\u6570\u91cf\u8f93\u5165, ZJ.\u6761\u76ee\u7f16\u53f7, ZJ.\u5de5\u7a0b\u6216\u8d39\u7528\u9879\u76ee\u540d\u79f0 from \u5b9a\u989d\u8f93\u5165 DE left join \u7ae0\u8282\u8868 ZJ on DE.\u6761\u76ee\u5e8f\u53f7=ZJ.\u6761\u76ee\u5e8f\u53f7 where DE.\u6761\u76ee\u5e8f\u53f7 in (" + String.Join(",", parameterNames.ToArray()) + ")" + totalFilter;
                             using (SqlDataReader reader = cmd.ExecuteReader())
                             {
                                 while (reader.Read())
@@ -2226,17 +2227,22 @@ namespace RecoNet
                                     link.QuotaSequence = quotaSequence;
                                     link.TotalNo = ReadAutoMatchReaderText(reader, 1);
                                     link.ChapterSeq = ReadAutoMatchReaderText(reader, 2);
+                                    link.EntryCode = ReadAutoMatchReaderText(reader, 8);
+                                    link.EntryName = ReadAutoMatchReaderText(reader, 9);
+                                    link.Method = projectMethod;
                                     link.OrderNo = ReadAutoMatchReaderText(reader, 3);
                                     link.QuotaCode = quotaCode;
                                     link.QuotaName = ReadAutoMatchReaderText(reader, 5);
+                                    string quotaUnit = ReadAutoMatchReaderText(reader, 6);
+                                    link.QuotaUnit = quotaUnit;
 
                                     result.Add(new AiQuotaMatchRow
                                     {
                                         Link = link,
-                                        QuotaUnit = ReadAutoMatchReaderText(reader, 6),
+                                        QuotaUnit = quotaUnit,
                                         CurrentQuantityText = currentQuantity,
                                         Bindable = bindable,
-                                        ItemNo = ReadAutoMatchReaderText(reader, 8)
+                                        ItemNo = link.EntryCode
                                     });
                                 }
                             }

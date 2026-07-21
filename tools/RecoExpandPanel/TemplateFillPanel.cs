@@ -1054,6 +1054,8 @@ namespace RecoNet
                     if (replacements.Count == 0) return;
 
                     if (!ReplacePreviewTargetGroup(preview, groupLeader.TargetRow, replacements)) return;
+                    FeedbackNameMatches(groupLeader.TemplateName, replacements,
+                        System.IO.Path.GetFileName(GetSelectedTargetWorkbookPath() ?? ""), cmbTargetSheet.Text.Trim(), conn);
                     RefreshTargetGroupInGrid(groupLeader.TargetRow);
                 }
                 catch (Exception ex) { MessageBox.Show(this, "绑定失败：" + ex.Message, "模板铺量"); }

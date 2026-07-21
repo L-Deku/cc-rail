@@ -626,6 +626,7 @@ $upsert = $type.GetMethod('UpsertMappingBoxGroup', $flags)
 $rows = [Activator]::CreateInstance($upsert.GetParameters()[0].ParameterType)
 $group = [Activator]::CreateInstance($groupType)
 $groupType.GetField('QuantityName', $flags).SetValue($group, '土方外运')
+$groupType.GetField('QuantityUnit', $flags).SetValue($group, 'm3')
 $targets = $groupType.GetField('Targets', $flags).GetValue($group)
 foreach ($code in @('LY-21','LY-34','LY-35')) {
     $target = [Activator]::CreateInstance($targetType)
@@ -640,6 +641,10 @@ if ($boxIds.Count -ne 1) { throw "组件框目标必须共享一个box_id，实�
 $upsert.Invoke($null, [object[]]@($rows.PSObject.BaseObject, $group))
 if ($rows.Count -ne 3) { throw '重复确认不应复制组件目标行' }
 if (@($rows | Where-Object { $_['accepted_count'] -ne '2' }).Count -ne 0) { throw '组件框各目标接受次数应一致累加' }
+$groupType.GetField('QuantityUnit', $flags).SetValue($group, '10m3')
+$upsert.Invoke($null, [object[]]@($rows.PSObject.BaseObject, $group))
+if ($rows.Count -ne 3) { throw '同名不同单位不应拆成两套组件关系' }
+if (@($rows | Where-Object { $_['accepted_count'] -ne '3' -or $_['quantity_unit'] -ne '10m3' }).Count -ne 0) { throw '名称级关系没有合并单位观察值' }
 Write-Host "PASS 组件框整组回写"
 
 $buildBoxIndex = $type.GetMethod('BuildMappingBoxIndex', $flags)

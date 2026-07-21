@@ -463,15 +463,18 @@ namespace RecoNet
                 bool hasQty = TryEvaluateWorkbookExpression(ctx, workbook, sheet, qtyAddr, out disp, out qty, out err, true) && qty != 0m;
                 if (!hasQty || String.IsNullOrWhiteSpace(name)) continue;
 
+                string targetUnit = ReadTargetUnitNearQuantity(workbook, sheet, r, qtyColumn, hiddenCache, ctx);
+                string machineName = StripTrailingQuantityUnit(name, targetUnit);
+                string displayName = StripTrailingQuantityUnit(ReadRowNameAt(workbook, sheet, qtyAddr, hiddenCache, mergedCache, ctx, false), targetUnit);
                 TargetQtyRow row = new TargetQtyRow();
                 row.Row = r;
-                row.RawName = name;
-                row.DisplayName = ReadRowNameAt(workbook, sheet, qtyAddr, hiddenCache, mergedCache, ctx, false);
-                row.NormName = NormalizeMatchText(name);
+                row.RawName = machineName;
+                row.DisplayName = displayName;
+                row.NormName = NormalizeMatchText(machineName);
                 row.Chapter = currentChapter;
                 row.Quantity = qty;
                 row.QuantityText = disp;
-                row.Unit = ReadTargetUnitNearQuantity(workbook, sheet, r, qtyColumn, hiddenCache, ctx);
+                row.Unit = targetUnit;
                 result.Add(row);
             }
             return result;
@@ -1238,11 +1241,11 @@ namespace RecoNet
 
         // 回写：把本次名字驱动确认的"工程量名 -> 定额(可多条)"写进对应框 + 当前模版。
         private static void FeedbackNameMatches(string templateName, List<FillPreviewItem> written,
-            string sourceWorkbook = "", string sourceSheet = "")
+            string sourceWorkbook = "", string sourceSheet = "", SqlConnection projectConn = null)
         {
             List<MappingFeedbackGroup> mappingGroups = new List<MappingFeedbackGroup>();
             foreach (IGrouping<int, FillPreviewItem> g in written
-                .Where(i => i.IsNameDriven && !String.IsNullOrWhiteSpace(i.QuotaCode))
+                .Where(i => i.IsNameDriven && !i.MappingFeedbackRecorded && !String.IsNullOrWhiteSpace(i.QuotaCode))
                 .GroupBy(i => i.TargetRow))
             {
                 // 回写用【全名】(不截断)：截断显示名会削弱下次匹配与对应框命中。
@@ -1255,6 +1258,7 @@ namespace RecoNet
                 mappingGroup.Workbook = sourceWorkbook ?? "";
                 mappingGroup.Worksheet = sourceSheet ?? "";
                 mappingGroup.ExcelRow = g.Key;
+                PopulateMappingFeedbackGroupProjectContext(projectConn, mappingGroup);
                 foreach (FillPreviewItem it in g)
                 {
                     mappingGroup.Targets.Add(new MappingFeedbackTarget
@@ -1268,6 +1272,10 @@ namespace RecoNet
                 mappingGroups.Add(mappingGroup);
             }
             RecordNameMatchesToMappingStore(mappingGroups);
+            foreach (FillPreviewItem item in written.Where(i => i != null && i.IsNameDriven))
+            {
+                item.MappingFeedbackRecorded = true;
+            }
 
             try
             {

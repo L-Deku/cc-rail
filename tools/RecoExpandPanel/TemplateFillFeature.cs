@@ -93,6 +93,7 @@ namespace RecoNet
             public long ChosenItemSeq;     // 用户显式选择的放入条目(条目序号)；0=未选(沿用邻居锚点)
             public string ChosenItemNo;    // 对应条目编号(显示/粘贴导航用)
             public bool NeedExactNameConfirmation; // 精确同名已带出定额，但仍需用户确认
+            public bool MappingFeedbackRecorded;   // 右键绑定已即时学习，写入成功后不重复计权
             public string SelectedNameQuotaCandidateKey;
             public List<NameQuotaCandidateGroup> NameQuotaCandidates;
 
@@ -1099,7 +1100,7 @@ namespace RecoNet
                 List<FillPreviewItem> feedbackReady = FilterFullyWrittenNameGroups(selected, writtenOk);
                 if (feedbackReady.Count > 0)
                 {
-                    FeedbackNameMatches(feedbackReady[0].TemplateName, feedbackReady, sourceWorkbook, sourceSheet);
+                    FeedbackNameMatches(feedbackReady[0].TemplateName, feedbackReady, sourceWorkbook, sourceSheet, conn);
                 }
                 RefreshCurrentQuotaGrid(mainForm);
 

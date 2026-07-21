@@ -55,6 +55,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 清理已迁移的 2020 概算/估算定额时，优先运行 `tools/Migrate2020EstimateTo2024/CleanupMigratedEstimate2024.ps1 -WhatIfOnly` 生成只读报告，再正式执行脚本；补充材料/机械必须按 `applied-manual-decisions.csv` 的真实写入代码删除，并加 `not exists(select 1 from 定额库消耗 where 电算代号=@code)` 保护，不能直接使用旧 `rollback.sql`。
 - Windows PowerShell 5 执行含中文表名/字段名的脚本时，脚本文件必须保存为带 BOM 的 UTF-8，否则可能把中文解析成乱码并导致语法错误。
 - PowerShell 反射验证脚本如果包含中文路径或中文测试文本，优先在当前 shell 直接执行，或保存为 UTF-8 脚本文件后用 `-File` 执行；不要把 here-string 管道给子 `powershell.exe -`，否则中文路径可能被管道编码破坏。
+- 反射加载 `RecoExpandPanel.dll` 并实际调用 `JavaScriptSerializer`/`System.Web.Extensions` 解析 JSONL 时使用 Windows PowerShell 5；`pwsh` 可能因 .NET Framework `System.Web` 类型不兼容把解析异常吞成空结果。纯源码检查或不触发该依赖的反射用例仍可使用 `pwsh`。
 - 在 PowerShell 中再调用 `powershell.exe -Command` 且子命令包含 `$变量` 时，优先把子命令保存为脚本后用 `-File`，或用单引号整体隔离子命令；不要让父级 PowerShell 提前展开子命令变量。
 - PowerShell 直接调用 `csc.exe` 时，先把输出和引用文件路径赋给变量，再传 `/out:$变量`、`/reference:$变量`；不要写 `/out:(Join-Path ...)` 或 `/reference:(Join-Path ...)`，否则 `csc` 会收到空路径参数。
 - `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 默认加载 `RecoQuotaRecommend/bin/RecoExpandPanel.dll`，不会自动编译当前源码；做源码级红绿回归时，应先把当前 14 个 C# 文件编译到工作区 `obj` 验证目录并设置 `RECO_EXPAND_DLL`，避免把旧 DLL 的结果误判为新代码结果。
@@ -69,6 +70,8 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - PowerShell 接收原生命令输出后需要使用 `.Count` 或 `[0]` 校验时，应写成 `[string[]]$items = @(...)`；单行输出若保留为普通字符串，`[0]` 只会得到首字符，可能造成错误的范围校验失败。
 - Windows 上用 `git archive` + `tar` 生成干净构建快照时，如果仓库包含大量中文文件名，应把归档范围限制为实际参与构建的源码子树（如 `tools/RecoExpandPanel`），并核对源码文件数量；不要无条件归档整个仓库，避免 `tar` 因中文路径解码失败。
 - 修改已含中文字符串的 C# 源码时，避免用 PowerShell `Set-Content` 默认编码整文件重写；优先用补丁方式，必要时用 `.NET UTF8Encoding(false)` 并把新增中文字符串写成 `\u` 转义，防止产生无关编码差异。
+- 新增或修复绑定学习字段时，必须按“数据源 -> 预览对象 -> `ExcelQuotaLink` XML -> `mapping-boxes.jsonl` -> `BindingLog`/聚合表 -> 推荐读取”逐段核对；Excel 工程量单位与定额目标单位要分别做回归，不能因预览对象已有字段就认定持久化链已传递。
+- 绑定学习的聚合签名只使用归一化工程量名称（兼容 `名称|`），Excel 工程量单位仅作流水审计；推荐数量必须用当前 Excel 单位和当前运行版本定额单位现场换算，不得学习或复用原绑定表达式中的 `/1000`、`*1.05` 等运算。多单元格正向加项只拆工程量别名，各别名指向原表达式的完整组件框，组件内目标共用同一套编制办法和稳定条目信息。
 - C# 5 代码中不要在 `||`/`&&` 短路条件里依赖 `out` 参数一定赋值；用于错误文案的 `out` 变量先给默认值，避免 `CS0165`。
 - 用 Windows PowerShell 5 反射调用 WinForms 私有构造器做冒烟测试时，先设 `$ErrorActionPreference = 'Stop'`，并把 `New-Object` 返回控件的 `.PSObject.BaseObject` 传给反射 API；泛型 `List<T>`、`HashSet<T>` 等参数也要拆包，否则类型包装错误可能只产生非终止错误并让命令假通过。反射方法只接收一个泛型集合参数时，不要直接用 `[object[]]@($list)`，应先创建长度为 1 的 `object[]` 再将 `.PSObject.BaseObject` 赋给第 0 项，避免 PowerShell 把集合展开成多个参数。反射读取 `List<T>` 后若经辅助函数返回并继续使用 `.Count`/索引，辅助函数应使用 `Write-Output -NoEnumerate`，避免单元素集合被自动展开成标量。
 - 2024 软件预算项目输入 2020 概算/估算定额时，首要检查 `项目设置 -> 定额选择` 是否勾选了迁移书号，或数据库 `项目信息.标准定额应用` 是否包含对应书号。未勾选时会出现“定额编号无效或费用类型不匹配”、计算单价为 0 或“无法找到定额消耗数据”等现象；勾选后 2024 原生辅助查询、输入和计算即可使用迁移定额。
