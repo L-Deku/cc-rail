@@ -21,8 +21,8 @@ function Get-ProjectInfo {
   $info = @{ Ok = $false; Method = ''; Entries = @{}; QuotaUnits = @{} }
   try {
     $methodNo = [string](Invoke-RecoScalar -Server $Server -Database $Db -Sql "SELECT TOP 1 编制办法文号 FROM 项目信息")
-    if ($methodNo -match '2024') { $info.Method = '2024' }
-    elseif ($methodNo -match '2020|30号文') { $info.Method = '2020' }   # 30号文=2020办法文号
+    if ($methodNo -match '2024|TB\s*10801') { $info.Method = '2024' }
+    elseif ($methodNo -match '2020|30号文|101号文|101.*估算|国铁科法.*2017') { $info.Method = '2020' }   # 2020 定额库分区，可同时包含 30 号文预算和 101 号文估算
     else { $info.Method = $methodNo }
     $entries = Invoke-RecoQuery -Server $Server -Database $Db -Sql "SELECT 条目序号, 条目编号, 工程或费用项目名称 FROM 章节表"
     foreach ($e in $entries.Rows) { $info.Entries[[string]$e.条目序号] = @{ Code = [string]$e.条目编号; Name = [string]$e.工程或费用项目名称 } }

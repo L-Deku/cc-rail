@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..\..')).Path
@@ -17,6 +17,8 @@ function Assert-Contains([string]$Text, [string]$Expected, [string]$Message) {
 
 Assert-Contains $excelLink 'ExtractPositiveAdditiveCellAddresses' '缺少正向相加单元格拆分入口。'
 Assert-Contains $excelLink 'BuildBindingFeedbackGroups' '缺少按原始表达式构建独立学习组的入口。'
+Assert-Contains $excelLink 'string entryScope = String.IsNullOrWhiteSpace(link.EntryCode) ? link.ChapterSeq : link.EntryCode;' '绑定组件分组没有使用稳定条目边界。'
+Assert-Contains $excelLink 'existing["entry_code"] = group.EntryCode ?? "";' '本机待同步组件没有保存条目上下文。'
 Assert-Contains $excelLink 'group.Targets.Add' '表达式学习组没有保留完整组件框目标。'
 Assert-Contains $excelLink 'public string QuotaUnit { get; set; }' 'ExcelQuotaLink 没有持久化定额单位。'
 Assert-Contains $excelLink 'public string EntryName { get; set; }' 'ExcelQuotaLink 没有持久化条目名称。'
@@ -125,10 +127,24 @@ try {
     $linkType.GetProperty('Method', $flags).SetValue($secondLink, '2024', $null)
     $links.Add($secondLink, 'HRB400钢筋 kg')
 
+    # 同一个来源表达式若属于不同稳定条目，必须拆成不同组件框，不能因地址相同而串组。
+    $otherEntryLink = [Activator]::CreateInstance($linkType)
+    $linkType.GetProperty('ExcelPath', $flags).SetValue($otherEntryLink, $fixturePath, $null)
+    $linkType.GetProperty('WorksheetName', $flags).SetValue($otherEntryLink, 'Sheet1', $null)
+    $linkType.GetProperty('CellAddress', $flags).SetValue($otherEntryLink, 'F1', $null)
+    $linkType.GetProperty('Expression', $flags).SetValue($otherEntryLink, 'F1/1000+F2/1000', $null)
+    $linkType.GetProperty('QuotaCode', $flags).SetValue($otherEntryLink, 'QY-999', $null)
+    $linkType.GetProperty('QuotaName', $flags).SetValue($otherEntryLink, '另一条目同源表达式', $null)
+    $linkType.GetProperty('QuotaUnit', $flags).SetValue($otherEntryLink, 't', $null)
+    $linkType.GetProperty('EntryCode', $flags).SetValue($otherEntryLink, '0301-01', $null)
+    $linkType.GetProperty('EntryName', $flags).SetValue($otherEntryLink, '独立条目', $null)
+    $linkType.GetProperty('Method', $flags).SetValue($otherEntryLink, '2024', $null)
+    $links.Add($otherEntryLink, 'HRB400钢筋 kg')
+
     $buildGroups = $type.GetMethod('BuildBindingFeedbackGroups', $flags)
     if ($null -eq $buildGroups) { throw '编译结果缺少 BuildBindingFeedbackGroups。' }
     $groups = @($buildGroups.Invoke($null, @($links.PSObject.BaseObject)))
-    if ($groups.Count -ne 4) { throw "两条表达式的四个正向来源单元格应各自形成别名，实际 $($groups.Count) 套。" }
+    if ($groups.Count -ne 6) { throw "表达式相同但条目不同也应拆组，预期六个正向来源别名，实际 $($groups.Count) 套。" }
     $actual = @()
     foreach ($group in $groups) {
         $groupType = $group.GetType()
@@ -150,6 +166,8 @@ try {
     $expected = @(
         'F1|HRB400钢筋|kg|1|2024|0101-01|沉井工程|QY-317:t,QY-318:10m3',
         'F2|HPB300钢筋|kg|2|2024|0101-01|沉井工程|QY-317:t,QY-318:10m3',
+        'F1|HRB400钢筋|kg|1|2024|0301-01|独立条目|QY-999:t',
+        'F2|HPB300钢筋|kg|2|2024|0301-01|独立条目|QY-999:t',
         'F3|HRB400钢筋|kg|3|2024|0201-01|另一处钢筋|QY-317:t',
         'F4|HPB300钢筋|kg|4|2024|0201-01|另一处钢筋|QY-317:t'
     ) | Sort-Object
@@ -168,9 +186,23 @@ if ($normalizeLearningSignature.Invoke($null, @('钢筋|KG')) -ne '钢筋|' -or
     $normalizeLearningSignature.Invoke($null, @('钢筋|T')) -ne '钢筋|') {
     throw '旧名称|单位签名没有归并为名称级签名。'
 }
+$buildQuantitySignature = $type.GetMethod('BuildSmartQuantitySignature', $flags)
+if ($buildQuantitySignature.Invoke($null, @('HRB400钢筋 kg', 'kg')) -ne 'HRB400钢筋|') {
+    throw '旧名称尾部嵌入单位没有借助 QuantityAlias 归并为名称级签名。'
+}
+$legacyAliases = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
+$legacyAliases['HRB400钢筋KG|'] = 'HRB400钢筋|'
+$resolveSqlSignature = $type.GetMethod('ResolveSmartSqlSignature', $flags)
+$resolveArgs = [object[]]::new(2); $resolveArgs[0] = 'HRB400钢筋KG|'; $resolveArgs[1] = $legacyAliases.PSObject.BaseObject
+if ($resolveSqlSignature.Invoke($null, $resolveArgs.PSObject.BaseObject) -ne 'HRB400钢筋|') {
+    throw 'SQL 存量嵌入单位签名没有通过 QuantityAlias 桥接到名称级签名。'
+}
 $buildQty = $type.GetMethod('BuildNameDrivenQtyText', $flags)
 if ($buildQty.Invoke($null, @('2700.2', 'kg', 't')) -ne '2700.2/1000') { throw 'kg 到 t 的当前单位换算错误。' }
 if ($buildQty.Invoke($null, @('2', 't', 't')) -ne '2') { throw 't 到 t 不应重复除以1000。' }
+if ($buildQty.Invoke($null, @('100', 'm2', 'm3')) -ne '100') { throw 'm2 到 m3 不应静默使用定额单位前缀换算。' }
+if ($buildQty.Invoke($null, @('100', '', '10m3')) -ne '100') { throw '缺少当前工程量单位时不应静默换算。' }
+if ($buildQty.Invoke($null, @('100', '天然密实方', '压实方')) -ne '100') { throw '不同方态不应静默按 1:1 换算。' }
 Write-Host 'PASS 名称级签名兼容旧单位签名且当前单位换算不重复'
 
 Write-Host 'Test-BindingLearningImmediate: PASS'

@@ -58,7 +58,8 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 反射加载 `RecoExpandPanel.dll` 并实际调用 `JavaScriptSerializer`/`System.Web.Extensions` 解析 JSONL 时使用 Windows PowerShell 5；`pwsh` 可能因 .NET Framework `System.Web` 类型不兼容把解析异常吞成空结果。纯源码检查或不触发该依赖的反射用例仍可使用 `pwsh`。
 - 在 PowerShell 中再调用 `powershell.exe -Command` 且子命令包含 `$变量` 时，优先把子命令保存为脚本后用 `-File`，或用单引号整体隔离子命令；不要让父级 PowerShell 提前展开子命令变量。
 - PowerShell 直接调用 `csc.exe` 时，先把输出和引用文件路径赋给变量，再传 `/out:$变量`、`/reference:$变量`；不要写 `/out:(Join-Path ...)` 或 `/reference:(Join-Path ...)`，否则 `csc` 会收到空路径参数。
-- `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 默认加载 `RecoQuotaRecommend/bin/RecoExpandPanel.dll`，不会自动编译当前源码；做源码级红绿回归时，应先把当前 14 个 C# 文件编译到工作区 `obj` 验证目录并设置 `RECO_EXPAND_DLL`，避免把旧 DLL 的结果误判为新代码结果。
+- SQL Server 结构迁移需要动态删除约束时，不要在 `EXEC(...)` 参数中直接拼接 `REPLACE`/`QUOTENAME` 等函数；先组装到 `NVARCHAR(MAX)` 变量，再用 `sys.sp_executesql` 执行，并重跑幂等 schema 脚本验证。
+- `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 默认加载 `RecoQuotaRecommend/bin/RecoExpandPanel.dll`，不会自动编译当前源码；做源码级红绿回归时，应先把 `tools/RecoExpandPanel/` 当前全部 C# 源文件编译到工作区验证目录并设置 `RECO_EXPAND_DLL`，避免把旧 DLL 的结果误判为新代码结果。
 - `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 在非交互 WinForms 环境可能卡在“定额候选下拉与组件组界面确认”之后的滚动视口用例；连续停在该位置时应按“综合回归未完成”报告，终止并核对本次测试启动的精确进程，不得把前半段 PASS 当作全部通过，也不要反复无上限重跑。
 - 读取 UTF-8 附件或中文文本时，如 PowerShell `Get-Content` 输出乱码，先设置 `[Console]::OutputEncoding`，并优先用 `[System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes(...))` 按字节解码验证内容。
 - PowerShell 部署/验证脚本需要格式化多段 `foreach` 输出时，优先先收集到数组或 `List[object]` 再统一 `Format-Table`；不要把脚本块闭合后直接接管道，容易触发 `An empty pipe element is not allowed` 解析错误。
@@ -72,6 +73,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 修改已含中文字符串的 C# 源码时，避免用 PowerShell `Set-Content` 默认编码整文件重写；优先用补丁方式，必要时用 `.NET UTF8Encoding(false)` 并把新增中文字符串写成 `\u` 转义，防止产生无关编码差异。
 - 新增或修复绑定学习字段时，必须按“数据源 -> 预览对象 -> `ExcelQuotaLink` XML -> `mapping-boxes.jsonl` -> `BindingLog`/聚合表 -> 推荐读取”逐段核对；Excel 工程量单位与定额目标单位要分别做回归，不能因预览对象已有字段就认定持久化链已传递。
 - 绑定学习的聚合签名只使用归一化工程量名称（兼容 `名称|`），Excel 工程量单位仅作流水审计；推荐数量必须用当前 Excel 单位和当前运行版本定额单位现场换算，不得学习或复用原绑定表达式中的 `/1000`、`*1.05` 等运算。多单元格正向加项只拆工程量别名，各别名指向原表达式的完整组件框，组件内目标共用同一套编制办法和稳定条目信息。
+- 跨量纲业务换算不得简化成历史单元格地址或一次性结果；应保存 `V0/V1...` 参数公式及每个参数的名称、单位和名称级签名。推荐时只用当前表同章节、邻近行内精确且唯一的参数重新计算；缺参数、同名歧义或单位不兼容时必须取消自动勾选。`F10/1000+F11/1000` 仍按独立正向别名学习，不得因此生成共享公式或跨行合计。
 - C# 5 代码中不要在 `||`/`&&` 短路条件里依赖 `out` 参数一定赋值；用于错误文案的 `out` 变量先给默认值，避免 `CS0165`。
 - 用 Windows PowerShell 5 反射调用 WinForms 私有构造器做冒烟测试时，先设 `$ErrorActionPreference = 'Stop'`，并把 `New-Object` 返回控件的 `.PSObject.BaseObject` 传给反射 API；泛型 `List<T>`、`HashSet<T>` 等参数也要拆包，否则类型包装错误可能只产生非终止错误并让命令假通过。反射方法只接收一个泛型集合参数时，不要直接用 `[object[]]@($list)`，应先创建长度为 1 的 `object[]` 再将 `.PSObject.BaseObject` 赋给第 0 项，避免 PowerShell 把集合展开成多个参数。反射读取 `List<T>` 后若经辅助函数返回并继续使用 `.Count`/索引，辅助函数应使用 `Write-Output -NoEnumerate`，避免单元素集合被自动展开成标量。
 - 2024 软件预算项目输入 2020 概算/估算定额时，首要检查 `项目设置 -> 定额选择` 是否勾选了迁移书号，或数据库 `项目信息.标准定额应用` 是否包含对应书号。未勾选时会出现“定额编号无效或费用类型不匹配”、计算单价为 0 或“无法找到定额消耗数据”等现象；勾选后 2024 原生辅助查询、输入和计算即可使用迁移定额。

@@ -594,6 +594,12 @@ namespace RecoNet
             {
                 return true;
             }
+            // 压实方/天然密实方等语义单位只在文本完全相同时按 1:1；
+            // 不得剥成 m3 后静默换算，必须使用已确认的业务系数。
+            if (!IsExcelLinkPureScaleUnit(excelUnitText) || !IsExcelLinkPureScaleUnit(quotaUnitText))
+            {
+                return false;
+            }
 
             ExcelLinkUnitScale excelUnit = ParseExcelLinkUnitScale(excelUnitText);
             ExcelLinkUnitScale quotaUnit = ParseExcelLinkUnitScale(quotaUnitText);
@@ -608,6 +614,31 @@ namespace RecoNet
 
             suffix = FormatExcelLinkScaleSuffix(excelUnit.Scale / quotaUnit.Scale);
             return true;
+        }
+
+        private static bool IsExcelLinkPureScaleUnit(string unitText)
+        {
+            string unit = NormalizeExcelLinkUnit(unitText);
+            if (String.IsNullOrEmpty(unit)) return false;
+            if (unit[0] == '\u4e07') unit = unit.Substring(1);
+            else
+            {
+                int index = 0;
+                bool hasDot = false;
+                while (index < unit.Length)
+                {
+                    char ch = unit[index];
+                    if (Char.IsDigit(ch)) { index++; continue; }
+                    if (ch == '.' && !hasDot) { hasDot = true; index++; continue; }
+                    break;
+                }
+                if (index > 0) unit = unit.Substring(index);
+            }
+            if (unit == "m" || unit == "m2" || unit == "m3" || unit == "kg" || unit == "km" || unit == "hm" || unit == "t")
+            {
+                return true;
+            }
+            return IsExcelLinkCountUnit(unit);
         }
 
         private static bool TryBuildQuotaUnitFallbackSuffix(string quotaUnitText, out string suffix)
@@ -2007,6 +2038,92 @@ namespace RecoNet
             return result;
         }
 
+        // 从一个只含单个来源单元格的正向加项中提取线性乘数。
+        // 例如 F10*0.2+F11/4 分别得到 0.2 和 0.25；F10*F11 或含函数的复杂式不学习。
+        private static bool TryExtractPositiveCellScaleFactor(string expression, string sourceCell, out decimal factor)
+        {
+            factor = 0m;
+            string normalized = NormalizeExpressionOperators(expression);
+            string normalizedCell = NormalizeExpressionOperators(sourceCell);
+            if (normalized.Length == 0 || normalizedCell.Length == 0) return false;
+
+            int depth = 0;
+            int termStart = 0;
+            bool positive = true;
+            bool found = false;
+            for (int i = 0; i <= normalized.Length; i++)
+            {
+                bool atEnd = i == normalized.Length;
+                char ch = atEnd ? '\0' : normalized[i];
+                if (!atEnd)
+                {
+                    if (ch == '(') depth++;
+                    else if (ch == ')' && depth > 0) depth--;
+                }
+                if (!atEnd && (ch != '+' && ch != '-' || depth != 0)) continue;
+
+                string term = normalized.Substring(termStart, i - termStart).Trim();
+                if (positive && term.Length > 0 && term.IndexOf('-') < 0)
+                {
+                    List<string> addresses = ExtractCellAddressesFromExpression(term);
+                    if (addresses.Count == 1 && String.Equals(addresses[0], normalizedCell, StringComparison.OrdinalIgnoreCase))
+                    {
+                        string pattern = "(?<![A-Z0-9])" + System.Text.RegularExpressions.Regex.Escape(normalizedCell) + "(?![A-Z0-9])";
+                        string numericTerm = System.Text.RegularExpressions.Regex.Replace(term, pattern, "1",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        if (ExtractCellAddressesFromExpression(numericTerm).Count > 0) return false;
+                        decimal termFactor;
+                        string error;
+                        if (!TryEvaluateDecimal(numericTerm, out termFactor, out error) || termFactor <= 0m) return false;
+                        factor += termFactor;
+                        found = true;
+                    }
+                }
+
+                if (!atEnd)
+                {
+                    positive = ch == '+';
+                    termStart = i + 1;
+                }
+            }
+            return found && factor > 0m;
+        }
+
+        // 同量纲单位由当前单位规则实时换算；只有基础单位不兼容时才学习明确表达式里的业务系数。
+        private static bool TryBuildCrossUnitLearningFactor(string expression, string sourceCell,
+            string sourceUnit, string targetUnit, out string factorText)
+        {
+            factorText = "";
+            if (String.IsNullOrWhiteSpace(sourceUnit) || String.IsNullOrWhiteSpace(targetUnit)) return false;
+            string suffix;
+            if (TryBuildExcelLinkUnitScaleSuffix(sourceUnit, targetUnit, out suffix)) return false;
+
+            decimal factor;
+            if (!TryExtractPositiveCellScaleFactor(expression, sourceCell, out factor)) return false;
+            factorText = factor.ToString("0.############", CultureInfo.InvariantCulture);
+            return factorText.Length > 0;
+        }
+
+        private static bool TryBuildCellTokenFormula(string expression, List<string> addresses, out string formulaTemplate)
+        {
+            formulaTemplate = NormalizeExpressionOperators(expression);
+            if (String.IsNullOrWhiteSpace(formulaTemplate) || addresses == null || addresses.Count == 0) return false;
+            for (int i = 0; i < addresses.Count; i++)
+            {
+                string address = NormalizeExpressionOperators(addresses[i]);
+                string pattern = "(?<![A-Z0-9])" + System.Text.RegularExpressions.Regex.Escape(address) + "(?![A-Z0-9])";
+                formulaTemplate = System.Text.RegularExpressions.Regex.Replace(formulaTemplate, pattern, "V" + i.ToString(CultureInfo.InvariantCulture),
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            }
+            // V0/V1 本身也符合 Excel 单元格地址的字面形式，不能再用地址解析器判断残留。
+            // 所有原地址已在上面逐一替换；这里用字符白名单并以数值探针验证完整语法。
+            if (!System.Text.RegularExpressions.Regex.IsMatch(formulaTemplate, "^[V0-9+\\-*/().\\s]+$")) return false;
+            string probe = System.Text.RegularExpressions.Regex.Replace(formulaTemplate, "V[0-9]+", "1");
+            decimal value;
+            string error;
+            return TryEvaluateDecimal(probe, out value, out error);
+        }
+
         private static string BuildQuantityNameFromExcelRow(AiExcelSelectionContext selection, string cellAddress)
         {
             CellRef target;
@@ -2140,6 +2257,7 @@ namespace RecoNet
             public string Code;
             public string Name;
             public string Unit;
+            public string FormulaTemplate; // V0/V1... 占位的已确认跨单位数量公式
         }
 
         private sealed class MappingFeedbackGroup
@@ -2156,6 +2274,7 @@ namespace RecoNet
             public string BoxId;          // 本机对应框编号(SQL 增量聚合复用)
             public string Expression;     // 原始绑定表达式(多单元格别名追溯)
             public string SourceCell;     // 当前别名对应的独立来源单元格
+            public List<QuantityFormulaOperandInfo> FormulaOperands = new List<QuantityFormulaOperandInfo>();
             public List<MappingFeedbackTarget> Targets = new List<MappingFeedbackTarget>();
         }
 
@@ -2165,6 +2284,7 @@ namespace RecoNet
             public string FallbackName;
             public List<string> Addresses = new List<string>();
             public List<ExcelQuotaLink> Targets = new List<ExcelQuotaLink>();
+            public bool IsCompositeFormula;
         }
 
         // 绑定Excel工程量成功后，把“工程量全名 -> 定额编号”写入推荐插件的定额对应框（mapping-boxes.jsonl）。
@@ -2208,11 +2328,9 @@ namespace RecoNet
                     .ToList();
                 string expression = String.IsNullOrWhiteSpace(source.Link.Expression) ? source.Link.CellAddress : source.Link.Expression;
                 source.Addresses = ExtractPositiveAdditiveCellAddresses(expression);
-                if (source.Addresses.Count == 0)
-                {
-                    string firstAddress = ExtractFirstCellAddress(expression);
-                    if (!String.IsNullOrWhiteSpace(firstAddress)) source.Addresses.Add(firstAddress);
-                }
+                List<string> allAddresses = ExtractCellAddressesFromExpression(expression);
+                source.IsCompositeFormula = allAddresses.Count > 0 && source.Addresses.Count != allAddresses.Count;
+                if (source.IsCompositeFormula) source.Addresses = allAddresses;
                 sources.Add(source);
             }
 
@@ -2231,21 +2349,42 @@ namespace RecoNet
             ExcelSyncReadContext readContext = new ExcelSyncReadContext(readLinks);
             foreach (BindingFeedbackSource source in sources)
             {
+                List<QuantityFormulaOperandInfo> operands = new List<QuantityFormulaOperandInfo>();
                 for (int addressIndex = 0; addressIndex < source.Addresses.Count; addressIndex++)
                 {
                     string address = source.Addresses[addressIndex];
                     CellRef cell;
-                    if (!TryParseCellAddress(address, out cell)) continue;
+                    if (!TryParseCellAddress(address, out cell)) break;
                     string fullName = ReadRowNameAt(source.Link.ExcelPath, source.Link.WorksheetName, address, hiddenColumnCache, mergedRegionCache, readContext, true);
                     string unit = ReadTargetUnitNearQuantity(source.Link.ExcelPath, source.Link.WorksheetName, cell.Row, cell.Column, hiddenColumnCache, readContext);
                     if (String.IsNullOrWhiteSpace(fullName) && addressIndex == 0) fullName = source.FallbackName;
                     string name = StripTrailingQuantityUnit(fullName, unit);
-                    if (String.IsNullOrWhiteSpace(name)) continue;
+                    if (String.IsNullOrWhiteSpace(name)) break;
+                    string operandSignature = NormalizeForSignature(name) + "|";
+                    if (operandSignature.Length > 450) operandSignature = operandSignature.Substring(0, 450);
+                    operands.Add(new QuantityFormulaOperandInfo { Name = name, Unit = unit ?? "", Signature = operandSignature });
+                }
+                if (operands.Count != source.Addresses.Count || operands.Count == 0) continue;
+
+                string compositeTemplate = "";
+                if (source.IsCompositeFormula && !TryBuildCellTokenFormula(
+                    String.IsNullOrWhiteSpace(source.Link.Expression) ? source.Link.CellAddress : source.Link.Expression,
+                    source.Addresses, out compositeTemplate))
+                {
+                    continue;
+                }
+
+                int groupCount = source.IsCompositeFormula ? 1 : source.Addresses.Count;
+                for (int addressIndex = 0; addressIndex < groupCount; addressIndex++)
+                {
+                    int operandIndex = source.IsCompositeFormula ? 0 : addressIndex;
+                    string address = source.Addresses[operandIndex];
+                    QuantityFormulaOperandInfo anchor = operands[operandIndex];
 
                     MappingFeedbackGroup group = new MappingFeedbackGroup
                     {
-                        QuantityName = name,
-                        QuantityUnit = unit ?? "",
+                        QuantityName = anchor.Name,
+                        QuantityUnit = anchor.Unit,
                         Method = source.Link.Method ?? "",
                         ProjectId = source.Link.ProjectId ?? "",
                         EntryCode = source.Link.EntryCode ?? "",
@@ -2253,10 +2392,26 @@ namespace RecoNet
                         Expression = String.IsNullOrWhiteSpace(source.Link.Expression) ? source.Link.CellAddress : source.Link.Expression,
                         SourceCell = address
                     };
+                    if (source.IsCompositeFormula) group.FormulaOperands.AddRange(operands);
+                    else group.FormulaOperands.Add(anchor);
                     FillGroupSheetContext(group, source.Link, address);
                     foreach (ExcelQuotaLink target in source.Targets)
                     {
-                        group.Targets.Add(new MappingFeedbackTarget { Kind = "quota", Code = target.QuotaCode, Name = target.QuotaName, Unit = target.QuotaUnit ?? "" });
+                        string conversionFactor;
+                        string formulaTemplate = compositeTemplate;
+                        if (!source.IsCompositeFormula &&
+                            TryBuildCrossUnitLearningFactor(group.Expression, address, group.QuantityUnit, target.QuotaUnit, out conversionFactor))
+                        {
+                            formulaTemplate = conversionFactor == "1" ? "V0" : "V0*" + conversionFactor;
+                        }
+                        group.Targets.Add(new MappingFeedbackTarget
+                        {
+                            Kind = "quota",
+                            Code = target.QuotaCode,
+                            Name = target.QuotaName,
+                            Unit = target.QuotaUnit ?? "",
+                            FormulaTemplate = formulaTemplate
+                        });
                     }
                     groups.Add(group);
                 }
@@ -2268,7 +2423,10 @@ namespace RecoNet
         {
             if (link == null) return "";
             string expression = String.IsNullOrWhiteSpace(link.Expression) ? link.CellAddress : link.Expression;
-            return NormalizeExcelLinkCachePath(link.ExcelPath) + "|" + (link.WorksheetName ?? "").Trim() + "|" + NormalizeExpressionOperators(expression);
+            string entryScope = String.IsNullOrWhiteSpace(link.EntryCode) ? link.ChapterSeq : link.EntryCode;
+            return NormalizeExcelLinkCachePath(link.ExcelPath) + "|" + (link.WorksheetName ?? "").Trim() + "|" +
+                NormalizeExpressionOperators(expression) + "|" + (link.Method ?? "").Trim() + "|" +
+                (link.ProjectId ?? "").Trim() + "|" + (entryScope ?? "").Trim();
         }
 
         private static string StripTrailingQuantityUnit(string fullName, string unit)
@@ -2367,8 +2525,10 @@ namespace RecoNet
                 BuildStableMappingBoxId(String.Join("|", targetKeys.ToArray()));
             group.BoxId = boxId;
             string signature = NormalizeForSignature(group.QuantityName) + "|";
+            string groupMethod = (group.Method ?? "").Trim();
             List<Dictionary<string, string>> existingRows = rows.Where(row =>
                 String.Equals(GetFlat(row, "box_id"), boxId, StringComparison.OrdinalIgnoreCase) &&
+                String.Equals(GetFlat(row, "method").Trim(), groupMethod, StringComparison.OrdinalIgnoreCase) &&
                 String.Equals(NormalizeForSignature(GetFlat(row, "quantity_name")) + "|", signature, StringComparison.OrdinalIgnoreCase))
                 .ToList();
             int weight = (existingRows.Count == 0 ? 10 : existingRows.Max(row => ReadFlatInt(row, "weight", 0))) + 5;
@@ -2395,6 +2555,27 @@ namespace RecoNet
                 if (!String.IsNullOrWhiteSpace(target.Unit) || !existing.ContainsKey("target_unit")) existing["target_unit"] = target.Unit ?? "";
                 existing["quantity_name"] = group.QuantityName;
                 existing["quantity_unit"] = group.QuantityUnit ?? "";
+                if (!String.IsNullOrWhiteSpace(group.Method) || !existing.ContainsKey("method")) existing["method"] = group.Method ?? "";
+                if (!String.IsNullOrWhiteSpace(group.ProjectId) || !existing.ContainsKey("project_id")) existing["project_id"] = group.ProjectId ?? "";
+                if (!String.IsNullOrWhiteSpace(group.EntryCode) || !existing.ContainsKey("entry_code")) existing["entry_code"] = group.EntryCode ?? "";
+                if (!String.IsNullOrWhiteSpace(group.EntryName) || !existing.ContainsKey("entry_name")) existing["entry_name"] = group.EntryName ?? "";
+                if (!String.IsNullOrWhiteSpace(target.FormulaTemplate) && group.FormulaOperands.Count > 0)
+                {
+                    existing["formula_rule_hash"] = BuildLearningFormulaRuleHash(group, target);
+                    existing["formula_template"] = target.FormulaTemplate;
+                    existing["formula_target_unit"] = target.Unit ?? "";
+                    existing["formula_method"] = group.Method ?? "";
+                    existing["formula_entry_code"] = group.EntryCode ?? "";
+                    existing["formula_operand_count"] = group.FormulaOperands.Count.ToString(CultureInfo.InvariantCulture);
+                    for (int operandIndex = 0; operandIndex < group.FormulaOperands.Count; operandIndex++)
+                    {
+                        QuantityFormulaOperandInfo operand = group.FormulaOperands[operandIndex];
+                        string prefix = "formula_operand_" + operandIndex.ToString(CultureInfo.InvariantCulture) + "_";
+                        existing[prefix + "name"] = operand.Name ?? "";
+                        existing[prefix + "unit"] = operand.Unit ?? "";
+                        existing[prefix + "signature"] = operand.Signature ?? "";
+                    }
+                }
                 existing["weight"] = weight.ToString(CultureInfo.InvariantCulture);
                 existing["accepted_count"] = accepted.ToString(CultureInfo.InvariantCulture);
                 existing["corrected_count"] = "0";
@@ -2419,7 +2600,7 @@ namespace RecoNet
         {
             foreach (IGrouping<string, Dictionary<string, string>> boxGroup in rows
                 .Where(row => !String.IsNullOrWhiteSpace(GetFlat(row, "box_id")))
-                .GroupBy(row => GetFlat(row, "box_id"), StringComparer.OrdinalIgnoreCase)
+                .GroupBy(row => GetFlat(row, "method").Trim() + "\n" + GetFlat(row, "box_id"), StringComparer.OrdinalIgnoreCase)
                 .ToList())
             {
                 List<IGrouping<string, Dictionary<string, string>>> sampleGroups = boxGroup
@@ -2440,7 +2621,7 @@ namespace RecoNet
                     StringComparer.OrdinalIgnoreCase);
 
                 rows.RemoveAll(row =>
-                    String.Equals(GetFlat(row, "box_id"), boxGroup.Key, StringComparison.OrdinalIgnoreCase) &&
+                    String.Equals(GetFlat(row, "method").Trim() + "\n" + GetFlat(row, "box_id"), boxGroup.Key, StringComparison.OrdinalIgnoreCase) &&
                     removeSamples.Contains(NormalizeForSignature(GetFlat(row, "quantity_name")) + "|"));
             }
         }

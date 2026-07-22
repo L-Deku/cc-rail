@@ -61,6 +61,13 @@ namespace RecoNet
             public List<FillPreviewItem> Items = new List<FillPreviewItem>();
         }
 
+        public sealed class QuantityFormulaOperandInfo
+        {
+            public string Name;
+            public string Unit;
+            public string Signature;
+        }
+
         // 预览/写入用的一条结果
         public sealed class FillPreviewItem
         {
@@ -77,6 +84,8 @@ namespace RecoNet
             public string TargetUnit;         // 目标行 Excel 侧单位文本(数量列左邻格)，供单位换算
             public string TargetQuantityText; // 目标行原始数量文本(未加换算后缀)，重绑时的换算基数
             public string QuantityText;
+            public string FormulaTemplate;    // V0/V1... 占位的已确认跨单位数量公式
+            public List<QuantityFormulaOperandInfo> FormulaOperands;
             public string Status;
             public int OrderInItem;
             public long SourceQuotaSeq;  // 源定额序号（写入时直接复制该行）

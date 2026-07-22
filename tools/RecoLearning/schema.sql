@@ -25,6 +25,14 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_BindingLog_target_code')
   CREATE INDEX IX_BindingLog_target_code ON dbo.BindingLog(target_code);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_BindingLog_group_key')
   CREATE INDEX IX_BindingLog_group_key ON dbo.BindingLog(group_key);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_BindingLog_recommend_entry')
+  CREATE INDEX IX_BindingLog_recommend_entry
+    ON dbo.BindingLog(method, target_kind, entry_code, target_code)
+    INCLUDE(entry_name);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_BindingLog_recommend_source')
+  CREATE INDEX IX_BindingLog_recommend_source
+    ON dbo.BindingLog(method, source, target_kind, id)
+    INCLUDE(project_id, target_code);
 
 IF OBJECT_ID('dbo.QuantityAlias') IS NULL
 CREATE TABLE dbo.QuantityAlias (
@@ -62,14 +70,73 @@ CREATE TABLE dbo.QuotaBoxTarget (
 IF OBJECT_ID('dbo.SignatureBoxMap') IS NULL
 CREATE TABLE dbo.SignatureBoxMap (
   signature       NVARCHAR(450) NOT NULL,
+  method          NVARCHAR(50) NOT NULL DEFAULT(''),
   box_id          NVARCHAR(64) NOT NULL,
   weight          INT NOT NULL DEFAULT(0),
   accepted_count  INT NOT NULL DEFAULT(0),
   corrected_count INT NOT NULL DEFAULT(0),
   rejected_count  INT NOT NULL DEFAULT(0),
   last_used_at    DATETIME2(0) NULL,
-  CONSTRAINT PK_SignatureBoxMap PRIMARY KEY (signature, box_id)
+  CONSTRAINT PK_SignatureBoxMap PRIMARY KEY (signature, method, box_id)
 );
+IF COL_LENGTH('dbo.SignatureBoxMap','method') IS NULL
+  ALTER TABLE dbo.SignatureBoxMap ADD method NVARCHAR(50) NOT NULL
+    CONSTRAINT DF_SignatureBoxMap_method DEFAULT('');
+IF NOT EXISTS (
+  SELECT 1
+  FROM sys.key_constraints kc
+  JOIN sys.index_columns ic ON ic.object_id=kc.parent_object_id AND ic.index_id=kc.unique_index_id
+  JOIN sys.columns c ON c.object_id=ic.object_id AND c.column_id=ic.column_id
+  WHERE kc.parent_object_id=OBJECT_ID('dbo.SignatureBoxMap') AND kc.type='PK' AND c.name='method'
+)
+BEGIN
+  DECLARE @SignatureBoxMapPk SYSNAME;
+  SELECT @SignatureBoxMapPk=kc.name
+  FROM sys.key_constraints kc
+  WHERE kc.parent_object_id=OBJECT_ID('dbo.SignatureBoxMap') AND kc.type='PK';
+  IF @SignatureBoxMapPk IS NOT NULL
+  BEGIN
+    DECLARE @DropSignatureBoxMapPk NVARCHAR(MAX);
+    SET @DropSignatureBoxMapPk=N'ALTER TABLE dbo.SignatureBoxMap DROP CONSTRAINT ' + QUOTENAME(@SignatureBoxMapPk);
+    EXEC sys.sp_executesql @DropSignatureBoxMapPk;
+  END;
+  ALTER TABLE dbo.SignatureBoxMap
+    ADD CONSTRAINT PK_SignatureBoxMap PRIMARY KEY (signature, method, box_id);
+END;
+
+IF OBJECT_ID('dbo.QuantityFormulaRule') IS NULL
+CREATE TABLE dbo.QuantityFormulaRule (
+  rule_hash        CHAR(32) PRIMARY KEY,
+  anchor_signature NVARCHAR(450) NOT NULL,
+  target_kind      NVARCHAR(20) NOT NULL,
+  target_code      NVARCHAR(100) NOT NULL,
+  target_unit      NVARCHAR(50) NOT NULL,
+  formula_template NVARCHAR(2000) NOT NULL,
+  method           NVARCHAR(50) NOT NULL DEFAULT(''),
+  entry_code       NVARCHAR(100) NOT NULL DEFAULT(''),
+  sample_count     INT NOT NULL DEFAULT(0),
+  first_seen       DATETIME2(0) NULL,
+  last_seen        DATETIME2(0) NULL
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_QuantityFormulaRule_lookup')
+  CREATE INDEX IX_QuantityFormulaRule_lookup
+    ON dbo.QuantityFormulaRule(anchor_signature, target_code, target_unit, method);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_QuantityFormulaRule_method')
+  CREATE INDEX IX_QuantityFormulaRule_method
+    ON dbo.QuantityFormulaRule(method, target_code)
+    INCLUDE(anchor_signature, target_kind, target_unit, formula_template, entry_code, sample_count, last_seen);
+
+IF OBJECT_ID('dbo.QuantityFormulaOperand') IS NULL
+CREATE TABLE dbo.QuantityFormulaOperand (
+  rule_hash         CHAR(32) NOT NULL,
+  operand_index     INT NOT NULL,
+  operand_signature NVARCHAR(450) NOT NULL,
+  operand_name      NVARCHAR(1000) NOT NULL DEFAULT(''),
+  operand_unit      NVARCHAR(50) NOT NULL DEFAULT(''),
+  CONSTRAINT PK_QuantityFormulaOperand PRIMARY KEY (rule_hash, operand_index)
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_QuantityFormulaOperand_signature')
+  CREATE INDEX IX_QuantityFormulaOperand_signature ON dbo.QuantityFormulaOperand(operand_signature);
 
 IF OBJECT_ID('dbo.EntryQuota') IS NULL
 CREATE TABLE dbo.EntryQuota (
@@ -129,6 +196,10 @@ CREATE TABLE dbo.SignatureEntryMap (
   last_used_at DATETIME2(0) NULL,
   CONSTRAINT PK_SignatureEntryMap PRIMARY KEY (signature, target_code, method, entry_code)
 );
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_SignatureEntryMap_method')
+  CREATE INDEX IX_SignatureEntryMap_method
+    ON dbo.SignatureEntryMap(method, target_code)
+    INCLUDE(signature, entry_code, entry_name, sample_count, last_used_at);
 
 IF OBJECT_ID('dbo.EngineeringTemplate') IS NULL
 CREATE TABLE dbo.EngineeringTemplate (

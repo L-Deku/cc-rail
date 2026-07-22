@@ -803,6 +803,11 @@ namespace RecoNet
                 NameQuotaCandidateGroup option = item.NameQuotaCandidates.FirstOrDefault(candidate =>
                     String.Equals(candidate.Label, label, StringComparison.Ordinal));
                 if (option == null) return;
+                if (HasUnsafeNameQuotaCandidate(option.Items))
+                {
+                    row.Cells["code"].ToolTipText = "该组件存在单位、条目或公式风险，不能直接确认，请先人工调整。";
+                    return;
+                }
 
                 updatingNameQuotaCell = true;
                 try
@@ -819,6 +824,15 @@ namespace RecoNet
                 FillPreviewItem item = row == null ? null : row.Tag as FillPreviewItem;
                 bool value = row != null && Convert.ToBoolean(row.Cells["sel"].Value ?? false);
                 if (item == null || !value || !item.NeedExactNameConfirmation) return;
+                List<FillPreviewItem> currentGroup = preview.Where(candidate => candidate != null &&
+                    candidate.IsNameDriven && candidate.TargetRow == item.TargetRow).ToList();
+                if (HasUnsafeNameQuotaCandidate(currentGroup))
+                {
+                    foreach (FillPreviewItem candidate in currentGroup) candidate.Selected = false;
+                    row.Cells["sel"].Value = false;
+                    row.Cells["sel"].ToolTipText = "该组件存在单位、条目或公式风险，不能直接确认，请先人工调整。";
+                    return;
+                }
 
                 updatingNameQuotaCell = true;
                 try
@@ -828,6 +842,11 @@ namespace RecoNet
                         RefreshTargetGroupInGrid(targetRow);
                 }
                 finally { updatingNameQuotaCell = false; }
+            }
+
+            private static bool HasUnsafeNameQuotaCandidate(IEnumerable<FillPreviewItem> items)
+            {
+                return items == null || items.Any(item => item == null || !String.IsNullOrWhiteSpace(item.Status));
             }
 
             // —— 条目树 ——
@@ -962,6 +981,23 @@ namespace RecoNet
                 }
             }
 
+            private string PromptTemplateCrossUnitFactor(string sourceUnit, string targetUnit, string quotaCode)
+            {
+                while (true)
+                {
+                    FactorInfo input = PromptFactor(this, "跨单位换算 " + (quotaCode ?? "") + " " + sourceUnit + " → " + targetUnit);
+                    if (input == null) return null;
+                    decimal value;
+                    if (!Decimal.TryParse(input.Factor, NumberStyles.Float, CultureInfo.InvariantCulture, out value) || value <= 0m)
+                    {
+                        MessageBox.Show(this, "换算系数必须大于 0。", "跨单位换算", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        continue;
+                    }
+                    decimal multiplier = input.Operator == "/" ? 1m / value : value;
+                    return multiplier.ToString("0.############", CultureInfo.InvariantCulture);
+                }
+            }
+
             // 右键：把软件定额输入表当前选中的一行，绑定为该预览行的复制来源（含所在条目）。
             // 注意：与"绑定Excel工程量"同款用主程序共享连接（克隆连接在部分环境登录失败，
             // 会导致 ResolveQuotaSequence 查不到序号）；共享连接不得 using 释放。
@@ -993,6 +1029,7 @@ namespace RecoNet
                     List<FillPreviewItem> replacements = new List<FillPreviewItem>();
                     List<string> errors = new List<string>();
                     Dictionary<string, string> itemNoCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    Dictionary<string, string> conversionFactors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                     foreach (DataGridViewRow row in rows)
                     {
                         ExcelQuotaLink link; string err;
@@ -1036,7 +1073,38 @@ namespace RecoNet
                         target.ItemNo = itemNo;
                         target.Unit = ResolveTemplateFillQuotaUnit(conn, row, link.QuotaSequence);
                         string qtyBase = String.IsNullOrEmpty(groupLeader.TargetQuantityText) ? groupLeader.QuantityText : groupLeader.TargetQuantityText;
-                        target.QuantityText = BuildNameDrivenQtyText(qtyBase, groupLeader.TargetUnit, target.Unit);
+                        if (String.IsNullOrWhiteSpace(groupLeader.TargetUnit) || String.IsNullOrWhiteSpace(target.Unit))
+                        {
+                            errors.Add((link.QuotaCode ?? "") + "：无法确认 Excel/定额单位，不能安全学习数量关系。");
+                            continue;
+                        }
+                        string standardSuffix;
+                        if (TryBuildExcelLinkUnitScaleSuffix(groupLeader.TargetUnit, target.Unit, out standardSuffix))
+                        {
+                            target.QuantityText = (qtyBase ?? "") + standardSuffix;
+                        }
+                        else
+                        {
+                            string pairKey = NormalizeExcelLinkUnit(groupLeader.TargetUnit) + "\n" + NormalizeExcelLinkUnit(target.Unit) + "\n" + (link.QuotaCode ?? "");
+                            string conversionFactor;
+                            if (!conversionFactors.TryGetValue(pairKey, out conversionFactor))
+                            {
+                                conversionFactor = PromptTemplateCrossUnitFactor(groupLeader.TargetUnit, target.Unit, link.QuotaCode);
+                                if (conversionFactor == null) return;
+                                conversionFactors[pairKey] = conversionFactor;
+                            }
+                            target.FormulaTemplate = conversionFactor == "1" ? "V0" : "V0*" + conversionFactor;
+                            string formulaName = StripTrailingQuantityUnit(
+                                String.IsNullOrWhiteSpace(groupLeader.TargetFullName) ? groupLeader.TargetName : groupLeader.TargetFullName,
+                                groupLeader.TargetUnit);
+                            string formulaSignature = NormalizeForSignature(formulaName) + "|";
+                            if (formulaSignature.Length > 450) formulaSignature = formulaSignature.Substring(0, 450);
+                            target.FormulaOperands = new List<QuantityFormulaOperandInfo>
+                            {
+                                new QuantityFormulaOperandInfo { Name = formulaName, Unit = groupLeader.TargetUnit, Signature = formulaSignature }
+                            };
+                            target.QuantityText = (qtyBase ?? "") + "*" + conversionFactor;
+                        }
                         target.NeedManualQuota = false;
                         target.Selected = true;
                         target.Status = "";

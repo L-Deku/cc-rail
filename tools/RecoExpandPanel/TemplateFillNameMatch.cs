@@ -480,18 +480,16 @@ namespace RecoNet
             return result;
         }
 
-        // 名字驱动数量文本：按 Excel 单位与定额单位生成换算后缀(如 5 + /10 = "5/10")；
-        // Excel 单位读不到时按定额单位前缀(10m3/100m2)兜底。换算不成立则原样返回。
+        // 名字驱动数量文本：只在 Excel 单位与定额单位可靠同量纲时生成换算后缀。
+        // Excel 单位缺失或跨基础单位时不猜测，由上层已确认公式或人工确认处理。
         private static string BuildNameDrivenQtyText(string baseQtyText, string excelUnit, string quotaUnit)
         {
             string suffix;
-            if (!String.IsNullOrWhiteSpace(excelUnit) && TryBuildExcelLinkUnitScaleSuffix(excelUnit, quotaUnit, out suffix))
+            if (!String.IsNullOrWhiteSpace(excelUnit))
             {
-                return (baseQtyText ?? "") + suffix;
-            }
-            if (TryBuildQuotaUnitFallbackSuffix(quotaUnit, out suffix))
-            {
-                return (baseQtyText ?? "") + suffix;
+                return TryBuildExcelLinkUnitScaleSuffix(excelUnit, quotaUnit, out suffix)
+                    ? (baseQtyText ?? "") + suffix
+                    : baseQtyText;
             }
             return baseQtyText;
         }
@@ -1252,13 +1250,24 @@ namespace RecoNet
                 string name = g.Select(x => String.IsNullOrWhiteSpace(x.TargetFullName) ? x.TargetName : x.TargetFullName)
                     .FirstOrDefault(n => !String.IsNullOrWhiteSpace(n));
                 if (String.IsNullOrWhiteSpace(name)) continue;
-                MappingFeedbackGroup mappingGroup = new MappingFeedbackGroup { QuantityName = name };
-                mappingGroup.QuantityUnit = g.Select(x => x.TargetUnit).FirstOrDefault(u => !String.IsNullOrWhiteSpace(u)) ?? "";
+                string quantityUnit = g.Select(x => x.TargetUnit).FirstOrDefault(u => !String.IsNullOrWhiteSpace(u)) ?? "";
+                name = StripTrailingQuantityUnit(name, quantityUnit);
+                MappingFeedbackGroup mappingGroup = new MappingFeedbackGroup { QuantityName = name, QuantityUnit = quantityUnit };
                 mappingGroup.EntryCode = g.Select(x => x.ItemNo).FirstOrDefault(no => !String.IsNullOrWhiteSpace(no)) ?? "";
                 mappingGroup.Workbook = sourceWorkbook ?? "";
                 mappingGroup.Worksheet = sourceSheet ?? "";
                 mappingGroup.ExcelRow = g.Key;
                 PopulateMappingFeedbackGroupProjectContext(projectConn, mappingGroup);
+                FillPreviewItem formulaSource = g.FirstOrDefault(x => !String.IsNullOrWhiteSpace(x.FormulaTemplate) && x.FormulaOperands != null);
+                if (formulaSource != null)
+                {
+                    mappingGroup.FormulaOperands.AddRange(formulaSource.FormulaOperands.Select(operand => new QuantityFormulaOperandInfo
+                    {
+                        Name = operand.Name,
+                        Unit = operand.Unit,
+                        Signature = operand.Signature
+                    }));
+                }
                 foreach (FillPreviewItem it in g)
                 {
                     mappingGroup.Targets.Add(new MappingFeedbackTarget
@@ -1266,13 +1275,15 @@ namespace RecoNet
                         Kind = "quota",
                         Code = it.QuotaCode,
                         Name = it.SourceName,
-                        Unit = it.Unit
+                        Unit = it.Unit,
+                        FormulaTemplate = it.FormulaTemplate
                     });
                 }
                 mappingGroups.Add(mappingGroup);
             }
             RecordNameMatchesToMappingStore(mappingGroups);
-            foreach (FillPreviewItem item in written.Where(i => i != null && i.IsNameDriven))
+            bool learningDurable = ConsumeLearningDbDurableResult(mappingGroups);
+            foreach (FillPreviewItem item in written.Where(i => i != null && i.IsNameDriven && learningDurable))
             {
                 item.MappingFeedbackRecorded = true;
             }
