@@ -766,7 +766,7 @@ try {
         $templateType.GetField('WorkbookPath', $flags).SetValue($nameTemplate, [string]$fixturePath)
         for ($index = 0; $index -lt $codes.Count; $index++) {
             $nameRow = [Activator]::CreateInstance($templateRowType)
-            $templateRowType.GetField('MatchName', $flags).SetValue($nameRow, '挖土方')
+            $templateRowType.GetField('MatchName', $flags).SetValue($nameRow, '挖土方 m3')
             $templateRowType.GetField('SourceSheet', $flags).SetValue($nameRow, '测试')
             $templateRowType.GetField('SourceExpr', $flags).SetValue($nameRow, $(if ($index -eq 0) { 'D2' } else { 'D4' }))
             $templateRowType.GetField('QuotaCode', $flags).SetValue($nameRow, $codes[$index])
@@ -840,14 +840,19 @@ try {
             '回归主工程量A901', '回归辅助工程量B902', '回归纯取数C903')
         Add-MergedTemplateRow $mergedTemplate 'Q-AUX-1' '回归辅助工程量B902' 'D2*10' 2 $null
         Add-MergedTemplateRow $mergedTemplate 'Q-AUX-2' '回归辅助工程量B902' 'D2' 3 $null
+        Add-MergedTemplateRow $mergedTemplate 'Q-TRANSPORT' '回归辅助工程量B902' 'D2' 4 $null
+        Add-MergedTemplateRow $mergedTemplate '1009001003*1.02' '回归辅助工程量B902' 'D2' 5 $null
 
         $mergedArgs = [object[]]@($previewMainForm.PSObject.BaseObject, $mergedTemplate.PSObject.BaseObject,
             [string]$targetFixturePath, '组合', 'D', $null)
         $mergedPreview = $buildPreview.Invoke($null, $mergedArgs)
         $codes = @($mergedPreview | Where-Object { -not [String]::IsNullOrWhiteSpace($_.QuotaCode) } |
             ForEach-Object { $_.QuotaCode })
-        foreach ($expectedCode in @('Q-MAIN', 'Q-TRANSPORT', 'Q-AUX-1', 'Q-AUX-2')) {
+        foreach ($expectedCode in @('Q-MAIN', 'Q-TRANSPORT', 'Q-AUX-1', 'Q-AUX-2', '1009001003*1.02')) {
             if ($codes -notcontains $expectedCode) { throw "组合表达式回归缺少 $expectedCode" }
+        }
+        if (@($codes | Where-Object { $_ -eq 'Q-TRANSPORT' }).Count -ne 2) {
+            throw '辅助工程量存在独立绑定时，即使与合计定额相同也必须保留'
         }
         $transport = @($mergedPreview | Where-Object { $_.QuotaCode -eq 'Q-TRANSPORT' })[0]
         if ($transport.QuantityText -notmatch '2' -or $transport.QuantityText -notmatch '1[\.,]5' -or
@@ -855,9 +860,10 @@ try {
             throw "组合表达式没有同时代入三行数量: '$($transport.QuantityText)'"
         }
         $auxiliary = @($mergedPreview | Where-Object { $_.TargetRow -eq 2 } | Sort-Object GroupOrder)
-        if ($auxiliary.Count -ne 2 -or $auxiliary[0].QuotaCode -ne 'Q-AUX-1' -or
-            $auxiliary[1].QuotaCode -ne 'Q-AUX-2') {
-            throw '参与组合表达式的辅助行没有保留自己的组件组'
+        if ($auxiliary.Count -ne 4 -or $auxiliary[0].QuotaCode -ne 'Q-AUX-1' -or
+            $auxiliary[1].QuotaCode -ne 'Q-AUX-2' -or $auxiliary[2].QuotaCode -ne 'Q-TRANSPORT' -or
+            $auxiliary[3].QuotaCode -ne '1009001003*1.02') {
+            throw '参与组合表达式的辅助行没有保留自己的独立定额和材料'
         }
         $auxNote = if ([String]::IsNullOrWhiteSpace($auxiliary[0].Status)) {
             $auxiliary[0].AlignNote

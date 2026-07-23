@@ -35,6 +35,21 @@ namespace RecoNet
             return sb.ToString();
         }
 
+        private static string NormalizeQuantityMatchName(string text)
+        {
+            string name = (text ?? "").Trim();
+            int separator = name.LastIndexOf(' ');
+            if (separator > 0)
+            {
+                string suffix = name.Substring(separator + 1).Trim();
+                if (LooksLikeExcelLinkUnit(suffix))
+                {
+                    name = name.Substring(0, separator).Trim();
+                }
+            }
+            return NormalizeMatchText(name);
+        }
+
         internal static List<string> ExtractMatchNumbers(string normText)
         {
             List<string> result = new List<string>();
@@ -176,7 +191,7 @@ namespace RecoNet
             for (int i = 0; i < template.Rows.Count; i++)
             {
                 FillTemplateRow row = template.Rows[i];
-                string norm = NormalizeMatchText(row == null ? "" : (row.MatchName ?? row.SourceName ?? ""));
+                string norm = NormalizeQuantityMatchName(row == null ? "" : (row.MatchName ?? row.SourceName ?? ""));
                 if (norm.Length == 0) continue;
                 string anchor = BuildTemplateSourceAnchor(template, row);
                 string key = norm + "\u001f" + anchor;
@@ -470,7 +485,7 @@ namespace RecoNet
                 row.Row = r;
                 row.RawName = machineName;
                 row.DisplayName = displayName;
-                row.NormName = NormalizeMatchText(machineName);
+                row.NormName = NormalizeQuantityMatchName(machineName);
                 row.Chapter = currentChapter;
                 row.Quantity = qty;
                 row.QuantityText = disp;
@@ -683,7 +698,7 @@ namespace RecoNet
             List<string> values = new List<string>();
             foreach (FillOperand op in trow.Operands)
             {
-                int idx = BestMatchIndex(NormalizeMatchText(op.Name), targetNorms);
+                int idx = BestMatchIndex(NormalizeQuantityMatchName(op.Name), targetNorms);
                 if (idx < 0)
                 {
                     return false;
@@ -829,7 +844,8 @@ namespace RecoNet
                 NameQuotaCandidateGroup candidate = new NameQuotaCandidateGroup();
                 candidate.Key = group.SourceAnchor ?? "";
                 candidate.Label = BuildTemplateCandidateLabel(template, group);
-                candidate.Items = BuildTemplatePreviewGroup(template, group, target, targetRows, targetNorms, targetIndex, null);
+                candidate.Items = BuildTemplatePreviewGroup(template, group, target, targetRows, targetNorms, targetIndex,
+                    null);
                 result.Add(candidate);
                 int firstIndex = OrderedTemplateGroupIndexes(template, group).FirstOrDefault();
                 sourceExpressions[candidate] = group.Indexes.Count == 0 ? "" : (template.Rows[firstIndex].SourceExpr ?? "");
@@ -858,20 +874,48 @@ namespace RecoNet
         }
 
         private static void ApplyMergedExpressionNotes(List<FillPreviewItem> items,
-            List<TargetQtyRow> targetRows, Dictionary<int, string> notesByTargetIndex)
+            List<TargetQtyRow> targetRows, Dictionary<int, string> notesByTargetIndex,
+            HashSet<int> independentTargetIndexes)
         {
             if (items == null || targetRows == null || notesByTargetIndex == null) return;
             foreach (KeyValuePair<int, string> pair in notesByTargetIndex)
             {
                 if (pair.Key < 0 || pair.Key >= targetRows.Count) continue;
                 int targetRow = targetRows[pair.Key].Row;
+                int insertAt = items.FindIndex(item => item != null && item.IsNameDriven && item.TargetRow == targetRow);
+                if (independentTargetIndexes == null || !independentTargetIndexes.Contains(pair.Key))
+                {
+                    items.RemoveAll(item => item != null && item.IsNameDriven && item.TargetRow == targetRow);
+                }
                 List<FillPreviewItem> group = items
                     .Where(item => item != null && item.IsNameDriven && item.TargetRow == targetRow)
                     .OrderBy(item => item.GroupOrder)
                     .ToList();
-                if (group.Count == 0) continue;
+                if (group.Count == 0)
+                {
+                    TargetQtyRow target = targetRows[pair.Key];
+                    FillPreviewItem operandOnly = new FillPreviewItem();
+                    operandOnly.IsNameDriven = true;
+                    operandOnly.TargetRow = targetRow;
+                    operandOnly.TargetName = target.DisplayName;
+                    operandOnly.TargetFullName = target.RawName;
+                    operandOnly.TargetChapter = target.Chapter;
+                    operandOnly.TargetUnit = target.Unit;
+                    operandOnly.TargetQuantityText = target.QuantityText;
+                    operandOnly.QuantityText = target.QuantityText;
+                    operandOnly.AlignNote = pair.Value + "，无独立定额匹配";
+                    operandOnly.Selected = false;
+                    operandOnly.NeedManualQuota = false;
+                    items.Insert(insertAt < 0 ? items.Count : Math.Min(insertAt, items.Count), operandOnly);
+                    continue;
+                }
 
                 FillPreviewItem leader = group[0];
+                for (int order = 0; order < group.Count; order++)
+                {
+                    group[order].GroupOrder = order;
+                    group[order].TargetName = order == 0 ? targetRows[pair.Key].DisplayName : "";
+                }
                 bool hasIndependentQuota = group.Any(item => !String.IsNullOrWhiteSpace(item.QuotaCode));
                 if (hasIndependentQuota)
                 {
@@ -961,6 +1005,7 @@ namespace RecoNet
 
             HashSet<TemplateNameGroup> usedGroups = new HashSet<TemplateNameGroup>();
             Dictionary<int, string> mergedIntoByTargetIdx = new Dictionary<int, string>();
+            HashSet<int> independentTargetIndexes = new HashSet<int>();
 
             FillPreviewItem lastMatched = null;
             for (int trIdx = 0; trIdx < targetRows.Count; trIdx++)
@@ -989,6 +1034,11 @@ namespace RecoNet
                     bool needsReview = exactMode == "reuse" || exactMode == "choice";
                     List<FillPreviewItem> activeGroup = BuildTemplatePreviewGroup(template, exactGroups[0], tr,
                         targetRows, targetNorms, trIdx, needsReview ? null : mergedIntoByTargetIdx);
+                    if (exactGroups.Any(group => group.Indexes.Any(index =>
+                        template.Rows[index].Operands == null || template.Rows[index].Operands.Count < 2)))
+                    {
+                        independentTargetIndexes.Add(trIdx);
+                    }
                     foreach (FillPreviewItem member in activeGroup)
                     {
                         member.Selected = !needsReview;
@@ -1106,7 +1156,7 @@ namespace RecoNet
                 }
                 items.Add(item);
             }
-            ApplyMergedExpressionNotes(items, targetRows, mergedIntoByTargetIdx);
+            ApplyMergedExpressionNotes(items, targetRows, mergedIntoByTargetIdx, independentTargetIndexes);
             return items;
         }
 
