@@ -55,6 +55,9 @@ function Get-ExtraText { param([string]$Extra, [string]$Name)
   try { $o = $Extra | ConvertFrom-Json; $p = $o.PSObject.Properties[$Name]; if ($p) { return [string]$p.Value } } catch {}
   return ''
 }
+function Test-PositiveLearningEvidence { param([string]$Extra)
+  return ((Get-ExtraInt $Extra 'accepted_count' 1) + (Get-ExtraInt $Extra 'corrected_count' 0)) -gt 0
+}
 
 # 2a) 第一遍:先为每个目标集合定死 box 编号(mapping-boxes 原始编号优先,取字典序最小者保证确定性)
 $boxes = @{}    # target_set_hash → @{ Id; Targets }
@@ -142,6 +145,7 @@ foreach ($audit in $inferenceBySignature.Values) {
 $formulas = @{}
 foreach ($row in $log.Rows) {
   $extra = [string]$row.extra
+  if (-not (Test-PositiveLearningEvidence $extra)) { continue }
   $template = Get-ExtraText $extra 'formula_template'
   $operandCount = Get-ExtraInt $extra 'formula_operand_count' 0
   if ($template -eq '' -or $operandCount -le 0) { continue }
@@ -226,6 +230,7 @@ Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $re
 # 4) 签名级条目证据:某工程量(签名)+某定额 历史上实际放过的条目,按办法分组计数。
 $sigEntry = @{}
 foreach ($row in $log.Rows) {
+  if (-not (Test-PositiveLearningEvidence ([string]$row.extra))) { continue }
   if ([string]$row.entry_code -eq '' -or [string]$row.target_kind -ne 'quota' -or [string]$row.target_code -eq '') { continue }
   $sig = Get-QuantitySignature ([string]$row.quantity_name) ([string]$row.quantity_unit) $knownUnits
   $entryMethod = Get-LearningMethodPartition ([string]$row.method)
@@ -247,6 +252,7 @@ Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $re
 # 5) 工程模板归集:条目前缀(前2位)=工程类型,统计每个工程类型下条目与定额组的共现。
 $tmpl = @{}
 foreach ($g in $groups.Values) {
+  if (-not (Test-PositiveLearningEvidence ([string]$g.Extra))) { continue }
   if ($g.EntryCode -eq '' -or $g.EntryCode.Length -lt 2) { continue }
   $prefix = $g.EntryCode.Substring(0, 2)
   $boxId = $boxes[$g.SetHash].Id
@@ -267,6 +273,7 @@ Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $re
 # 6) 表模板行归集(一表一模板原料):带工作簿/工作表上下文的事件组,按表内行号有序沉淀。
 $sheetRows = @{}
 foreach ($g in $groups.Values) {
+  if (-not (Test-PositiveLearningEvidence ([string]$g.Extra))) { continue }
   $wb = Get-ExtraText $g.Extra 'workbook'
   if ($wb -eq '') { continue }
   $ws = Get-ExtraText $g.Extra 'worksheet'

@@ -21,6 +21,14 @@ if ($learning -notmatch 'BatchId = Guid\.NewGuid\(\)\.ToString\("N"\)' -or
     $learning -notmatch 'cmd\.Parameters\.AddWithValue\("@eh", BuildLearningMd5') { throw '整笔重试没有复用稳定事件键，提交结果不确定时可能重复计数' }
 if (([regex]::Matches($learning, 'UPDLOCK,HOLDLOCK')).Count -lt 6) { throw '首次并发 upsert 的键范围锁不完整' }
 if ($learning -notmatch 'learning-db-outbox\.jsonl' -or $learning -notmatch 'RecoQuotaData\.learning-db-outbox\.lock') { throw 'SQL 失败没有独立命名互斥的本机 outbox' }
+if ($learning -notmatch 'learning-db-outbox\.dead-letter\.jsonl' -or
+    $learning -notmatch 'TryMoveLearningDbOutboxBatchToDeadLetter') { throw '永久无效的 outbox 批次没有 dead-letter 隔离通道' }
+if ($learning -notmatch 'HasUnsupportedLearningDbMethod' -or
+    $learning -notmatch 'was not queued because') { throw '新绑定的空办法关系仍可能进入 active outbox 或缺少可观察日志' }
+if ($learning -notmatch 'LearningDbWriteResult\.PermanentFailure' -or
+    $learning -notmatch 'LearningDbWriteResult\.RetryableFailure') { throw 'outbox 重放未区分永久无效与瞬时 SQL 故障' }
+if ($learning -notmatch 'TryMoveLearningDbOutboxBatchToDeadLetter\(batch\.BatchId' -or
+    $learning -notmatch 'continue;') { throw '毒批次隔离后没有继续重放后续批次' }
 if ($learning -notmatch 'ReplayPendingLearningDbEvents' -or $learning -notmatch 'LoadPendingLearningMappingKeys') { throw '后续绑定/推荐缺少 outbox 重放与 pending 键入口' }
 if ($learning -notmatch 'WriteAllLinesAtomic' -or $learning -notmatch 'RemoveLearningDbOutboxBatch') { throw 'outbox 没有原子保存或成功确认清除' }
 if ($learning -notmatch 'IsLearningDbBatchAlreadyCommitted' -or $learning -notmatch 'group_key=@group_key') { throw '重复重放没有沿用稳定事件批次确认，可能重复计数' }

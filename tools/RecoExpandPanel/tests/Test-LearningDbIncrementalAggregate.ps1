@@ -168,6 +168,51 @@ SELECT
     [void]$entry.Parameters.AddWithValue('@entry', $entryCode)
     if ([string]$entry.ExecuteScalar() -ne $entryName) { throw 'SignatureEntryMap did not persist real method/entry name' }
 
+    $groupType.GetField('AcceptedCount', $allFlags).SetValue($group, 0)
+    $groupType.GetField('CorrectedCount', $allFlags).SetValue($group, 0)
+    $groupType.GetField('RejectedCount', $allFlags).SetValue($group, 1)
+    [void]$upsert.Invoke($null, $invokeArgs)
+    $delta = $connection.CreateCommand()
+    $delta.Transaction = $transaction
+    $delta.CommandText = @'
+SELECT accepted_count,corrected_count,rejected_count,weight,
+  (SELECT sample_count FROM dbo.SignatureEntryMap WHERE signature=@signature AND target_code=@code AND method=@method AND entry_code=@entry),
+  (SELECT sample_count FROM dbo.QuantityFormulaRule WHERE anchor_signature=@signature AND target_code=@code)
+FROM dbo.SignatureBoxMap WHERE signature=@signature AND method=@method AND box_id=@box
+'@
+    [void]$delta.Parameters.AddWithValue('@signature', $signature)
+    [void]$delta.Parameters.AddWithValue('@code', $targetCode)
+    [void]$delta.Parameters.AddWithValue('@method', $method)
+    [void]$delta.Parameters.AddWithValue('@entry', $entryCode)
+    [void]$delta.Parameters.AddWithValue('@box', $boxId)
+    $deltaReader = $delta.ExecuteReader()
+    try {
+        if (-not $deltaReader.Read() -or $deltaReader.GetInt32(0) -ne 2 -or $deltaReader.GetInt32(1) -ne 0 -or
+            $deltaReader.GetInt32(2) -ne 1 -or $deltaReader.GetInt32(3) -ne 10 -or
+            $deltaReader.GetInt32(4) -ne 2 -or $deltaReader.GetInt32(5) -ne 2) {
+            throw 'Rejection delta did not lower weight without strengthening entry/formula evidence'
+        }
+    }
+    finally { $deltaReader.Dispose() }
+
+    $groupType.GetField('CorrectedCount', $allFlags).SetValue($group, 1)
+    $groupType.GetField('RejectedCount', $allFlags).SetValue($group, 0)
+    [void]$upsert.Invoke($null, $invokeArgs)
+    $correction = $connection.CreateCommand()
+    $correction.Transaction = $transaction
+    $correction.CommandText = 'SELECT corrected_count,rejected_count,weight FROM dbo.SignatureBoxMap WHERE signature=@signature AND method=@method AND box_id=@box'
+    [void]$correction.Parameters.AddWithValue('@signature', $signature)
+    [void]$correction.Parameters.AddWithValue('@method', $method)
+    [void]$correction.Parameters.AddWithValue('@box', $boxId)
+    $correctionReader = $correction.ExecuteReader()
+    try {
+        if (-not $correctionReader.Read() -or $correctionReader.GetInt32(0) -ne 1 -or
+            $correctionReader.GetInt32(1) -ne 1 -or $correctionReader.GetInt32(2) -ne 30) {
+            throw 'Correction delta did not raise the corrected relation weight'
+        }
+    }
+    finally { $correctionReader.Dispose() }
+
     $formula = $connection.CreateCommand()
     $formula.Transaction = $transaction
     $formula.CommandText = @'

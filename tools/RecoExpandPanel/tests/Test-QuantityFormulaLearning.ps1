@@ -114,6 +114,22 @@ try {
     }
     Write-Host "PASS 当前表参数公式计算正确：$($evalArgs[4]) = $($decimalArgs[1])"
 
+    $negativeRule = [Activator]::CreateInstance($formulaRuleType, $true).PSObject.BaseObject
+    $formulaRuleType.GetField('TargetUnit', $flags).SetValue($negativeRule, 'm3')
+    $negativeOperands = $formulaRuleType.GetField('Operands', $flags).GetValue($negativeRule)
+    $negativeOperand = [Activator]::CreateInstance($formulaOperandType, $true).PSObject.BaseObject
+    $formulaOperandType.GetField('Index', $flags).SetValue($negativeOperand, 0)
+    foreach ($field in @('Signature','Name','Unit')) {
+        $formulaOperandType.GetField($field, $flags).SetValue($negativeOperand, $ruleOperands[0].GetType().GetField($field, $flags).GetValue($ruleOperands[0]))
+    }
+    [void]$negativeOperands.Add($negativeOperand)
+    foreach ($invalidTemplate in @('V0*0', 'V0*-1')) {
+        $formulaRuleType.GetField('Template', $flags).SetValue($negativeRule, $invalidTemplate)
+        $negativeArgs = [object[]]::new(5); $negativeArgs[0] = $negativeRule; $negativeArgs[1] = $targetRows; $negativeArgs[2] = $targetRows[0]; $negativeArgs[3] = 'm3'; $negativeArgs[4] = $null
+        if ([bool]$evaluateFormula.Invoke($null, $negativeArgs)) { throw "公式 $invalidTemplate 的计算结果小于等于0时不应进入自动预览。" }
+    }
+    Write-Host 'PASS 公式计算结果必须大于0'
+
     # 跨单位公式只能命中当前办法+当前条目，或显式空条目的通用规则；不得回退到其他条目。
     $snapshotType = $type.GetNestedType('SmartLearningSnapshot', $nestedFlags)
     $smartTargetType = $type.GetNestedType('SmartBoxTarget', $nestedFlags)
@@ -161,6 +177,107 @@ try {
     if (-not $exactResult.Ok) { throw "当前办法+条目精确公式未命中：$($exactResult.Args[9])" }
     Write-Host 'PASS 公式严格按当前办法/条目或显式通用规则选择，不回退其他条目'
 
+    # 已有多参数派生公式时，即使锚点单位与定额单位相同，也必须先完整求值；缺参数不得回退锚点单值。
+    $targetRowType = $targetRows[0].GetType()
+    $targetRowListType = $targetRows.GetType()
+    $sameUnitRows = [Activator]::CreateInstance($targetRowListType)
+    foreach ($definition in @(
+        [pscustomobject]@{ Row=10; Name='主体混凝土'; Value=[decimal]10 },
+        [pscustomobject]@{ Row=11; Name='附加混凝土'; Value=[decimal]2 }
+    )) {
+        $targetRow = [Activator]::CreateInstance($targetRowType, $true).PSObject.BaseObject
+        foreach ($pair in @{ Row=$definition.Row; RawName=$definition.Name; DisplayName=$definition.Name; NormName=$definition.Name; Chapter='测试章节'; Unit='m3'; Quantity=$definition.Value; QuantityText=$definition.Value.ToString([Globalization.CultureInfo]::InvariantCulture) }.GetEnumerator()) {
+            $targetRowType.GetField($pair.Key, $flags).SetValue($targetRow, $pair.Value)
+        }
+        [void]$sameUnitRows.Add($targetRow)
+    }
+
+    $sameUnitSnapshot = [Activator]::CreateInstance($snapshotType, $true).PSObject.BaseObject
+    $snapshotType.GetField('Method', $flags).SetValue($sameUnitSnapshot, '2024')
+    $sameUnitSignature = [string]$signatureMethod.Invoke($null, [object[]]@('主体混凝土', 'm3'))
+    $sameUnitKey = [string]$formulaKeyMethod.Invoke($null, [object[]]@($sameUnitSignature, 'quota', 'TEST-DERIVED'))
+    $sameUnitFormulaByKey = $snapshotType.GetField('FormulaByKey', $flags).GetValue($sameUnitSnapshot)
+    $derivedRule = [Activator]::CreateInstance($formulaRuleType, $true).PSObject.BaseObject
+    foreach ($pair in @{ RuleHash='derived-rule'; TargetUnit='m3'; Template='V0+V1'; Method='2024'; EntryCode='0101-01'; SampleCount=1 }.GetEnumerator()) {
+        $formulaRuleType.GetField($pair.Key, $flags).SetValue($derivedRule, $pair.Value)
+    }
+    $derivedOperands = $formulaRuleType.GetField('Operands', $flags).GetValue($derivedRule)
+    for ($i = 0; $i -lt 2; $i++) {
+        $derivedOperand = [Activator]::CreateInstance($formulaOperandType, $true).PSObject.BaseObject
+        $operandName = if ($i -eq 0) { '主体混凝土' } else { '附加混凝土' }
+        $formulaOperandType.GetField('Index', $flags).SetValue($derivedOperand, $i)
+        $formulaOperandType.GetField('Name', $flags).SetValue($derivedOperand, $operandName)
+        $formulaOperandType.GetField('Unit', $flags).SetValue($derivedOperand, 'm3')
+        $formulaOperandType.GetField('Signature', $flags).SetValue($derivedOperand, [string]$signatureMethod.Invoke($null, [object[]]@($operandName, 'm3')))
+        [void]$derivedOperands.Add($derivedOperand)
+    }
+    $sameUnitRules = [Activator]::CreateInstance($ruleListType)
+    [void]$sameUnitRules.Add($derivedRule)
+    $sameUnitFormulaByKey.Add($sameUnitKey, $sameUnitRules)
+
+    $mapEntryType = $type.GetNestedType('SmartMapEntry', $nestedFlags)
+    $sameUnitEntry = [Activator]::CreateInstance($mapEntryType, $true).PSObject.BaseObject
+    $sameUnitTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
+    $smartTargetType.GetField('Kind', $flags).SetValue($sameUnitTarget, 'quota')
+    $smartTargetType.GetField('Code', $flags).SetValue($sameUnitTarget, 'TEST-DERIVED')
+    [void]$mapEntryType.GetField('Targets', $flags).GetValue($sameUnitEntry).Add($sameUnitTarget)
+    [void]$mapEntryType.GetField('LocalContextKeys', $flags).GetValue($sameUnitEntry).Add("2024`n0101-01")
+
+    $projectEntries = [Collections.Generic.Dictionary[string,long]]::new([StringComparer]::OrdinalIgnoreCase)
+    $projectEntries.Add('0101-01', [long]1)
+    $projectQuotaType = $type.GetNestedType('ProjectQuota', $nestedFlags)
+    $quotaDictionaryType = [Collections.Generic.Dictionary``2].MakeGenericType([string], $projectQuotaType)
+    $currentQuotaByCode = [Activator]::CreateInstance($quotaDictionaryType, [StringComparer]::OrdinalIgnoreCase)
+    $currentQuota = [Activator]::CreateInstance($projectQuotaType, $true).PSObject.BaseObject
+    foreach ($pair in @{ Code='TEST-DERIVED'; Name='派生公式定额'; Unit='m3'; QuotaSeq=[long]1; IsLibrary=$false }.GetEnumerator()) {
+        $projectQuotaType.GetField($pair.Key, $flags).SetValue($currentQuota, $pair.Value)
+    }
+    $currentQuotaByCode.Add('TEST-DERIVED', $currentQuota)
+    $previewType = $type.GetNestedType('FillPreviewItem', $nestedFlags)
+    $previewListType = [Collections.Generic.List``1].MakeGenericType($previewType)
+    $appendSmartItems = $type.GetMethod('AppendSmartItems', $flags)
+    function Invoke-DerivedPreview($Rows) {
+        $previewItems = [Activator]::CreateInstance($previewListType)
+        $appendArgs = [object[]]::new(12)
+        $appendArgs[0] = $previewItems.PSObject.BaseObject
+        $appendArgs[1] = $Rows[0]
+        $appendArgs[2] = $Rows.PSObject.BaseObject
+        $appendArgs[3] = $sameUnitEntry
+        $appendArgs[4] = $sameUnitSnapshot
+        $appendArgs[5] = $projectEntries.PSObject.BaseObject
+        $appendArgs[6] = $currentQuotaByCode.PSObject.BaseObject
+        $appendArgs[7] = $false
+        $appendArgs[8] = 'test'
+        $appendArgs[9] = $sameUnitSignature
+        $appendArgs[10] = $null
+        $appendArgs[11] = $null
+        [void]$appendSmartItems.Invoke($null, $appendArgs)
+        return ,$previewItems
+    }
+    $derivedPreview = Invoke-DerivedPreview $sameUnitRows
+    $derivedQuantityArgs = [object[]]::new(3); $derivedQuantityArgs[0] = [string]$derivedPreview[0].QuantityText; $derivedQuantityArgs[1] = [decimal]0; $derivedQuantityArgs[2] = $null
+    if (-not [bool]$tryDecimal.Invoke($null, $derivedQuantityArgs) -or [decimal]$derivedQuantityArgs[1] -ne [decimal]12 -or [string]$derivedPreview[0].FormulaTemplate -ne 'V0+V1') {
+        throw "多参数派生公式被标准同单位换算短路：Quantity='$($derivedPreview[0].QuantityText)' Formula='$($derivedPreview[0].FormulaTemplate)'"
+    }
+
+    $missingRows = [Activator]::CreateInstance($targetRowListType)
+    [void]$missingRows.Add($sameUnitRows[0])
+    $missingPreview = Invoke-DerivedPreview $missingRows
+    if ($missingPreview[0].Selected -or [string]$missingPreview[0].Status -notmatch '待确认换算') {
+        throw '多参数派生公式缺参数时不得回退锚点行标准换算。'
+    }
+    Write-Host 'PASS 多参数派生公式优先完整求值，缺参数时整组待确认'
+
+    # 单参数线性 V0*k 在同量纲下仍使用当前标准换算，不重放历史系数。
+    $formulaRuleType.GetField('RuleHash', $flags).SetValue($derivedRule, 'linear-rule')
+    $formulaRuleType.GetField('Template', $flags).SetValue($derivedRule, 'V0*0.2')
+    $derivedOperands.RemoveAt(1)
+    $linearPreview = Invoke-DerivedPreview $sameUnitRows
+    if ([string]$linearPreview[0].QuantityText -ne '10' -or -not [String]::IsNullOrWhiteSpace([string]$linearPreview[0].FormulaTemplate)) {
+        throw '单参数线性公式在同量纲下应保持标准换算优先。'
+    }
+    Write-Host 'PASS 单参数线性公式保持标准同量纲换算优先'
+
     $candidateScoreType = $type.GetNestedType('SmartMapCandidateScore', $nestedFlags)
     $mapEntryType = $type.GetNestedType('SmartMapEntry', $nestedFlags)
     $scoreListType = [Collections.Generic.List``1].MakeGenericType($candidateScoreType)
@@ -174,6 +291,43 @@ try {
             $candidateScoreType.GetField($field, $flags).SetValue($score, $true)
         }
         [void]$scoreList.Add($score)
+    }
+    $entryNameField = $candidateScoreType.GetField('EntryName', $flags)
+    if ($null -eq $entryNameField) { throw '候选分数缺少条目名称字段' }
+    $smartTargetType = $type.GetNestedType('SmartBoxTarget', $nestedFlags)
+    $smartTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
+    $smartTargetType.GetField('Code', $flags).SetValue($smartTarget, 'LY-89')
+    $firstMapEntry = $candidateScoreType.GetField('Entry', $flags).GetValue($scoreList[0])
+    [void]$mapEntryType.GetField('Targets', $flags).GetValue($firstMapEntry).Add($smartTarget)
+    $candidateScoreType.GetField('EntryCode', $flags).SetValue($scoreList[0], '0309-01-03-03')
+    $entryNameField.SetValue($scoreList[0], '弃渣外运')
+    $candidateLabel = $type.GetMethod('BuildSmartCandidateLabel', $flags).Invoke($null, @($scoreList[0]))
+    if ($candidateLabel -ne 'LY-89（条目 0309-01-03-03 弃渣外运）' -or
+        $candidateLabel -match '权重|当前办法') {
+        throw "候选下拉应只显示组件和条目编号/名称，实际：$candidateLabel"
+    }
+    $candidateType = $type.GetNestedType('NameQuotaCandidateGroup', $nestedFlags)
+    $candidateListType = [System.Collections.Generic.List``1].MakeGenericType($candidateType)
+    $candidateList = [Activator]::CreateInstance($candidateListType)
+    foreach ($candidateDefinition in @(
+        @('box-high', $candidateLabel),
+        @('box-low', $candidateLabel),
+        @('box-other', 'LY-90（条目 0309-01-03-03 弃渣外运）')
+    )) {
+        $candidate = [Activator]::CreateInstance($candidateType)
+        $candidateType.GetField('Key', $flags).SetValue($candidate, $candidateDefinition[0])
+        $candidateType.GetField('Label', $flags).SetValue($candidate, $candidateDefinition[1])
+        [void]$candidateList.Add($candidate)
+    }
+    $deduplicateMethod = $type.GetMethod('DeduplicateSmartCandidatesByLabel', $flags)
+    $deduplicateArgs = New-Object 'object[]' 1
+    $deduplicateArgs[0] = $candidateList.PSObject.BaseObject
+    $deduplicated = $deduplicateMethod.Invoke($null, $deduplicateArgs)
+    if ($deduplicated.Count -ne 2) {
+        throw "同显示文案候选未去重: $($deduplicated.Count)"
+    }
+    if ($candidateType.GetField('Key', $flags).GetValue($deduplicated[0]) -ne 'box-high') {
+        throw '同显示文案候选去重未保留排序第一项'
     }
     $canAuto = $type.GetMethod('CanAutoSelectSmartMapEntry', $flags)
     function Invoke-CanAutoSelect {
@@ -189,7 +343,6 @@ try {
     if (Invoke-CanAutoSelect) { throw '空办法兼容关系不应静默压过当前办法关系' }
     Write-Host 'PASS 组件候选小权重差需确认，且空办法关系不能自动采纳'
 
-    $targetRowType = $targetRows[0].GetType()
     $duplicateRadius = [Activator]::CreateInstance($targetRowType, $true).PSObject.BaseObject
     foreach ($pair in @{ Row=5; RawName='桩半径'; DisplayName='桩半径'; NormName='桩半径'; Chapter=$targetRowType.GetField('Chapter', $flags).GetValue($targetRows[0]); Unit='m'; Quantity=[decimal]0.5; QuantityText='0.5' }.GetEnumerator()) {
         $targetRowType.GetField($pair.Key, $flags).SetValue($duplicateRadius, $pair.Value)

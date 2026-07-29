@@ -165,11 +165,11 @@ namespace RecoNet
                 grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
                 grid.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
                 grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "选", Name = "sel", FillWeight = 6 });
-                grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "定额编号", Name = "code", ReadOnly = false, FillWeight = 16 });
-                grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "源行定额", Name = "sname", ReadOnly = true, FillWeight = 20 });
+                grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "定额编号", Name = "code", ReadOnly = true, FillWeight = 16 });
+                grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "源行定额", Name = "sname", ReadOnly = false, FillWeight = 20 });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "单位", Name = "unit", ReadOnly = true, FillWeight = 8 });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "目标行工程量名", Name = "tname", ReadOnly = true, FillWeight = 20 });
-                grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "数量", Name = "qty", ReadOnly = true, FillWeight = 10 });
+                grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "数量", Name = "qty", ReadOnly = false, FillWeight = 10 });
                 grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "状态", Name = "st", ReadOnly = true, FillWeight = 14 });
                 foreach (DataGridViewColumn column in grid.Columns)
                 {
@@ -185,7 +185,7 @@ namespace RecoNet
                 grid.CellClick += delegate(object sender, DataGridViewCellEventArgs e)
                 {
                     if (e.RowIndex < 0 || e.ColumnIndex < 0 ||
-                        !String.Equals(grid.Columns[e.ColumnIndex].Name, "code", StringComparison.Ordinal)) return;
+                        !String.Equals(grid.Columns[e.ColumnIndex].Name, "sname", StringComparison.Ordinal)) return;
                     DataGridViewRow row = grid.Rows[e.RowIndex];
                     if (!PrepareNameQuotaDropDown(row)) return;
                     grid.CurrentCell = row.Cells[e.ColumnIndex];
@@ -205,7 +205,12 @@ namespace RecoNet
                     if (updatingNameQuotaCell || e.RowIndex < 0 || e.ColumnIndex < 0) return;
                     if (String.Equals(grid.Columns[e.ColumnIndex].Name, "sel", StringComparison.Ordinal))
                     {
-                        ConfirmExactNameFromCheck(grid.Rows[e.RowIndex]);
+                        ApplyNameGroupSelectionFromCheck(grid.Rows[e.RowIndex]);
+                    }
+                    else if (String.Equals(grid.Columns[e.ColumnIndex].Name, "qty", StringComparison.Ordinal))
+                    {
+                        FillPreviewItem item = grid.Rows[e.RowIndex].Tag as FillPreviewItem;
+                        if (item != null) item.QuantityText = Convert.ToString(grid.Rows[e.RowIndex].Cells["qty"].Value).Trim();
                     }
                 };
                 grid.DataError += delegate(object sender, DataGridViewDataErrorEventArgs e)
@@ -502,9 +507,11 @@ namespace RecoNet
                     List<string> warnings;
                     using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
                     {
+                        FillTemplate existing = LoadFillTemplate(txtName.Text.Trim());
                         FillTemplate t = chkNameMode.Checked
                             ? BuildNameFillTemplateFromBindings(mainForm, conn, txtName.Text.Trim(), txtUnit.Text.Trim(), cmbSourceSheet.Text.Trim())
                             : BuildFillTemplateFromBindings(mainForm, conn, txtName.Text.Trim(), txtUnit.Text.Trim(), cmbSourceSheet.Text.Trim());
+                        t = MergeRegeneratedFillTemplate(existing, t);
                         count = t.Rows.Count;
                         warnings = t.BuildWarnings;
                         SaveFillTemplate(t);
@@ -602,40 +609,56 @@ namespace RecoNet
 
             private void SetGridRow(DataGridViewRow row, FillPreviewItem item, FillPreviewItem leader)
             {
+                int selectIndex = grid.Columns["sel"].Index;
                 int codeIndex = grid.Columns["code"].Index;
+                int sourceNameIndex = grid.Columns["sname"].Index;
+                bool isGroupMember = item.IsNameDriven && item.GroupOrder > 0;
+                if (isGroupMember && !(row.Cells[selectIndex] is DataGridViewTextBoxCell))
+                {
+                    row.Cells[selectIndex] = new DataGridViewTextBoxCell();
+                }
+                else if (!isGroupMember && !(row.Cells[selectIndex] is DataGridViewCheckBoxCell))
+                {
+                    row.Cells[selectIndex] = new DataGridViewCheckBoxCell();
+                }
                 if (row.Cells[codeIndex] is DataGridViewComboBoxCell)
                 {
                     row.Cells[codeIndex] = new DataGridViewTextBoxCell();
                 }
+                if (row.Cells[sourceNameIndex] is DataGridViewComboBoxCell)
+                {
+                    row.Cells[sourceNameIndex] = new DataGridViewTextBoxCell();
+                }
 
                 string statusText = String.IsNullOrEmpty(item.Status) ? (item.AlignNote ?? "") : item.Status;
-                row.SetValues(item.Selected, item.QuotaCode, item.SourceName, item.Unit ?? "",
+                row.SetValues(isGroupMember ? (object)"" : item.Selected, item.QuotaCode, item.SourceName, item.Unit ?? "",
                     item.TargetName, item.QuantityText, statusText);
                 row.Tag = item;
-                row.Cells["sel"].ReadOnly = false;
+                row.Cells["sel"].ReadOnly = isGroupMember;
                 row.Cells["sel"].ToolTipText = "";
                 row.Cells["code"].ToolTipText = "";
+                row.Cells["sname"].ToolTipText = "";
                 row.DefaultCellStyle.BackColor = Color.Empty;
 
                 bool hasCandidates = item.GroupOrder == 0 && item.NameQuotaCandidates != null &&
                     item.NameQuotaCandidates.Count > 1;
                 bool requiresChoice = leader != null && leader.NeedExactNameConfirmation &&
                     leader.NameQuotaCandidates != null && leader.NameQuotaCandidates.Count > 1;
-                row.Cells["code"].ReadOnly = !hasCandidates;
+                row.Cells["code"].ReadOnly = true;
+                row.Cells["sname"].ReadOnly = !hasCandidates;
                 if (hasCandidates)
                 {
-                    row.Cells["code"].ToolTipText = "点击选择该工程量名称绑定的定额或组件组";
+                    row.Cells["sname"].ToolTipText = "点击选择该工程量名称绑定的源行定额或组件组";
                 }
                 if (requiresChoice)
                 {
-                    if (item.GroupOrder > 0)
+                    if (isGroupMember)
                     {
-                        row.Cells["sel"].ReadOnly = true;
-                        row.Cells["sel"].ToolTipText = "请在组首勾选接受当前候选，或在定额编号列切换绑定组";
+                        row.Cells["sel"].ToolTipText = "请在组首勾选接受当前候选，或在源行定额列切换绑定组";
                     }
                     else
                     {
-                        row.Cells["sel"].ToolTipText = "勾选接受当前候选；点击定额编号可切换绑定组";
+                        row.Cells["sel"].ToolTipText = "勾选接受当前候选；点击源行定额可切换绑定组";
                     }
                 }
                 if (item.NeedExactNameConfirmation || !String.IsNullOrEmpty(item.Status))
@@ -770,10 +793,11 @@ namespace RecoNet
                 FillPreviewItem item = row == null ? null : row.Tag as FillPreviewItem;
                 if (item == null || item.GroupOrder != 0 || item.NameQuotaCandidates == null ||
                     item.NameQuotaCandidates.Count <= 1) return false;
-                if (row.Cells["code"] is DataGridViewComboBoxCell) return true;
+                if (row.Cells["sname"] is DataGridViewComboBoxCell) return true;
 
                 DataGridViewComboBoxCell combo = new DataGridViewComboBoxCell();
                 combo.DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton;
+                combo.DropDownWidth = 500;
                 foreach (NameQuotaCandidateGroup option in item.NameQuotaCandidates)
                 {
                     combo.Items.Add(option.Label);
@@ -783,7 +807,7 @@ namespace RecoNet
                 combo.Value = (current ?? item.NameQuotaCandidates[0]).Label;
 
                 updatingNameQuotaCell = true;
-                try { row.Cells[grid.Columns["code"].Index] = combo; }
+                try { row.Cells[grid.Columns["sname"].Index] = combo; }
                 finally { updatingNameQuotaCell = false; }
                 return true;
             }
@@ -805,7 +829,7 @@ namespace RecoNet
                 if (option == null) return;
                 if (HasUnsafeNameQuotaCandidate(option.Items))
                 {
-                    row.Cells["code"].ToolTipText = "该组件存在单位、条目或公式风险，不能直接确认，请先人工调整。";
+                    row.Cells["sname"].ToolTipText = "该组件存在单位、条目或公式风险，不能直接确认，请先人工调整。";
                     return;
                 }
 
@@ -842,6 +866,23 @@ namespace RecoNet
                         RefreshTargetGroupInGrid(targetRow);
                 }
                 finally { updatingNameQuotaCell = false; }
+            }
+
+            private void ApplyNameGroupSelectionFromCheck(DataGridViewRow row)
+            {
+                FillPreviewItem item = row == null ? null : row.Tag as FillPreviewItem;
+                if (item == null || !item.IsNameDriven || item.GroupOrder != 0) return;
+                bool value = Convert.ToBoolean(row.Cells["sel"].Value ?? false);
+                if (value && item.NeedExactNameConfirmation)
+                {
+                    ConfirmExactNameFromCheck(row);
+                    return;
+                }
+                foreach (FillPreviewItem member in preview.Where(candidate => candidate != null &&
+                    candidate.IsNameDriven && candidate.TargetRow == item.TargetRow))
+                {
+                    member.Selected = value;
+                }
             }
 
             private static bool HasUnsafeNameQuotaCandidate(IEnumerable<FillPreviewItem> items)
@@ -950,9 +991,23 @@ namespace RecoNet
                 foreach (DataGridViewRow row in grid.Rows)
                 {
                     FillPreviewItem it = row.Tag as FillPreviewItem;
-                    if (it != null)
+                    if (it == null) continue;
+                    it.QuantityText = Convert.ToString(row.Cells["qty"].Value).Trim();
+                    if (row.Cells["sel"] is DataGridViewCheckBoxCell)
                     {
-                        it.Selected = Convert.ToBoolean(row.Cells["sel"].Value ?? false);
+                        bool selected = Convert.ToBoolean(row.Cells["sel"].Value ?? false);
+                        if (it.IsNameDriven && it.GroupOrder == 0)
+                        {
+                            foreach (FillPreviewItem member in preview.Where(candidate => candidate != null &&
+                                candidate.IsNameDriven && candidate.TargetRow == it.TargetRow))
+                            {
+                                member.Selected = selected;
+                            }
+                        }
+                        else
+                        {
+                            it.Selected = selected;
+                        }
                     }
                 }
             }
@@ -1121,9 +1176,17 @@ namespace RecoNet
                     }
                     if (replacements.Count == 0) return;
 
+                    bool bindingChanged = !AreEquivalentNameBindingGroups(oldGroup, replacements);
                     if (!ReplacePreviewTargetGroup(preview, groupLeader.TargetRow, replacements)) return;
-                    FeedbackNameMatches(groupLeader.TemplateName, replacements,
-                        System.IO.Path.GetFileName(GetSelectedTargetWorkbookPath() ?? ""), cmbTargetSheet.Text.Trim(), conn);
+                    if (bindingChanged)
+                    {
+                        FeedbackNameMatches(groupLeader.TemplateName, replacements,
+                            System.IO.Path.GetFileName(GetSelectedTargetWorkbookPath() ?? ""), cmbTargetSheet.Text.Trim(), conn, oldGroup);
+                    }
+                    else
+                    {
+                        replacements[0].AlignNote = "绑定关系未变化，未重复学习";
+                    }
                     RefreshTargetGroupInGrid(groupLeader.TargetRow);
                 }
                 catch (Exception ex) { MessageBox.Show(this, "绑定失败：" + ex.Message, "模板铺量"); }
@@ -1140,8 +1203,7 @@ namespace RecoNet
                         "模板铺量", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
 
                     SetBusy(true, "写入中...");
-                    string result = ApplyFill(mainForm, targetUnit, preview,
-                        System.IO.Path.GetFileName(GetSelectedTargetWorkbookPath() ?? ""), cmbTargetSheet.Text.Trim());
+                    string result = ApplyFill(mainForm, targetUnit, preview);
                     MessageBox.Show(this, result, "模板铺量");
                 }
                 catch (Exception ex) { MessageBox.Show(this, "写入失败：" + ex.Message, "模板铺量"); }

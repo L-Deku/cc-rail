@@ -17,6 +17,7 @@ namespace RecoNet
         // 学习库固定在中央服务器,不跟随各软件的项目服务器(2020版连192.168.2.13,学习库统一在.213)。
         private const string LearningDbServer = "192.168.2.213,1433";
         private const string LearningDbOutboxFileName = "learning-db-outbox.jsonl";
+        private const string LearningDbDeadLetterFileName = "learning-db-outbox.dead-letter.jsonl";
         private const string LearningDbOutboxMutexName = "RecoQuotaData.learning-db-outbox.lock";
 
         private static string learningDbConnectionString;
@@ -32,8 +33,15 @@ namespace RecoNet
             public List<MappingFeedbackGroup> Groups = new List<MappingFeedbackGroup>();
         }
 
+        private enum LearningDbWriteResult
+        {
+            Succeeded,
+            RetryableFailure,
+            PermanentFailure
+        }
+
         // RecoLearning 是多人共享主学习库：流水与推荐核心聚合在同一事务提交；
-        // 瞬时并发错误整笔重试一次；其他失败只记日志，不影响后续绑定或本机 jsonl 备份。
+        // 瞬时失败进 active outbox，永久无效批次进 dead-letter，均不影响后续绑定或本机 jsonl 备份。
         private static bool RecordBindingEventsToLearningDb(string source, List<MappingFeedbackGroup> groups)
         {
             RememberLearningDbDurableResult(source, groups, false);
@@ -43,29 +51,56 @@ namespace RecoNet
             }
 
             PrepareLearningGroupsForOutbox(groups);
+            List<MappingFeedbackGroup> validGroups = groups
+                .Where(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
+                    !String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)))
+                .ToList();
+            int unsupportedCount = groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
+                String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)));
+            if (unsupportedCount > 0)
+            {
+                Log("Learning DB binding was not queued because " + unsupportedCount.ToString(CultureInfo.InvariantCulture) +
+                    " learning group(s) have a missing or unsupported project method; local mapping remains available.");
+            }
+            if (validGroups.Count == 0)
+            {
+                return false;
+            }
+
             if (!TryReplayPendingLearningDbEvents())
             {
                 LearningDbOutboxBatch pending = new LearningDbOutboxBatch
                 {
                     BatchId = Guid.NewGuid().ToString("N"),
                     Source = source ?? "",
-                    Groups = groups
+                    Groups = validGroups
                 };
                 bool queued = TryAppendLearningDbOutbox(pending);
-                RememberLearningDbDurableResult(source, groups, queued);
-                return queued;
+                bool fullyDurable = queued && unsupportedCount == 0;
+                RememberLearningDbDurableResult(source, groups, fullyDurable);
+                return fullyDurable;
             }
 
             LearningDbOutboxBatch batch = new LearningDbOutboxBatch
             {
                 BatchId = Guid.NewGuid().ToString("N"),
                 Source = source ?? "",
-                Groups = groups
+                Groups = validGroups
             };
-            bool written = TryWriteLearningDbBatch(batch, true);
-            bool durable = written || TryAppendLearningDbOutbox(batch);
-            RememberLearningDbDurableResult(source, groups, durable);
-            return durable;
+            string failureReason;
+            LearningDbWriteResult writeResult = TryWriteLearningDbBatch(batch, out failureReason);
+            bool durable = writeResult == LearningDbWriteResult.Succeeded;
+            if (writeResult == LearningDbWriteResult.RetryableFailure)
+            {
+                durable = TryAppendLearningDbOutbox(batch);
+            }
+            else if (writeResult == LearningDbWriteResult.PermanentFailure)
+            {
+                TryAppendLearningDbDeadLetter(batch, failureReason);
+            }
+            bool fullyWritten = durable && unsupportedCount == 0;
+            RememberLearningDbDurableResult(source, groups, fullyWritten);
+            return fullyWritten;
         }
 
         private static void WriteBindingEventsToLearningDb(string connectionString, string source,
@@ -129,6 +164,10 @@ namespace RecoNet
                                     if (!String.IsNullOrEmpty(group.BoxId)) flat["box_id"] = group.BoxId;
                                     if (!String.IsNullOrEmpty(group.Expression)) flat["expression"] = group.Expression;
                                     if (!String.IsNullOrEmpty(group.SourceCell)) flat["source_cell"] = group.SourceCell;
+                                    flat["accepted_count"] = Math.Max(0, group.AcceptedCount).ToString(CultureInfo.InvariantCulture);
+                                    flat["corrected_count"] = Math.Max(0, group.CorrectedCount).ToString(CultureInfo.InvariantCulture);
+                                    flat["rejected_count"] = Math.Max(0, group.RejectedCount).ToString(CultureInfo.InvariantCulture);
+                                    if (!String.IsNullOrWhiteSpace(group.UserAction)) flat["user_action"] = group.UserAction;
                                     if (!String.IsNullOrWhiteSpace(target.FormulaTemplate) && group.FormulaOperands.Count > 0)
                                     {
                                         flat["formula_rule_hash"] = BuildLearningFormulaRuleHash(group, target);
@@ -164,38 +203,75 @@ namespace RecoNet
             }
         }
 
-        private static bool TryWriteLearningDbBatch(LearningDbOutboxBatch batch, bool logFailure)
+        private static LearningDbWriteResult TryWriteLearningDbBatch(LearningDbOutboxBatch batch, out string failureReason)
         {
-            if (batch == null || batch.Groups == null || batch.Groups.Count == 0) return true;
+            failureReason = "";
+            if (batch == null || batch.Groups == null || batch.Groups.Count == 0) return LearningDbWriteResult.Succeeded;
+            if (HasUnsupportedLearningDbMethod(batch, out failureReason))
+            {
+                Log("Learning DB batch " + (batch.BatchId ?? "") + " is permanently invalid: " + failureReason);
+                return LearningDbWriteResult.PermanentFailure;
+            }
             string connectionString = GetLearningDbConnectionString();
-            if (String.IsNullOrEmpty(connectionString)) return false;
+            if (String.IsNullOrEmpty(connectionString))
+            {
+                failureReason = "learning_db_connection_unavailable";
+                Log("Learning DB connection is unavailable; batch " + (batch.BatchId ?? "") + " remains queued for retry.");
+                return LearningDbWriteResult.RetryableFailure;
+            }
 
             for (int attempt = 0; attempt < 2; attempt++)
             {
                 try
                 {
                     WriteBindingEventsToLearningDb(connectionString, batch.Source, batch.Groups, batch.BatchId);
-                    return true;
+                    return LearningDbWriteResult.Succeeded;
                 }
                 catch (SqlException ex)
                 {
-                    if (IsUniqueLearningDbConflict(ex) && IsLearningDbBatchAlreadyCommitted(connectionString, batch)) return true;
+                    if (IsUniqueLearningDbConflict(ex) && IsLearningDbBatchAlreadyCommitted(connectionString, batch))
+                    {
+                        return LearningDbWriteResult.Succeeded;
+                    }
                     if (attempt == 0 && IsRetryableLearningDbException(ex))
                     {
-                        Log("Learning DB transient write failure; retrying once: " + ex.Message);
+                        Log("Learning DB transient write failure for batch " + (batch.BatchId ?? "") +
+                            "; retrying once (SQL " + GetLearningDbSqlErrorNumbers(ex) + ").");
                         Thread.Sleep(100);
                         continue;
                     }
-                    if (logFailure) Log("Learning DB write queued for retry: " + ex.Message);
-                    return false;
+                    if (IsRetryableLearningDbException(ex))
+                    {
+                        failureReason = "transient_sql_" + GetLearningDbSqlErrorNumbers(ex);
+                        Log("Learning DB transient write failure for batch " + (batch.BatchId ?? "") +
+                            " (SQL " + GetLearningDbSqlErrorNumbers(ex) + "); active outbox replay will retry later.");
+                        return LearningDbWriteResult.RetryableFailure;
+                    }
+                    failureReason = "non_retryable_sql_" + GetLearningDbSqlErrorNumbers(ex);
+                    Log("Learning DB non-retryable write failure for batch " + (batch.BatchId ?? "") +
+                        " (SQL " + GetLearningDbSqlErrorNumbers(ex) + "); moving it to dead-letter storage.");
+                    return LearningDbWriteResult.PermanentFailure;
                 }
                 catch (Exception ex)
                 {
-                    if (logFailure) Log("Learning DB write queued for retry: " + ex.Message);
-                    return false;
+                    failureReason = "non_retryable_" + ex.GetType().Name;
+                    Log("Learning DB non-retryable write failure for batch " + (batch.BatchId ?? "") +
+                        " (" + ex.GetType().Name + "); moving it to dead-letter storage.");
+                    return LearningDbWriteResult.PermanentFailure;
                 }
             }
-            return false;
+            failureReason = "transient_sql_unknown";
+            return LearningDbWriteResult.RetryableFailure;
+        }
+
+        private static string GetLearningDbSqlErrorNumbers(SqlException ex)
+        {
+            if (ex == null) return "unknown";
+            string value = String.Join(",", ex.Errors.Cast<SqlError>()
+                .Select(error => error.Number.ToString(CultureInfo.InvariantCulture))
+                .Distinct()
+                .ToArray());
+            return String.IsNullOrEmpty(value) ? "unknown" : value;
         }
 
         private static bool IsUniqueLearningDbConflict(SqlException ex)
@@ -254,9 +330,27 @@ namespace RecoNet
             }
         }
 
+        private static bool HasUnsupportedLearningDbMethod(LearningDbOutboxBatch batch, out string reason)
+        {
+            reason = "";
+            if (batch == null || batch.Groups == null) return false;
+            int invalidCount = batch.Groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
+                String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)));
+            if (invalidCount == 0) return false;
+            reason = "missing_or_unsupported_project_method_for_" + invalidCount.ToString(CultureInfo.InvariantCulture) + "_group(s)";
+            return true;
+        }
+
         private static bool TryAppendLearningDbOutbox(LearningDbOutboxBatch batch)
         {
             if (batch == null || String.IsNullOrWhiteSpace(batch.BatchId) || batch.Groups == null || batch.Groups.Count == 0) return false;
+            string unsupportedReason;
+            if (HasUnsupportedLearningDbMethod(batch, out unsupportedReason))
+            {
+                Log("Learning DB batch " + (batch.BatchId ?? "") + " was not queued because " + unsupportedReason +
+                    "; local mapping remains available.");
+                return false;
+            }
             try
             {
                 bool durable = false;
@@ -286,6 +380,111 @@ namespace RecoNet
             }
         }
 
+        private static bool TryAppendLearningDbDeadLetter(LearningDbOutboxBatch batch, string reason)
+        {
+            if (batch == null || String.IsNullOrWhiteSpace(batch.BatchId)) return false;
+            try
+            {
+                bool saved = false;
+                bool locked = TryWithLearningDbOutboxLock(delegate
+                {
+                    string path = GetLearningDbDeadLetterPath();
+                    Directory.CreateDirectory(Path.GetDirectoryName(path));
+                    List<string> lines = File.Exists(path)
+                        ? File.ReadAllLines(path, Encoding.UTF8).ToList()
+                        : new List<string>();
+                    bool exists = lines.Any(line => String.Equals(GetFlat(ParseFlatJson(line), "batch_id"), batch.BatchId,
+                        StringComparison.OrdinalIgnoreCase));
+                    if (!exists)
+                    {
+                        Dictionary<string, string> row = SerializeLearningDbOutboxBatch(batch);
+                        row["dead_letter_reason"] = NormalizeLearningDbDeadLetterReason(reason);
+                        row["dead_letter_at"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+                        lines.Add(ToFlatJson(row));
+                        WriteAllLinesAtomic(path, lines.ToArray(), Encoding.UTF8);
+                    }
+                    saved = true;
+                }, 5000);
+                if (!locked) Log("Learning DB dead-letter lock timeout; rejected batch was not persisted.");
+                return locked && saved;
+            }
+            catch (Exception ex)
+            {
+                Log("Learning DB dead-letter append failed (" + ex.GetType().Name + ").");
+                return false;
+            }
+        }
+
+        private static bool TryMoveLearningDbOutboxBatchToDeadLetter(string batchId, string reason)
+        {
+            if (String.IsNullOrWhiteSpace(batchId)) return false;
+            try
+            {
+                bool moved = false;
+                bool locked = TryWithLearningDbOutboxLock(delegate
+                {
+                    string activePath = GetLearningDbOutboxPath();
+                    if (!File.Exists(activePath))
+                    {
+                        moved = true;
+                        return;
+                    }
+
+                    List<string> activeLines = File.ReadAllLines(activePath, Encoding.UTF8).ToList();
+                    List<string> rejectedLines = activeLines
+                        .Where(line => String.Equals(GetFlat(ParseFlatJson(line), "batch_id"), batchId, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    if (rejectedLines.Count == 0)
+                    {
+                        moved = true;
+                        return;
+                    }
+
+                    string deadLetterPath = GetLearningDbDeadLetterPath();
+                    Directory.CreateDirectory(Path.GetDirectoryName(deadLetterPath));
+                    List<string> deadLetterLines = File.Exists(deadLetterPath)
+                        ? File.ReadAllLines(deadLetterPath, Encoding.UTF8).ToList()
+                        : new List<string>();
+                    bool alreadySaved = deadLetterLines.Any(line => String.Equals(GetFlat(ParseFlatJson(line), "batch_id"), batchId,
+                        StringComparison.OrdinalIgnoreCase));
+                    if (!alreadySaved)
+                    {
+                        Dictionary<string, string> row = ParseFlatJson(rejectedLines[0]);
+                        row["dead_letter_reason"] = NormalizeLearningDbDeadLetterReason(reason);
+                        row["dead_letter_at"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+                        deadLetterLines.Add(ToFlatJson(row));
+                        WriteAllLinesAtomic(deadLetterPath, deadLetterLines.ToArray(), Encoding.UTF8);
+                    }
+
+                    List<string> remaining = activeLines
+                        .Where(line => !String.Equals(GetFlat(ParseFlatJson(line), "batch_id"), batchId, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    WriteAllLinesAtomic(activePath, remaining.ToArray(), Encoding.UTF8);
+                    moved = true;
+                }, 5000);
+                if (!locked) Log("Learning DB outbox dead-letter move lock timeout; rejected batch remains active.");
+                return locked && moved;
+            }
+            catch (Exception ex)
+            {
+                Log("Learning DB outbox dead-letter move failed (" + ex.GetType().Name + "); rejected batch remains active.");
+                return false;
+            }
+        }
+
+        private static string NormalizeLearningDbDeadLetterReason(string reason)
+        {
+            string value = (reason ?? "unknown").Trim();
+            if (value.Length == 0) value = "unknown";
+            StringBuilder safe = new StringBuilder();
+            foreach (char ch in value)
+            {
+                if (Char.IsLetterOrDigit(ch) || ch == '_' || ch == '-' || ch == ',' || ch == '(' || ch == ')') safe.Append(ch);
+            }
+            if (safe.Length == 0) return "unknown";
+            return safe.Length <= 200 ? safe.ToString() : safe.ToString(0, 200);
+        }
+
         private static Dictionary<string, string> SerializeLearningDbOutboxBatch(LearningDbOutboxBatch batch)
         {
             Dictionary<string, string> row = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -309,6 +508,10 @@ namespace RecoNet
                 row[prefix + "box_id"] = group.BoxId ?? "";
                 row[prefix + "expression"] = group.Expression ?? "";
                 row[prefix + "source_cell"] = group.SourceCell ?? "";
+                row[prefix + "accepted_count"] = group.AcceptedCount.ToString(CultureInfo.InvariantCulture);
+                row[prefix + "corrected_count"] = group.CorrectedCount.ToString(CultureInfo.InvariantCulture);
+                row[prefix + "rejected_count"] = group.RejectedCount.ToString(CultureInfo.InvariantCulture);
+                row[prefix + "user_action"] = group.UserAction ?? "";
                 row[prefix + "target_count"] = (group.Targets == null ? 0 : group.Targets.Count).ToString(CultureInfo.InvariantCulture);
                 for (int targetIndex = 0; targetIndex < (group.Targets == null ? 0 : group.Targets.Count); targetIndex++)
                 {
@@ -356,7 +559,11 @@ namespace RecoNet
                     ExcelRow = ReadFlatInt(row, prefix + "excel_row", 0),
                     BoxId = GetFlat(row, prefix + "box_id"),
                     Expression = GetFlat(row, prefix + "expression"),
-                    SourceCell = GetFlat(row, prefix + "source_cell")
+                    SourceCell = GetFlat(row, prefix + "source_cell"),
+                    AcceptedCount = ReadFlatInt(row, prefix + "accepted_count", 1),
+                    CorrectedCount = ReadFlatInt(row, prefix + "corrected_count", 0),
+                    RejectedCount = ReadFlatInt(row, prefix + "rejected_count", 0),
+                    UserAction = GetFlat(row, prefix + "user_action")
                 };
                 int targetCount = ReadFlatInt(row, prefix + "target_count", 0);
                 int operandCount = ReadFlatInt(row, prefix + "operand_count", 0);
@@ -393,8 +600,21 @@ namespace RecoNet
             List<LearningDbOutboxBatch> batches = LoadLearningDbOutboxBatches();
             foreach (LearningDbOutboxBatch batch in batches.Take(20))
             {
-                if (!TryWriteLearningDbBatch(batch, false)) return false;
-                RemoveLearningDbOutboxBatch(batch.BatchId);
+                string failureReason;
+                LearningDbWriteResult writeResult = TryWriteLearningDbBatch(batch, out failureReason);
+                if (writeResult == LearningDbWriteResult.Succeeded)
+                {
+                    RemoveLearningDbOutboxBatch(batch.BatchId);
+                    continue;
+                }
+                if (writeResult == LearningDbWriteResult.PermanentFailure)
+                {
+                    Log("Learning DB outbox batch " + (batch.BatchId ?? "") +
+                        " is permanently invalid and will be isolated; subsequent batches will continue.");
+                    if (!TryMoveLearningDbOutboxBatchToDeadLetter(batch.BatchId, failureReason)) return false;
+                    continue;
+                }
+                return false;
             }
             return true;
         }
@@ -414,6 +634,8 @@ namespace RecoNet
                 foreach (MappingFeedbackGroup group in batch.Groups)
                 {
                     if (group == null || String.IsNullOrWhiteSpace(group.QuantityName) || String.IsNullOrWhiteSpace(group.BoxId)) continue;
+                    if (String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method))) continue;
+                    if (Math.Max(0, group.AcceptedCount) + Math.Max(0, group.CorrectedCount) <= 0) continue;
                     string signature = NormalizeForSignature(group.QuantityName) + "|";
                     if (signature.Length > 450) signature = signature.Substring(0, 450);
                     keys.Add(signature + "\n" + group.BoxId);
@@ -494,9 +716,15 @@ namespace RecoNet
             return Path.Combine(FindRecoQuotaDataDir(), LearningDbOutboxFileName);
         }
 
+        private static string GetLearningDbDeadLetterPath()
+        {
+            return Path.Combine(FindRecoQuotaDataDir(), LearningDbDeadLetterFileName);
+        }
+
         private static void RememberLearningDbDurableResult(string source, List<MappingFeedbackGroup> groups, bool durable)
         {
-            if (!String.Equals(source ?? "", "name-match", StringComparison.OrdinalIgnoreCase)) return;
+            if (!String.Equals(source ?? "", "template-right-click", StringComparison.OrdinalIgnoreCase) &&
+                !String.Equals(source ?? "", "name-match", StringComparison.OrdinalIgnoreCase)) return;
             lastLearningDbResultGroups = groups;
             lastLearningDbResultDurable = durable;
         }
@@ -514,9 +742,12 @@ namespace RecoNet
             if (ex == null) return false;
             foreach (SqlError error in ex.Errors)
             {
-                if (error.Number == -2 || error.Number == 53 || error.Number == 64 || error.Number == 233 ||
+                if (error.Number == -2 || error.Number == -1 || error.Number == 0 || error.Number == 2 || error.Number == 20 ||
+                    error.Number == 53 || error.Number == 64 || error.Number == 121 || error.Number == 233 || error.Number == 258 ||
+                    error.Number == 4060 ||
                     error.Number == 1205 || error.Number == 2601 || error.Number == 2627 ||
-                    error.Number == 10053 || error.Number == 10054 || error.Number == 10060)
+                    error.Number == 10053 || error.Number == 10054 || error.Number == 10060 || error.Number == 10061 || error.Number == 10065 ||
+                    error.Number == 11001)
                 {
                     return true;
                 }
@@ -607,21 +838,34 @@ namespace RecoNet
                 cmd.Transaction = transaction;
                 cmd.CommandTimeout = 5;
                 string method = NormalizeLearningDbMethod(group.Method);
+                int acceptedDelta = Math.Max(0, group.AcceptedCount);
+                int correctedDelta = Math.Max(0, group.CorrectedCount);
+                int rejectedDelta = Math.Max(0, group.RejectedCount);
+                if (acceptedDelta + correctedDelta + rejectedDelta == 0) acceptedDelta = 1;
+                int initialWeight = Math.Max(0, Math.Min(100,
+                    10 * acceptedDelta + 20 * correctedDelta - 10 * rejectedDelta));
                 cmd.CommandText =
-                    "UPDATE dbo.SignatureBoxMap WITH (UPDLOCK,HOLDLOCK) SET accepted_count=accepted_count+1, " +
-                    "weight=CASE WHEN 10*(accepted_count+1)+20*corrected_count-10*rejected_count>100 THEN 100 " +
-                    "WHEN 10*(accepted_count+1)+20*corrected_count-10*rejected_count<0 THEN 0 " +
-                    "ELSE 10*(accepted_count+1)+20*corrected_count-10*rejected_count END, last_used_at=SYSDATETIME() " +
+                    "UPDATE dbo.SignatureBoxMap WITH (UPDLOCK,HOLDLOCK) SET accepted_count=accepted_count+@accepted, " +
+                    "corrected_count=corrected_count+@corrected, rejected_count=rejected_count+@rejected, " +
+                    "weight=CASE WHEN 10*(accepted_count+@accepted)+20*(corrected_count+@corrected)-10*(rejected_count+@rejected)>100 THEN 100 " +
+                    "WHEN 10*(accepted_count+@accepted)+20*(corrected_count+@corrected)-10*(rejected_count+@rejected)<0 THEN 0 " +
+                    "ELSE 10*(accepted_count+@accepted)+20*(corrected_count+@corrected)-10*(rejected_count+@rejected) END, last_used_at=SYSDATETIME() " +
                     "WHERE signature=@s AND method=@method AND box_id=@box; " +
-                    "IF @@ROWCOUNT=0 INSERT INTO dbo.SignatureBoxMap(signature,method,box_id,weight,accepted_count,corrected_count,rejected_count,last_used_at) VALUES(@s,@method,@box,10,1,0,0,SYSDATETIME());";
+                    "IF @@ROWCOUNT=0 INSERT INTO dbo.SignatureBoxMap(signature,method,box_id,weight,accepted_count,corrected_count,rejected_count,last_used_at) " +
+                    "VALUES(@s,@method,@box,@weight,@accepted,@corrected,@rejected,SYSDATETIME());";
                 cmd.Parameters.AddWithValue("@s", signature);
                 cmd.Parameters.AddWithValue("@method", method);
                 cmd.Parameters.AddWithValue("@box", boxId);
+                cmd.Parameters.AddWithValue("@accepted", acceptedDelta);
+                cmd.Parameters.AddWithValue("@corrected", correctedDelta);
+                cmd.Parameters.AddWithValue("@rejected", rejectedDelta);
+                cmd.Parameters.AddWithValue("@weight", initialWeight);
                 cmd.ExecuteNonQuery();
             }
 
             bool hasFormulaTables = false;
-            if (group.FormulaOperands.Count > 0 && targets.Any(target => !String.IsNullOrWhiteSpace(target.FormulaTemplate)))
+            bool positiveEvidence = Math.Max(0, group.AcceptedCount) + Math.Max(0, group.CorrectedCount) > 0;
+            if (positiveEvidence && group.FormulaOperands.Count > 0 && targets.Any(target => !String.IsNullOrWhiteSpace(target.FormulaTemplate)))
             {
                 using (SqlCommand cmd = conn.CreateCommand())
                 {
@@ -685,7 +929,7 @@ namespace RecoNet
             }
 
             string entryCode = TrimLearningText(group.EntryCode, 100);
-            if (entryCode.Length > 0)
+            if (positiveEvidence && entryCode.Length > 0)
             {
                 string method = NormalizeLearningDbMethod(group.Method);
                 string entryName = TrimLearningText(group.EntryName, 500);

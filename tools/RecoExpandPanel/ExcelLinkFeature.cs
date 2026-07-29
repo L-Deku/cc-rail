@@ -2038,6 +2038,36 @@ namespace RecoNet
             return result;
         }
 
+        // 相同单元格在同一加减项内重复出现时，不能把平方/自除等非线性公式简化成一次系数。
+        // F10+F10 是两个独立正向加项，仍只学习一个名称级别名。
+        private static bool HasRepeatedCellReferenceWithinTerm(string expression)
+        {
+            string normalized = NormalizeExpressionOperators(expression);
+            int depth = 0;
+            int termStart = 0;
+            for (int i = 0; i <= normalized.Length; i++)
+            {
+                bool atEnd = i == normalized.Length;
+                char ch = atEnd ? '\0' : normalized[i];
+                if (!atEnd)
+                {
+                    if (ch == '(') depth++;
+                    else if (ch == ')' && depth > 0) depth--;
+                }
+                if (!atEnd && (ch != '+' && ch != '-' || depth != 0)) continue;
+
+                string term = normalized.Substring(termStart, i - termStart).Trim();
+                foreach (string address in ExtractCellAddressesFromExpression(term))
+                {
+                    string pattern = "(?<![A-Z0-9])" + System.Text.RegularExpressions.Regex.Escape(address) + "(?![A-Z0-9])";
+                    if (System.Text.RegularExpressions.Regex.Matches(term, pattern,
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count > 1) return true;
+                }
+                if (!atEnd) termStart = i + 1;
+            }
+            return false;
+        }
+
         // 从一个只含单个来源单元格的正向加项中提取线性乘数。
         // 例如 F10*0.2+F11/4 分别得到 0.2 和 0.25；F10*F11 或含函数的复杂式不学习。
         private static bool TryExtractPositiveCellScaleFactor(string expression, string sourceCell, out decimal factor)
@@ -2069,6 +2099,8 @@ namespace RecoNet
                     if (addresses.Count == 1 && String.Equals(addresses[0], normalizedCell, StringComparison.OrdinalIgnoreCase))
                     {
                         string pattern = "(?<![A-Z0-9])" + System.Text.RegularExpressions.Regex.Escape(normalizedCell) + "(?![A-Z0-9])";
+                        if (System.Text.RegularExpressions.Regex.Matches(term, pattern,
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count != 1) return false;
                         string numericTerm = System.Text.RegularExpressions.Regex.Replace(term, pattern, "1",
                             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                         if (ExtractCellAddressesFromExpression(numericTerm).Count > 0) return false;
@@ -2274,6 +2306,10 @@ namespace RecoNet
             public string BoxId;          // 本机对应框编号(SQL 增量聚合复用)
             public string Expression;     // 原始绑定表达式(多单元格别名追溯)
             public string SourceCell;     // 当前别名对应的独立来源单元格
+            public int AcceptedCount = 1; // 普通人工绑定/确认
+            public int CorrectedCount;    // 右键扶正后的新关系
+            public int RejectedCount;     // 右键重绑时被替换的旧关系
+            public string UserAction;     // accepted / correction / rejection
             public List<QuantityFormulaOperandInfo> FormulaOperands = new List<QuantityFormulaOperandInfo>();
             public List<MappingFeedbackTarget> Targets = new List<MappingFeedbackTarget>();
         }
@@ -2329,7 +2365,8 @@ namespace RecoNet
                 string expression = String.IsNullOrWhiteSpace(source.Link.Expression) ? source.Link.CellAddress : source.Link.Expression;
                 source.Addresses = ExtractPositiveAdditiveCellAddresses(expression);
                 List<string> allAddresses = ExtractCellAddressesFromExpression(expression);
-                source.IsCompositeFormula = allAddresses.Count > 0 && source.Addresses.Count != allAddresses.Count;
+                source.IsCompositeFormula = allAddresses.Count > 0 &&
+                    (source.Addresses.Count != allAddresses.Count || HasRepeatedCellReferenceWithinTerm(expression));
                 if (source.IsCompositeFormula) source.Addresses = allAddresses;
                 sources.Add(source);
             }
@@ -2354,17 +2391,27 @@ namespace RecoNet
                 {
                     string address = source.Addresses[addressIndex];
                     CellRef cell;
-                    if (!TryParseCellAddress(address, out cell)) break;
+                    if (!TryParseCellAddress(address, out cell))
+                    {
+                        operands.Add(null);
+                        continue;
+                    }
                     string fullName = ReadRowNameAt(source.Link.ExcelPath, source.Link.WorksheetName, address, hiddenColumnCache, mergedRegionCache, readContext, true);
                     string unit = ReadTargetUnitNearQuantity(source.Link.ExcelPath, source.Link.WorksheetName, cell.Row, cell.Column, hiddenColumnCache, readContext);
                     if (String.IsNullOrWhiteSpace(fullName) && addressIndex == 0) fullName = source.FallbackName;
                     string name = StripTrailingQuantityUnit(fullName, unit);
-                    if (String.IsNullOrWhiteSpace(name)) break;
+                    if (String.IsNullOrWhiteSpace(name))
+                    {
+                        operands.Add(null);
+                        continue;
+                    }
                     string operandSignature = NormalizeForSignature(name) + "|";
                     if (operandSignature.Length > 450) operandSignature = operandSignature.Substring(0, 450);
                     operands.Add(new QuantityFormulaOperandInfo { Name = name, Unit = unit ?? "", Signature = operandSignature });
                 }
-                if (operands.Count != source.Addresses.Count || operands.Count == 0) continue;
+                if (operands.Count == 0 ||
+                    (source.IsCompositeFormula && operands.Any(operand => operand == null)) ||
+                    (!source.IsCompositeFormula && operands.All(operand => operand == null))) continue;
 
                 string compositeTemplate = "";
                 if (source.IsCompositeFormula && !TryBuildCellTokenFormula(
@@ -2380,6 +2427,7 @@ namespace RecoNet
                     int operandIndex = source.IsCompositeFormula ? 0 : addressIndex;
                     string address = source.Addresses[operandIndex];
                     QuantityFormulaOperandInfo anchor = operands[operandIndex];
+                    if (anchor == null) continue;
 
                     MappingFeedbackGroup group = new MappingFeedbackGroup
                     {
@@ -2395,6 +2443,21 @@ namespace RecoNet
                     if (source.IsCompositeFormula) group.FormulaOperands.AddRange(operands);
                     else group.FormulaOperands.Add(anchor);
                     FillGroupSheetContext(group, source.Link, address);
+                    bool hasNonReusableCompositeTarget = false;
+                    if (source.IsCompositeFormula)
+                    {
+                        foreach (ExcelQuotaLink target in source.Targets)
+                        {
+                            string ignoredSuffix;
+                            if (TryBuildExcelLinkUnitScaleSuffix(group.QuantityUnit, target.QuotaUnit, out ignoredSuffix))
+                            {
+                                hasNonReusableCompositeTarget = true;
+                                break;
+                            }
+                        }
+                    }
+                    // 一个原始绑定必须学习完整组件框；只要其中一个目标属于同量纲业务系数，整框都不推广。
+                    if (hasNonReusableCompositeTarget) continue;
                     foreach (ExcelQuotaLink target in source.Targets)
                     {
                         string conversionFactor;
@@ -2413,7 +2476,7 @@ namespace RecoNet
                             FormulaTemplate = formulaTemplate
                         });
                     }
-                    groups.Add(group);
+                    if (group.Targets.Count > 0) groups.Add(group);
                 }
             }
             return groups;
@@ -2434,6 +2497,7 @@ namespace RecoNet
             string name = (fullName ?? "").Trim();
             string normalizedUnit = (unit ?? "").Trim();
             if (name.Length == 0 || normalizedUnit.Length == 0) return name;
+            if (String.Equals(name, normalizedUnit, StringComparison.OrdinalIgnoreCase)) return "";
             string suffix = " " + normalizedUnit;
             if (name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
             {
@@ -2461,10 +2525,10 @@ namespace RecoNet
             group.ExcelRow = row;
         }
 
-        // 名字驱动写入后合批回写：每个工程量组保持完整目标集合，共享同一个 box_id。
+        // 名字驱动右键新增/重绑：每个工程量组保持完整目标集合，共享同一个 box_id。
         private static void RecordNameMatchesToMappingStore(List<MappingFeedbackGroup> groups)
         {
-            RecordMappingGroupsToStore(groups, "name-match");
+            RecordMappingGroupsToStore(groups, "template-right-click");
         }
 
         private static void RecordMappingGroupsToStore(List<MappingFeedbackGroup> groups, string source = "mapping-store")
@@ -2531,8 +2595,14 @@ namespace RecoNet
                 String.Equals(GetFlat(row, "method").Trim(), groupMethod, StringComparison.OrdinalIgnoreCase) &&
                 String.Equals(NormalizeForSignature(GetFlat(row, "quantity_name")) + "|", signature, StringComparison.OrdinalIgnoreCase))
                 .ToList();
-            int weight = (existingRows.Count == 0 ? 10 : existingRows.Max(row => ReadFlatInt(row, "weight", 0))) + 5;
-            int accepted = (existingRows.Count == 0 ? 0 : existingRows.Max(row => ReadFlatInt(row, "accepted_count", 0))) + 1;
+            int acceptedDelta = Math.Max(0, group.AcceptedCount);
+            int correctedDelta = Math.Max(0, group.CorrectedCount);
+            int rejectedDelta = Math.Max(0, group.RejectedCount);
+            if (acceptedDelta + correctedDelta + rejectedDelta == 0) acceptedDelta = 1;
+            int accepted = (existingRows.Count == 0 ? 0 : existingRows.Max(row => ReadFlatInt(row, "accepted_count", 0))) + acceptedDelta;
+            int corrected = (existingRows.Count == 0 ? 0 : existingRows.Max(row => ReadFlatInt(row, "corrected_count", 0))) + correctedDelta;
+            int rejected = (existingRows.Count == 0 ? 0 : existingRows.Max(row => ReadFlatInt(row, "rejected_count", 0))) + rejectedDelta;
+            int weight = Math.Max(0, Math.Min(100, 10 * accepted + 20 * corrected - 10 * rejected));
             string now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
             foreach (MappingFeedbackTarget target in targets)
@@ -2578,8 +2648,8 @@ namespace RecoNet
                 }
                 existing["weight"] = weight.ToString(CultureInfo.InvariantCulture);
                 existing["accepted_count"] = accepted.ToString(CultureInfo.InvariantCulture);
-                existing["corrected_count"] = "0";
-                existing["rejected_count"] = "0";
+                existing["corrected_count"] = corrected.ToString(CultureInfo.InvariantCulture);
+                existing["rejected_count"] = rejected.ToString(CultureInfo.InvariantCulture);
                 existing["last_used_at"] = now;
             }
         }

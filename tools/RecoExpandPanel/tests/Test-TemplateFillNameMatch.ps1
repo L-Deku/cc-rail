@@ -317,12 +317,17 @@ $singleItems.Add((New-PreviewItem 40 1 ''))
 foreach ($member in $singleItems) {
     $itemType.GetField('NeedExactNameConfirmation', $flags).SetValue($member, $true)
     $itemType.GetField('Selected', $flags).SetValue($member, $false)
+    $itemType.GetField('AlignNote', $flags).SetValue($member, '名称学习命中，候选待确认')
 }
 if (-not $confirmExact.Invoke($null, [object[]]@($singleItems.PSObject.BaseObject, 40))) {
     throw '唯一绑定整组确认应成功'
 }
 if (@($singleItems | Where-Object { -not $_.Selected -or $_.NeedExactNameConfirmation }).Count -ne 0) {
     throw '唯一绑定确认后应整组勾选并取消红色确认状态'
+}
+if ($singleItems[0].AlignNote -ne '人工确认重复名称' -or
+    $singleItems[1].AlignNote -ne '组件框第 2 条（人工确认重复名称）') {
+    throw '唯一绑定确认后应刷新整个组件组状态'
 }
 
 $choiceItems = [Activator]::CreateInstance($itemListType)
@@ -368,13 +373,15 @@ foreach ($definition in @(@('group-a', 'DY-959'), @('group-b', 'DY-942'))) {
 }
 $itemType.GetField('NameQuotaCandidates', $flags).SetValue($defaultLeader, $defaultCandidates)
 $itemType.GetField('SelectedNameQuotaCandidateKey', $flags).SetValue($defaultLeader, 'group-a')
+$itemType.GetField('QuantityText', $flags).SetValue($defaultLeader, '123.45/10')
 $defaultItems.Add($defaultLeader)
 if (-not $confirmCurrent.Invoke($null, [object[]]@($defaultItems.PSObject.BaseObject, 55))) {
     throw '当前默认候选应允许直接确认'
 }
 if ($defaultItems.Count -ne 1 -or $defaultItems[0].QuotaCode -ne 'DY-959' -or
-    -not $defaultItems[0].Selected -or $defaultItems[0].NeedExactNameConfirmation) {
-    throw '直接确认必须接受当前显示候选并取消确认状态'
+    -not $defaultItems[0].Selected -or $defaultItems[0].NeedExactNameConfirmation -or
+    $defaultItems[0].QuantityText -ne '123.45/10') {
+    throw '直接确认必须接受当前显示候选、保留人工数量并取消确认状态'
 }
 Write-Host 'PASS 重复名称唯一确认、默认候选确认与候选整组切换'
 
@@ -456,59 +463,118 @@ try {
     $uiCandidates = [Activator]::CreateInstance($itemType.GetField('NameQuotaCandidates', $flags).FieldType)
     $uiFirst = [Activator]::CreateInstance($candidateType)
     $candidateType.GetField('Key', $flags).SetValue($uiFirst, 'group-a')
-    $candidateType.GetField('Label', $flags).SetValue($uiFirst, 'DY-959 + ZLF*1.01（组件2条）')
+    $candidateType.GetField('Label', $flags).SetValue($uiFirst, '来源定额A + 来源材料A（组件2条）')
     $uiFirstItems = $candidateType.GetField('Items', $flags).GetValue($uiFirst)
     $uiFirstItems.Add((New-PreviewItem 60 0 '重复工程量'))
     $uiFirstItems.Add((New-PreviewItem 60 1 ''))
     $itemType.GetField('QuotaCode', $flags).SetValue($uiFirstItems[0], 'DY-959')
     $itemType.GetField('QuotaCode', $flags).SetValue($uiFirstItems[1], 'ZLF*1.01')
+    $itemType.GetField('SourceName', $flags).SetValue($uiFirstItems[0], '来源定额A')
+    $itemType.GetField('SourceName', $flags).SetValue($uiFirstItems[1], '来源材料A')
     $uiCandidates.Add($uiFirst)
 
     $uiSecond = [Activator]::CreateInstance($candidateType)
     $candidateType.GetField('Key', $flags).SetValue($uiSecond, 'group-b')
-    $candidateType.GetField('Label', $flags).SetValue($uiSecond, 'DY-519 + ZLF*1.01（组件2条）')
+    $candidateType.GetField('Label', $flags).SetValue($uiSecond, '来源定额B + 来源材料B（组件2条）')
     $uiSecondItems = $candidateType.GetField('Items', $flags).GetValue($uiSecond)
     $uiSecondItems.Add((New-PreviewItem 60 0 '重复工程量'))
     $uiSecondItems.Add((New-PreviewItem 60 1 ''))
     $itemType.GetField('QuotaCode', $flags).SetValue($uiSecondItems[0], 'DY-519')
     $itemType.GetField('QuotaCode', $flags).SetValue($uiSecondItems[1], 'ZLF*1.01')
+    $itemType.GetField('SourceName', $flags).SetValue($uiSecondItems[0], '来源定额B')
+    $itemType.GetField('SourceName', $flags).SetValue($uiSecondItems[1], '来源材料B')
+    $itemType.GetField('AlignNote', $flags).SetValue($uiSecondItems[0], '名称学习命中，候选待确认')
+    $itemType.GetField('AlignNote', $flags).SetValue($uiSecondItems[1], '名称学习命中，候选待确认')
     $uiCandidates.Add($uiSecond)
     $itemType.GetField('NameQuotaCandidates', $flags).SetValue($uiLeader, $uiCandidates)
     $itemType.GetField('SelectedNameQuotaCandidateKey', $flags).SetValue($uiLeader, 'group-a')
     $panelPreview.Add($uiLeader)
     $uiMember = New-PreviewItem 60 1 ''
     $itemType.GetField('QuotaCode', $flags).SetValue($uiMember, 'ZLF*1.01')
+    $itemType.GetField('SourceName', $flags).SetValue($uiLeader, '来源定额A')
+    $itemType.GetField('SourceName', $flags).SetValue($uiMember, '来源材料A')
     $itemType.GetField('NeedExactNameConfirmation', $flags).SetValue($uiMember, $true)
     $itemType.GetField('Selected', $flags).SetValue($uiMember, $false)
     $panelPreview.Add($uiMember)
 
     $panelType.GetMethod('FillGrid', $flags).Invoke($panel, $null)
     $uiGrid = $panelType.GetField('grid', $flags).GetValue($panel)
+    if ($uiGrid.Columns['qty'].ReadOnly) {
+        throw '推荐定额数量列应允许直接编辑'
+    }
+    $uiGrid.Rows[0].Cells['qty'].Value = '123.45/10'
+    $panelType.GetMethod('FlushGridSelectionsToPreview', $flags).Invoke($panel, $null)
+    if ($uiLeader.QuantityText -ne '123.45/10') {
+        throw '数量单元格修改后没有同步到写入预览对象'
+    }
+    $hasUnsafeCandidate = $panelType.GetMethod('HasUnsafeNameQuotaCandidate', $flags)
+    $reviewItems = [Activator]::CreateInstance($itemListType)
+    $reviewItem = New-PreviewItem 61 0 '待确认工程量'
+    $itemType.GetField('AlignNote', $flags).SetValue(
+        $reviewItem, '模板存在同名多来源，已带出候选，需下拉确认')
+    $reviewItems.Add($reviewItem)
+    $reviewArgs = New-Object object[] 1
+    $reviewArgs[0] = $reviewItems.PSObject.BaseObject
+    if ($hasUnsafeCandidate.Invoke($panel, $reviewArgs)) {
+        throw '同名候选确认提示不应被当作组件风险'
+    }
+    $itemType.GetField('Status', $flags).SetValue($reviewItem, '取数失败：测试风险')
+    if (-not $hasUnsafeCandidate.Invoke($panel, $reviewArgs)) {
+        throw '真实取数失败状态仍应阻止直接确认'
+    }
     if ($uiGrid.Rows.Count -ne 2 -or $uiGrid.Rows[0].Cells['sel'].ReadOnly -or
-        $uiGrid.Rows[0].Cells['code'].ReadOnly -or -not $uiGrid.Rows[1].Cells['sel'].ReadOnly) {
-        throw '多候选当前组首应允许直接勾选并保留下拉，组件组员不得单独确认'
+        -not $uiGrid.Rows[0].Cells['code'].ReadOnly -or $uiGrid.Rows[0].Cells['sname'].ReadOnly -or
+        -not ($uiGrid.Rows[1].Cells['sel'] -is [System.Windows.Forms.DataGridViewTextBoxCell])) {
+        throw '多候选应在源行定额列下拉，定额编号只读且组件成员不显示复选框'
     }
     if ($uiGrid.Rows[0].DefaultCellStyle.BackColor.ToArgb() -ne [System.Drawing.Color]::MistyRose.ToArgb()) {
         throw '多候选未确认行应标红'
     }
+    $uiGrid.Rows[0].Cells['sel'].Value = $true
+    $panelType.GetMethod('ApplyNameGroupSelectionFromCheck', $flags).Invoke(
+        $panel, @($uiGrid.Rows[0].PSObject.BaseObject))
+    $confirmedDefaultGroup = @($panelPreview | Where-Object { $_.TargetRow -eq 60 } | Sort-Object GroupOrder)
+    if ($confirmedDefaultGroup[0].QuantityText -ne '123.45/10' -or
+        $uiGrid.Rows[0].Cells['qty'].Value -ne '123.45/10' -or
+        @($confirmedDefaultGroup | Where-Object { -not $_.Selected -or $_.NeedExactNameConfirmation }).Count -ne 0) {
+        throw '默认候选修改数量后直接勾选，必须保留数量并原地确认整组'
+    }
     $prepareDropDown = $panelType.GetMethod('PrepareNameQuotaDropDown', $flags)
-    if (-not $prepareDropDown.Invoke($panel, @($uiGrid.Rows[0].PSObject.BaseObject))) { throw '定额下拉应创建成功' }
-    if (-not ($uiGrid.Rows[0].Cells['code'] -is [System.Windows.Forms.DataGridViewComboBoxCell])) {
-        throw '定额编号单元格应切换为下拉框'
+    if (-not $prepareDropDown.Invoke($panel, @($uiGrid.Rows[0].PSObject.BaseObject))) { throw '源行定额下拉应创建成功' }
+    if (-not ($uiGrid.Rows[0].Cells['sname'] -is [System.Windows.Forms.DataGridViewComboBoxCell]) -or
+        ($uiGrid.Rows[0].Cells['code'] -is [System.Windows.Forms.DataGridViewComboBoxCell])) {
+        throw '源行定额单元格应切换为下拉框，定额编号不得变为下拉框'
     }
     $panelType.GetMethod('ApplyNameQuotaOption', $flags).Invoke($panel,
-        @($uiGrid.Rows[0].PSObject.BaseObject, 'DY-519 + ZLF*1.01（组件2条）'))
+        @($uiGrid.Rows[0].PSObject.BaseObject, '来源定额B + 来源材料B（组件2条）'))
     if ($uiGrid.Rows.Count -ne 2 -or $uiGrid.Rows[0].Cells['code'].Value -ne 'DY-519' -or
         $uiGrid.Rows[1].Cells['code'].Value -ne 'ZLF*1.01') {
         throw '界面选择组件候选后应展开完整定额组'
     }
-    if (@($uiGrid.Rows | Where-Object { -not [bool]$_.Cells['sel'].Value }).Count -ne 0) {
+    if ($uiGrid.Rows[0].Tag.AlignNote -ne '人工选择同名绑定' -or
+        $uiGrid.Rows[1].Tag.AlignNote -ne '组件框第 2 条（人工选择同名绑定）' -or
+        $uiGrid.Rows[0].Cells['st'].Value -ne '人工选择同名绑定' -or
+        $uiGrid.Rows[1].Cells['st'].Value -ne '组件框第 2 条（人工选择同名绑定）') {
+        throw '选择组件候选后应刷新整组状态，不得保留旧候选提示'
+    }
+    if (-not [bool]$uiGrid.Rows[0].Cells['sel'].Value -or
+        @($panelPreview | Where-Object { $_.TargetRow -eq 60 -and -not $_.Selected }).Count -ne 0 -or
+        ($uiGrid.Rows[1].Cells['sel'] -is [System.Windows.Forms.DataGridViewCheckBoxCell])) {
         throw '界面选择组件候选后应整组勾选'
     }
+    $uiGrid.Rows[0].Cells['sel'].Value = $false
+    $panelType.GetMethod('ApplyNameGroupSelectionFromCheck', $flags).Invoke(
+        $panel, @($uiGrid.Rows[0].PSObject.BaseObject))
+    if (@($panelPreview | Where-Object { $_.TargetRow -eq 60 -and $_.Selected }).Count -ne 0) {
+        throw '组件框组首取消勾选应取消整组，隐藏成员不得继续保持选中'
+    }
+    $uiGrid.Rows[0].Cells['sel'].Value = $true
+    $panelType.GetMethod('ApplyNameGroupSelectionFromCheck', $flags).Invoke(
+        $panel, @($uiGrid.Rows[0].PSObject.BaseObject))
     if (@($uiGrid.Rows | Where-Object { $_.DefaultCellStyle.BackColor.ToArgb() -eq [System.Drawing.Color]::MistyRose.ToArgb() }).Count -ne 0) {
         throw '界面选择组件候选后应取消红色'
     }
-    Write-Host 'PASS 定额候选下拉与组件组界面确认'
+    Write-Host 'PASS 源行定额候选下拉、成员复选框隐藏与组件组确认'
 
     $scrollPanel = $panelCtor.Invoke([object[]]@($mainForm.PSObject.BaseObject))
     try {
@@ -523,11 +589,13 @@ try {
         $itemType.GetField('QuotaCode', $flags).SetValue($scrollLeader, 'Q-A')
         $itemType.GetField('NeedExactNameConfirmation', $flags).SetValue($scrollLeader, $true)
         $itemType.GetField('Selected', $flags).SetValue($scrollLeader, $false)
+        $itemType.GetField('AlignNote', $flags).SetValue(
+            $scrollLeader, '模板存在同名多来源，已带出候选，需下拉确认')
         $scrollCandidates = [Activator]::CreateInstance($itemType.GetField('NameQuotaCandidates', $flags).FieldType)
 
         $scrollCandidateA = [Activator]::CreateInstance($candidateType)
         $candidateType.GetField('Key', $flags).SetValue($scrollCandidateA, 'group-a')
-        $candidateType.GetField('Label', $flags).SetValue($scrollCandidateA, 'Q-A')
+        $candidateType.GetField('Label', $flags).SetValue($scrollCandidateA, '来源定额A')
         $scrollCandidateAItem = New-PreviewItem 30 0 '工程量30'
         $itemType.GetField('QuotaCode', $flags).SetValue($scrollCandidateAItem, 'Q-A')
         $candidateType.GetField('Items', $flags).GetValue($scrollCandidateA).Add($scrollCandidateAItem)
@@ -535,7 +603,7 @@ try {
 
         $scrollCandidateB = [Activator]::CreateInstance($candidateType)
         $candidateType.GetField('Key', $flags).SetValue($scrollCandidateB, 'group-b')
-        $candidateType.GetField('Label', $flags).SetValue($scrollCandidateB, 'Q-B + M-B（组件2条）')
+        $candidateType.GetField('Label', $flags).SetValue($scrollCandidateB, '来源定额B + 来源材料B（组件2条）')
         foreach ($definition in @(@('Q-B', '工程量30'), @('M-B', ''))) {
             $order = $candidateType.GetField('Items', $flags).GetValue($scrollCandidateB).Count
             $member = New-PreviewItem 30 $order $definition[1]
@@ -560,20 +628,26 @@ try {
         $updatingField.SetValue($scrollPanel, $true)
         try { $scrollGrid.Rows[29].Cells['sel'].Value = $true }
         finally { $updatingField.SetValue($scrollPanel, $false) }
-        $panelType.GetMethod('ConfirmExactNameFromCheck', $flags).Invoke(
+        $panelType.GetMethod('ApplyNameGroupSelectionFromCheck', $flags).Invoke(
             $scrollPanel, @($scrollGrid.Rows[29].PSObject.BaseObject))
 
+        $confirmedRows = @($scrollGrid.Rows | Where-Object { $_.Tag.TargetRow -eq 30 })
         $topTargetAfterCheck = ($scrollGrid.Rows[$scrollGrid.FirstDisplayedScrollingRowIndex].Tag).TargetRow
-        if ($topTargetAfterCheck -ne $topTargetBefore -or
+        if ($confirmedRows.Count -ne 1 -or $confirmedRows[0].Cells['code'].Value -ne 'Q-A' -or
+            -not [bool]$confirmedRows[0].Cells['sel'].Value -or
+            -not [String]::IsNullOrWhiteSpace($confirmedRows[0].Tag.Status) -or
+            $confirmedRows[0].Tag.NeedExactNameConfirmation -or
+            $confirmedRows[0].DefaultCellStyle.BackColor.ToArgb() -eq [System.Drawing.Color]::MistyRose.ToArgb() -or
+            $topTargetAfterCheck -ne $topTargetBefore -or
             -not [Object]::ReferenceEquals($unaffectedRow, $scrollGrid.Rows[5])) {
-            throw '勾选确认不得整表刷新或改变顶部可见工程量'
+            throw '默认同名候选应能直接勾选确认、取消红色并保持滚动视口'
         }
 
         $scrollLeaderRow = @($scrollGrid.Rows | Where-Object {
             $_.Tag.TargetRow -eq 30 -and $_.Tag.GroupOrder -eq 0
         })[0]
         $panelType.GetMethod('ApplyNameQuotaOption', $flags).Invoke(
-            $scrollPanel, @($scrollLeaderRow.PSObject.BaseObject, 'Q-B + M-B（组件2条）'))
+            $scrollPanel, @($scrollLeaderRow.PSObject.BaseObject, '来源定额B + 来源材料B（组件2条）'))
         $scrollTargetRows = @($scrollGrid.Rows | Where-Object { $_.Tag.TargetRow -eq 30 })
         $topTargetAfterChoice = ($scrollGrid.Rows[$scrollGrid.FirstDisplayedScrollingRowIndex].Tag).TargetRow
         if ($scrollTargetRows.Count -ne 2 -or $scrollTargetRows[0].Cells['code'].Value -ne 'Q-B' -or
@@ -606,19 +680,6 @@ if ($itemType.GetField('GroupOrder', $flags).GetValue($allItems[0]) -ne 0) { thr
 if ($itemType.GetField('GroupOrder', $flags).GetValue($allItems[1]) -ne 1) { throw '组员顺序应连续' }
 if (-not [String]::IsNullOrEmpty($itemType.GetField('TargetName', $flags).GetValue($allItems[1]))) { throw '组员工程量名应留空' }
 Write-Host "PASS 右键原子整组替换"
-
-$selectedItems = [Activator]::CreateInstance($itemListType)
-$writtenItems = [Activator]::CreateInstance($itemListType)
-$selectedItems.Add((New-PreviewItem 30 0 '工程量C'))
-$selectedItems.Add((New-PreviewItem 30 1 ''))
-$writtenItems.Add($selectedItems[0])
-$filterWritten = $type.GetMethod('FilterFullyWrittenNameGroups', $flags)
-$partial = $filterWritten.Invoke($null, [object[]]@($selectedItems.PSObject.BaseObject, $writtenItems.PSObject.BaseObject))
-if ($partial.Count -ne 0) { throw '组件框部分写入成功时不得学习' }
-$writtenItems.Add($selectedItems[1])
-$complete = $filterWritten.Invoke($null, [object[]]@($selectedItems.PSObject.BaseObject, $writtenItems.PSObject.BaseObject))
-if ($complete.Count -ne 2) { throw '组件框全部写入成功时应整组学习' }
-Write-Host "PASS 组件框部分失败不学习"
 
 $groupType = $type.GetNestedType('MappingFeedbackGroup', $flags)
 $targetType = $type.GetNestedType('MappingFeedbackTarget', $flags)
@@ -719,6 +780,10 @@ try {
     $unitRow.CreateCell(3).SetCellValue('m')
     $unitRow.CreateCell(4).SetCellValue([double]8000)
     $unitRow.CreateCell(5).SetCellValue([double]1400)
+    $singleSheet = $targetWorkbook.CreateSheet('单一')
+    $singleRow = $singleSheet.CreateRow(0)
+    $singleRow.CreateCell(0).SetCellValue('挖土方')
+    $singleRow.CreateCell(3).SetCellValue([double]44)
     $targetStream = [System.IO.File]::Open($targetFixturePath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write)
     try { $targetWorkbook.Write($targetStream) } finally { $targetStream.Dispose() }
 
@@ -802,6 +867,26 @@ try {
         }
         if (@($choicePreview | Where-Object { $null -eq $_.NameQuotaCandidates -or $_.NameQuotaCandidates.Count -ne 2 }).Count -ne 0) {
             throw '每个重复目标行都应保留两个独立下拉候选'
+        }
+        if (@($choicePreview | Where-Object {
+            -not [String]::IsNullOrWhiteSpace($_.Status) -or $_.AlignNote -notmatch '需下拉确认'
+        }).Count -ne 0) {
+            throw '同名多来源应以待确认提示标红，不得伪装成阻断错误状态'
+        }
+        $choiceLabels = @($choicePreview[0].NameQuotaCandidates | ForEach-Object { $_.Label })
+        if (($choiceLabels -join '|') -ne '定额1|定额2') {
+            throw "下拉候选应显示源行定额名称而不是定额编号: '$($choiceLabels -join "|")'"
+        }
+
+        $sameArgs = [object[]]@($previewMainForm.PSObject.BaseObject,
+            (New-NamePreviewTemplate @('Q-1', 'Q-1')), [string]$targetFixturePath, '单一', 'D', $null)
+        $samePreview = $buildPreview.Invoke($null, $sameArgs)
+        if ($samePreview.Count -ne 1 -or $samePreview[0].QuotaCode -ne 'Q-1' -or
+            $samePreview[0].Selected -or -not $samePreview[0].NeedExactNameConfirmation -or
+            ($null -ne $samePreview[0].NameQuotaCandidates -and $samePreview[0].NameQuotaCandidates.Count -gt 1) -or
+            -not [String]::IsNullOrWhiteSpace($samePreview[0].Status) -or
+            $samePreview[0].AlignNote -notmatch '对应相同绑定') {
+            throw '同名多来源对应相同绑定时应默认带出唯一结果、等待勾选且不显示下拉'
         }
 
         $operandType = $type.GetNestedType('FillOperand', $flags)

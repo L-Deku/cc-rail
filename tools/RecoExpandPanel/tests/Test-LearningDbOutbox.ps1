@@ -104,13 +104,21 @@ try {
     $consume = $panelType.GetMethod('ConsumeLearningDbDurableResult', $allFlags)
 
     $connectionField.SetValue($null, 'Server=127.0.0.1,1;Database=NoDb;User ID=x;Password=x;Connect Timeout=1')
+    $groupType.GetField('Method', $allFlags).SetValue($group, '')
+    if ([bool]$record.Invoke($null, $invokeArgs)) { throw 'Blank method binding was incorrectly marked durable' }
+    $blankConsumeArgs = New-Object 'object[]' 1
+    $blankConsumeArgs[0] = $groups
+    if ([bool]$consume.Invoke($null, $blankConsumeArgs)) { throw 'Blank method binding must not confirm MappingFeedbackRecorded' }
+    $outboxPath = Join-Path $testRoot 'RecoQuotaData\learning-db-outbox.jsonl'
+    if (Test-Path -LiteralPath $outboxPath) { throw 'Blank method binding entered the active outbox' }
+
+    $groupType.GetField('Method', $allFlags).SetValue($group, '2024')
     if (-not [bool]$record.Invoke($null, $invokeArgs)) { throw 'SQL failure was not durably queued to the local outbox' }
     $consumeArgs = New-Object 'object[]' 1
     $consumeArgs[0] = $groups
     if (-not [bool]$consume.Invoke($null, $consumeArgs)) { throw 'Durable outbox result did not allow MappingFeedbackRecorded confirmation' }
     if ([bool]$consume.Invoke($null, $consumeArgs)) { throw 'Durable result must be consumed only once' }
 
-    $outboxPath = Join-Path $testRoot 'RecoQuotaData\learning-db-outbox.jsonl'
     if (-not (Test-Path -LiteralPath $outboxPath)) { throw 'Outbox file was not created next to the isolated plugin' }
     $outboxLines = [System.IO.File]::ReadAllLines($outboxPath, [System.Text.Encoding]::UTF8)
     if ($outboxLines.Count -ne 1) { throw "Expected one outbox batch, got $($outboxLines.Count)" }
@@ -122,9 +130,31 @@ try {
     $pendingKeys = $pendingKeysMethod.Invoke($null, $null).PSObject.BaseObject
     if (-not $pendingKeys.Contains($signature + "`n" + $boxId)) { throw 'Pending mapping key was not exposed to SmartFill' }
 
+    $laterBatchId = [Guid]::NewGuid().ToString('N')
+    $laterLine = [regex]::Replace($savedLine, '"batch_id":"[0-9a-fA-F]{32}"', '"batch_id":"' + $laterBatchId + '"', 1)
+    [System.IO.File]::WriteAllLines($outboxPath, [string[]]@($savedLine, $laterLine), (New-Object System.Text.UTF8Encoding($false)))
+    [void]$replay.Invoke($null, $null)
+    $retainedLines = [System.IO.File]::ReadAllLines($outboxPath, [System.Text.Encoding]::UTF8)
+    if ($retainedLines.Count -ne 2) { throw 'Transient SQL failure did not retain the failed head batch and untouched later batch' }
+    $prematureDeadLetterPath = Join-Path $testRoot 'RecoQuotaData\learning-db-outbox.dead-letter.jsonl'
+    if (Test-Path -LiteralPath $prematureDeadLetterPath) { throw 'Transient SQL failure was incorrectly moved to dead-letter storage' }
+
+    $poisonBatchId = [Guid]::NewGuid().ToString('N')
+    $poisonLine = [regex]::Replace($savedLine, '"batch_id":"[0-9a-fA-F]{32}"', '"batch_id":"' + $poisonBatchId + '"', 1)
+    $poisonLine = $poisonLine.Replace('"g0_method":"2024"', '"g0_method":""')
+    if ($poisonLine -eq $savedLine -or $poisonLine -notlike ('*' + $poisonBatchId + '*') -or
+        $poisonLine -like '*"g0_method":"2024"*') { throw 'Failed to prepare a deterministic poison outbox batch' }
+    [System.IO.File]::WriteAllLines($outboxPath, [string[]]@($poisonLine, $savedLine), (New-Object System.Text.UTF8Encoding($false)))
+
     $connectionField.SetValue($null, $connectionString)
     [void]$replay.Invoke($null, $null)
     if ((Get-Content -LiteralPath $outboxPath -ErrorAction SilentlyContinue | Measure-Object -Line).Lines -ne 0) { throw 'Committed outbox batch was not cleared' }
+    $deadLetterPath = Join-Path $testRoot 'RecoQuotaData\learning-db-outbox.dead-letter.jsonl'
+    if (-not (Test-Path -LiteralPath $deadLetterPath)) { throw 'Poison outbox batch was not moved to dead-letter storage' }
+    $deadLetterLines = [System.IO.File]::ReadAllLines($deadLetterPath, [System.Text.Encoding]::UTF8)
+    if ($deadLetterLines.Count -ne 1 -or $deadLetterLines[0] -notlike ('*' + $poisonBatchId + '*') -or
+        $deadLetterLines[0] -notlike '*dead_letter_reason*') { throw 'Dead-letter record did not preserve the rejected poison batch and reason' }
+    if ($deadLetterLines[0] -match 'Password=|Server=|User ID=') { throw 'Dead-letter storage leaked a database connection string' }
 
     $connection = New-Object System.Data.SqlClient.SqlConnection($connectionString)
     $connection.Open()

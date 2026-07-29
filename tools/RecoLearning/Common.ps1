@@ -1,4 +1,4 @@
-# RecoLearning 公共函数:连接、SQL 执行、批量导入、签名归一化。
+﻿# RecoLearning 公共函数:连接、SQL 执行、批量导入、签名归一化。
 $ErrorActionPreference = 'Stop'
 
 $script:RecoServer   = '192.168.2.213,1433'

@@ -621,7 +621,8 @@ namespace RecoNet
         {
             List<BoxCandidate> result = new List<BoxCandidate>();
             foreach (IGrouping<string, Dictionary<string, string>> boxGroup in (boxRows ?? new List<Dictionary<string, string>>())
-                .Where(row => !String.IsNullOrWhiteSpace(GetFlat(row, "box_id")))
+                .Where(row => !String.IsNullOrWhiteSpace(GetFlat(row, "box_id")) &&
+                    ReadFlatInt(row, "weight", 1) > 0)
                 .GroupBy(row => GetFlat(row, "box_id"), StringComparer.OrdinalIgnoreCase))
             {
                 BoxCandidate candidate = new BoxCandidate { BoxId = boxGroup.Key };
@@ -750,12 +751,31 @@ namespace RecoNet
                 .Select(index => template.Rows[index])
                 .ToList();
             if (rows.Count == 0) return "";
+            string[] names = rows
+                .Select(row => String.IsNullOrWhiteSpace(row.SourceName) ? (row.QuotaCode ?? "") : row.SourceName)
+                .ToArray();
             if (rows.Count == 1)
             {
-                return (rows[0].QuotaCode ?? "") + "  " + (rows[0].SourceName ?? "");
+                return names[0];
             }
-            return String.Join(" + ", rows.Select(row => row.QuotaCode ?? "").ToArray()) +
+            return String.Join(" + ", names) +
                 "（组件" + rows.Count.ToString(CultureInfo.InvariantCulture) + "条）";
+        }
+
+        private static string BuildNameQuotaCandidateSignature(NameQuotaCandidateGroup candidate)
+        {
+            if (candidate == null || candidate.Items == null) return "";
+            return String.Join("\u001e", candidate.Items
+                .Where(item => item != null)
+                .OrderBy(item => item.GroupOrder)
+                .Select(item => String.Join("\u001f", new[]
+                {
+                    (item.QuotaCode ?? "").Trim().ToUpperInvariant(),
+                    (item.Unit ?? "").Trim().ToUpperInvariant(),
+                    (item.Adjust ?? "").Trim(),
+                    (item.QuantityText ?? "").Trim()
+                }))
+                .ToArray());
         }
 
         private static List<FillPreviewItem> BuildTemplatePreviewGroup(FillTemplate template, TemplateNameGroup group,
@@ -851,6 +871,8 @@ namespace RecoNet
                 sourceExpressions[candidate] = group.Indexes.Count == 0 ? "" : (template.Rows[firstIndex].SourceExpr ?? "");
             }
 
+            HashSet<string> effectiveSignatures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            result = result.Where(candidate => effectiveSignatures.Add(BuildNameQuotaCandidateSignature(candidate))).ToList();
             Dictionary<string, int> labelCounts = result
                 .GroupBy(candidate => candidate.Label ?? "", StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
@@ -1028,10 +1050,15 @@ namespace RecoNet
                 groupsByNorm.TryGetValue(tr.NormName, out exactGroups);
                 int targetNameCount;
                 targetNameCounts.TryGetValue(tr.NormName, out targetNameCount);
-                string exactMode = GetExactNameResolutionMode(targetNameCount, exactGroups == null ? 0 : exactGroups.Count);
+                List<NameQuotaCandidateGroup> exactCandidates = exactGroups == null
+                    ? new List<NameQuotaCandidateGroup>()
+                    : BuildNameQuotaCandidates(template, exactGroups, tr, targetRows, targetNorms, trIdx);
+                int rawExactGroupCount = exactGroups == null ? 0 : exactGroups.Count;
+                bool sameBindingFromMultipleSources = rawExactGroupCount > 1 && exactCandidates.Count == 1;
+                string exactMode = GetExactNameResolutionMode(targetNameCount, exactCandidates.Count);
                 if (exactMode.Length > 0)
                 {
-                    bool needsReview = exactMode == "reuse" || exactMode == "choice";
+                    bool needsReview = exactMode == "reuse" || exactMode == "choice" || sameBindingFromMultipleSources;
                     List<FillPreviewItem> activeGroup = BuildTemplatePreviewGroup(template, exactGroups[0], tr,
                         targetRows, targetNorms, trIdx, needsReview ? null : mergedIntoByTargetIdx);
                     if (exactGroups.Any(group => group.Indexes.Any(index =>
@@ -1046,15 +1073,16 @@ namespace RecoNet
                     }
                     if (needsReview && activeGroup.Count > 0)
                     {
-                        activeGroup[0].Status = exactMode == "choice"
+                        activeGroup[0].AlignNote = exactMode == "choice"
                             ? "模板存在同名多来源，已带出候选，需下拉确认"
-                            : "目标表存在重复工程量名称，已带出唯一绑定，需确认";
+                            : (sameBindingFromMultipleSources
+                                ? "模板同名多来源对应相同绑定，已默认带出，需确认"
+                                : "目标表存在重复工程量名称，已带出唯一绑定，需确认");
                     }
                     if (exactMode == "choice" && activeGroup.Count > 0)
                     {
-                        activeGroup[0].NameQuotaCandidates = BuildNameQuotaCandidates(template, exactGroups, tr,
-                            targetRows, targetNorms, trIdx);
-                        activeGroup[0].SelectedNameQuotaCandidateKey = exactGroups[0].SourceAnchor;
+                        activeGroup[0].NameQuotaCandidates = exactCandidates;
+                        activeGroup[0].SelectedNameQuotaCandidateKey = exactCandidates[0].Key;
                     }
                     if (!needsReview && activeGroup.Count > 0)
                     {
@@ -1222,6 +1250,40 @@ namespace RecoNet
             return true;
         }
 
+        private static string BuildNameBindingTargetSetSignature(IEnumerable<FillPreviewItem> items, bool includeFormula = true)
+        {
+            return String.Join("\u001e", (items ?? Enumerable.Empty<FillPreviewItem>())
+                .Where(item => item != null && !String.IsNullOrWhiteSpace(item.QuotaCode))
+                .Select(item => String.Join("\u001f", new[]
+                {
+                    (item.ItemNo ?? "").Trim().ToUpperInvariant(),
+                    (item.QuotaCode ?? "").Trim().ToUpperInvariant(),
+                    (item.Unit ?? "").Trim().ToUpperInvariant(),
+                    (item.Adjust ?? "").Trim(),
+                    includeFormula ? (item.FormulaTemplate ?? "").Trim() : ""
+                }))
+                .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+                .ToArray());
+        }
+
+        internal static bool AreEquivalentNameBindingGroups(IEnumerable<FillPreviewItem> left, IEnumerable<FillPreviewItem> right)
+        {
+            List<FillPreviewItem> leftItems = (left ?? Enumerable.Empty<FillPreviewItem>()).Where(item => item != null).ToList();
+            List<FillPreviewItem> rightItems = (right ?? Enumerable.Empty<FillPreviewItem>()).Where(item => item != null).ToList();
+            string leftName = leftItems.Select(item => String.IsNullOrWhiteSpace(item.TargetFullName) ? item.TargetName : item.TargetFullName)
+                .FirstOrDefault(name => !String.IsNullOrWhiteSpace(name)) ?? "";
+            string rightName = rightItems.Select(item => String.IsNullOrWhiteSpace(item.TargetFullName) ? item.TargetName : item.TargetFullName)
+                .FirstOrDefault(name => !String.IsNullOrWhiteSpace(name)) ?? "";
+            string leftUnit = leftItems.Select(item => item.TargetUnit).FirstOrDefault(unit => !String.IsNullOrWhiteSpace(unit)) ?? "";
+            string rightUnit = rightItems.Select(item => item.TargetUnit).FirstOrDefault(unit => !String.IsNullOrWhiteSpace(unit)) ?? "";
+            string leftTargets = BuildNameBindingTargetSetSignature(leftItems);
+            string rightTargets = BuildNameBindingTargetSetSignature(rightItems);
+            return leftTargets.Length > 0 &&
+                String.Equals(NormalizeQuantityMatchName(leftName), NormalizeQuantityMatchName(rightName), StringComparison.Ordinal) &&
+                String.Equals(NormalizeExcelLinkUnit(leftUnit), NormalizeExcelLinkUnit(rightUnit), StringComparison.OrdinalIgnoreCase) &&
+                String.Equals(leftTargets, rightTargets, StringComparison.OrdinalIgnoreCase);
+        }
+
         internal static bool ConfirmSingleExactNameGroup(List<FillPreviewItem> all, int targetRow)
         {
             List<FillPreviewItem> group = (all ?? new List<FillPreviewItem>())
@@ -1233,14 +1295,22 @@ namespace RecoNet
                 return false;
             }
 
-            foreach (FillPreviewItem item in group)
+            ConfirmExactNameGroupInPlace(group, "人工确认重复名称");
+            return true;
+        }
+
+        private static void ConfirmExactNameGroupInPlace(List<FillPreviewItem> group, string leaderNote)
+        {
+            for (int i = 0; i < group.Count; i++)
             {
+                FillPreviewItem item = group[i];
                 item.Selected = true;
                 item.NeedExactNameConfirmation = false;
                 item.Status = "";
+                item.AlignNote = i == 0
+                    ? leaderNote
+                    : "组件框第 " + (i + 1).ToString(CultureInfo.InvariantCulture) + " 条（" + leaderNote + "）";
             }
-            group[0].AlignNote = "人工确认重复名称";
-            return true;
         }
 
         internal static bool ConfirmCurrentExactNameGroup(List<FillPreviewItem> all, int targetRow)
@@ -1253,7 +1323,12 @@ namespace RecoNet
             if (leader.NameQuotaCandidates != null && leader.NameQuotaCandidates.Count > 1)
             {
                 if (String.IsNullOrWhiteSpace(leader.SelectedNameQuotaCandidateKey)) return false;
-                return ApplyExactNameCandidate(all, targetRow, leader.SelectedNameQuotaCandidateKey);
+                List<FillPreviewItem> group = (all ?? new List<FillPreviewItem>())
+                    .Where(item => item != null && item.IsNameDriven && item.TargetRow == targetRow)
+                    .OrderBy(item => item.GroupOrder)
+                    .ToList();
+                ConfirmExactNameGroupInPlace(group, "人工选择同名绑定");
+                return group.Count > 0;
             }
             return ConfirmSingleExactNameGroup(all, targetRow);
         }
@@ -1275,40 +1350,53 @@ namespace RecoNet
                 .Select(item => item.CloneForNameCandidate())
                 .ToList();
             if (replacements.Count == 0) return false;
-            foreach (FillPreviewItem item in replacements)
+            for (int i = 0; i < replacements.Count; i++)
             {
+                FillPreviewItem item = replacements[i];
                 item.Selected = true;
                 item.NeedExactNameConfirmation = false;
                 item.Status = "";
+                item.AlignNote = i == 0
+                    ? "人工选择同名绑定"
+                    : "组件框第 " + (i + 1).ToString(CultureInfo.InvariantCulture) + " 条（人工选择同名绑定）";
             }
             replacements[0].NameQuotaCandidates = leader.NameQuotaCandidates;
             replacements[0].SelectedNameQuotaCandidateKey = candidate.Key;
-            replacements[0].AlignNote = "人工选择同名绑定";
             return ReplacePreviewTargetGroup(all, targetRow, replacements);
         }
 
-        // 回写：把本次名字驱动确认的"工程量名 -> 定额(可多条)"写进对应框 + 当前模版。
-        private static void FeedbackNameMatches(string templateName, List<FillPreviewItem> written,
-            string sourceWorkbook = "", string sourceSheet = "", SqlConnection projectConn = null)
+        private static MappingFeedbackGroup BuildTemplateRightClickFeedbackGroup(List<FillPreviewItem> items,
+            string sourceWorkbook, string sourceSheet, SqlConnection projectConn,
+            int acceptedCount, int correctedCount, int rejectedCount, string userAction)
         {
-            List<MappingFeedbackGroup> mappingGroups = new List<MappingFeedbackGroup>();
-            foreach (IGrouping<int, FillPreviewItem> g in written
-                .Where(i => i.IsNameDriven && !i.MappingFeedbackRecorded && !String.IsNullOrWhiteSpace(i.QuotaCode))
-                .GroupBy(i => i.TargetRow))
+            List<FillPreviewItem> valid = (items ?? new List<FillPreviewItem>())
+                .Where(item => item != null && item.IsNameDriven && !String.IsNullOrWhiteSpace(item.QuotaCode))
+                .ToList();
+            if (valid.Count == 0) return null;
+            string name = valid.Select(item => String.IsNullOrWhiteSpace(item.TargetFullName) ? item.TargetName : item.TargetFullName)
+                .FirstOrDefault(value => !String.IsNullOrWhiteSpace(value));
+            if (String.IsNullOrWhiteSpace(name)) return null;
+            string quantityUnit = valid.Select(item => item.TargetUnit)
+                .FirstOrDefault(unit => !String.IsNullOrWhiteSpace(unit)) ?? "";
+            name = StripTrailingQuantityUnit(name, quantityUnit);
+            MappingFeedbackGroup mappingGroup = new MappingFeedbackGroup
             {
-                // 回写用【全名】(不截断)：截断显示名会削弱下次匹配与对应框命中。
-                string name = g.Select(x => String.IsNullOrWhiteSpace(x.TargetFullName) ? x.TargetName : x.TargetFullName)
-                    .FirstOrDefault(n => !String.IsNullOrWhiteSpace(n));
-                if (String.IsNullOrWhiteSpace(name)) continue;
-                string quantityUnit = g.Select(x => x.TargetUnit).FirstOrDefault(u => !String.IsNullOrWhiteSpace(u)) ?? "";
-                name = StripTrailingQuantityUnit(name, quantityUnit);
-                MappingFeedbackGroup mappingGroup = new MappingFeedbackGroup { QuantityName = name, QuantityUnit = quantityUnit };
-                mappingGroup.EntryCode = g.Select(x => x.ItemNo).FirstOrDefault(no => !String.IsNullOrWhiteSpace(no)) ?? "";
-                mappingGroup.Workbook = sourceWorkbook ?? "";
-                mappingGroup.Worksheet = sourceSheet ?? "";
-                mappingGroup.ExcelRow = g.Key;
-                PopulateMappingFeedbackGroupProjectContext(projectConn, mappingGroup);
-                FillPreviewItem formulaSource = g.FirstOrDefault(x => !String.IsNullOrWhiteSpace(x.FormulaTemplate) && x.FormulaOperands != null);
+                QuantityName = name,
+                QuantityUnit = quantityUnit,
+                EntryCode = valid.Select(item => item.ItemNo).FirstOrDefault(no => !String.IsNullOrWhiteSpace(no)) ?? "",
+                Workbook = sourceWorkbook ?? "",
+                Worksheet = sourceSheet ?? "",
+                ExcelRow = valid[0].TargetRow,
+                AcceptedCount = acceptedCount,
+                CorrectedCount = correctedCount,
+                RejectedCount = rejectedCount,
+                UserAction = userAction ?? ""
+            };
+            PopulateMappingFeedbackGroupProjectContext(projectConn, mappingGroup);
+            if (acceptedCount + correctedCount > 0)
+            {
+                FillPreviewItem formulaSource = valid.FirstOrDefault(item =>
+                    !String.IsNullOrWhiteSpace(item.FormulaTemplate) && item.FormulaOperands != null);
                 if (formulaSource != null)
                 {
                     mappingGroup.FormulaOperands.AddRange(formulaSource.FormulaOperands.Select(operand => new QuantityFormulaOperandInfo
@@ -1318,49 +1406,120 @@ namespace RecoNet
                         Signature = operand.Signature
                     }));
                 }
-                foreach (FillPreviewItem it in g)
-                {
-                    mappingGroup.Targets.Add(new MappingFeedbackTarget
-                    {
-                        Kind = "quota",
-                        Code = it.QuotaCode,
-                        Name = it.SourceName,
-                        Unit = it.Unit,
-                        FormulaTemplate = it.FormulaTemplate
-                    });
-                }
-                mappingGroups.Add(mappingGroup);
             }
-            RecordNameMatchesToMappingStore(mappingGroups);
-            bool learningDurable = ConsumeLearningDbDurableResult(mappingGroups);
-            foreach (FillPreviewItem item in written.Where(i => i != null && i.IsNameDriven && learningDurable))
+            foreach (FillPreviewItem item in valid)
             {
-                item.MappingFeedbackRecorded = true;
+                mappingGroup.Targets.Add(new MappingFeedbackTarget
+                {
+                    Kind = "quota",
+                    Code = item.QuotaCode,
+                    Name = item.SourceName,
+                    Unit = item.Unit,
+                    FormulaTemplate = acceptedCount + correctedCount > 0 ? item.FormulaTemplate : ""
+                });
             }
+            return mappingGroup;
+        }
 
+        private static void ReplaceTemplateWithManualBinding(FillTemplate template, List<FillPreviewItem> replacements,
+            List<FillPreviewItem> replaced)
+        {
+            if (template == null || template.Rows == null || replacements == null || replacements.Count == 0) return;
+            FillPreviewItem leader = replacements.FirstOrDefault(item => item != null);
+            if (leader == null) return;
+            string fullName = String.IsNullOrWhiteSpace(leader.TargetFullName) ? (leader.TargetName ?? "") : leader.TargetFullName;
+            string normName = NormalizeQuantityMatchName(fullName);
+            string chapter = leader.TargetChapter ?? "";
+            string replacedTargets = BuildNameBindingTargetSetSignature(replaced, false);
+            HashSet<int> removeIndexes = new HashSet<int>();
+            foreach (TemplateNameGroup group in BuildTemplateNameGroups(template).Where(group =>
+                String.Equals(group.NormName, normName, StringComparison.Ordinal)))
+            {
+                bool sameScope = !String.IsNullOrWhiteSpace(chapter)
+                    ? SameTemplateChapter(group.Chapter, chapter)
+                    : String.Equals(BuildNameBindingTargetSetSignature(group.Indexes.Select(index =>
+                        new FillPreviewItem
+                        {
+                            ItemNo = template.Rows[index].ItemNo,
+                            QuotaCode = template.Rows[index].QuotaCode,
+                            Unit = template.Rows[index].Unit,
+                            Adjust = template.Rows[index].Adjust
+                        }), false), replacedTargets, StringComparison.OrdinalIgnoreCase);
+                if (!sameScope) continue;
+                foreach (int index in group.Indexes) removeIndexes.Add(index);
+            }
+            template.Rows = template.Rows.Where((row, index) => !removeIndexes.Contains(index)).ToList();
+            int order = 0;
+            foreach (FillPreviewItem item in replacements.Where(item => item != null && !String.IsNullOrWhiteSpace(item.QuotaCode)))
+            {
+                template.Rows.Add(new FillTemplateRow
+                {
+                    ItemNo = item.ItemNo,
+                    ItemName = item.ItemNo,
+                    QuotaCode = item.QuotaCode,
+                    MatchName = fullName,
+                    SourceName = String.IsNullOrEmpty(item.SourceName) ? fullName : item.SourceName,
+                    MatchChapter = chapter,
+                    Unit = item.Unit,
+                    Adjust = item.Adjust,
+                    SourceQuotaSeq = item.ChosenQuotaSeq,
+                    OrderInItem = order++,
+                    Origin = FillTemplateOriginManual
+                });
+            }
+        }
+
+        // 仅名字驱动右键新增/实质性重绑调用：新组扶正，旧组否定，并更新当前模板。
+        private static void FeedbackNameMatches(string templateName, List<FillPreviewItem> written,
+            string sourceWorkbook = "", string sourceSheet = "", SqlConnection projectConn = null,
+            List<FillPreviewItem> replaced = null)
+        {
+            List<MappingFeedbackGroup> mappingGroups = new List<MappingFeedbackGroup>();
+            foreach (IGrouping<int, FillPreviewItem> group in (written ?? new List<FillPreviewItem>())
+                .Where(item => item != null && item.IsNameDriven && !item.MappingFeedbackRecorded &&
+                    !String.IsNullOrWhiteSpace(item.QuotaCode))
+                .GroupBy(item => item.TargetRow))
+            {
+                MappingFeedbackGroup corrected = BuildTemplateRightClickFeedbackGroup(group.ToList(),
+                    sourceWorkbook, sourceSheet, projectConn, 0, 1, 0, "correction");
+                if (corrected != null) mappingGroups.Add(corrected);
+            }
+            foreach (IGrouping<int, FillPreviewItem> group in (replaced ?? new List<FillPreviewItem>())
+                .Where(item => item != null && item.IsNameDriven && !String.IsNullOrWhiteSpace(item.QuotaCode))
+                .GroupBy(item => item.TargetRow))
+            {
+                MappingFeedbackGroup rejected = BuildTemplateRightClickFeedbackGroup(group.ToList(),
+                    sourceWorkbook, sourceSheet, projectConn, 0, 0, 1, "rejection");
+                if (rejected != null) mappingGroups.Add(rejected);
+            }
             try
             {
                 FillTemplate t = LoadFillTemplate(templateName);
                 if (t == null || !String.Equals(t.MatchBy, "name", StringComparison.OrdinalIgnoreCase)) return;
-                bool changed = false;
-                // 组员(GroupOrder>0)也回写：让组件框整组进模版，下次同名工程量整组带出。
-                foreach (FillPreviewItem it in written.Where(i => i.IsNameDriven && !String.IsNullOrWhiteSpace(i.QuotaCode)))
+                foreach (IGrouping<int, FillPreviewItem> group in (written ?? new List<FillPreviewItem>())
+                    .Where(item => item != null && item.IsNameDriven && !String.IsNullOrWhiteSpace(item.QuotaCode))
+                    .GroupBy(item => item.TargetRow))
                 {
-                    string nm = String.IsNullOrWhiteSpace(it.TargetFullName) ? (it.TargetName ?? "") : it.TargetFullName;
-                    bool exists = t.Rows.Any(r =>
-                        String.Equals(NormalizeMatchText(r.MatchName ?? ""), NormalizeMatchText(nm), StringComparison.Ordinal) &&
-                        SameTemplateChapter(r.MatchChapter, it.TargetChapter) &&
-                        String.Equals(r.QuotaCode ?? "", it.QuotaCode ?? "", StringComparison.OrdinalIgnoreCase) &&
-                        String.Equals(r.ItemNo ?? "", it.ItemNo ?? "", StringComparison.OrdinalIgnoreCase));
-                    if (exists) continue;
-                    t.Rows.Add(new FillTemplateRow { ItemNo = it.ItemNo, ItemName = it.ItemNo, QuotaCode = it.QuotaCode,
-                        MatchName = nm, SourceName = String.IsNullOrEmpty(it.SourceName) ? nm : it.SourceName,
-                        MatchChapter = it.TargetChapter, Unit = it.Unit, SourceQuotaSeq = it.ChosenQuotaSeq, OrderInItem = it.OrderInItem });
-                    changed = true;
+                    List<FillPreviewItem> oldGroup = (replaced ?? new List<FillPreviewItem>())
+                        .Where(item => item != null && item.TargetRow == group.Key)
+                        .ToList();
+                    ReplaceTemplateWithManualBinding(t, group.ToList(), oldGroup);
                 }
-                if (changed) SaveFillTemplate(t);
+                SaveFillTemplate(t);
             }
-            catch (Exception ex) { Log("FeedbackNameMatches template writeback failed: " + ex.Message); }
+            catch (Exception ex)
+            {
+                Log("FeedbackNameMatches template writeback failed: " + ex.Message);
+                return;
+            }
+
+            RecordNameMatchesToMappingStore(mappingGroups);
+            bool learningDurable = ConsumeLearningDbDurableResult(mappingGroups);
+            foreach (FillPreviewItem item in (written ?? new List<FillPreviewItem>())
+                .Where(item => item != null && item.IsNameDriven && learningDurable))
+            {
+                item.MappingFeedbackRecorded = true;
+            }
         }
     }
 }

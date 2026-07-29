@@ -32,6 +32,7 @@ namespace RecoNet
             public long SourceQuotaSeq;  // 源定额序号（写入时直接复制该行）
             public string MatchName;      // 名字模式：该定额对应的 Excel 工程量【全名】(不截断)
             public List<FillOperand> Operands;  // 名字模式且为表达式(如 E1+E2)时的操作数；否则 null
+            public string Origin;         // generated=源单元生成；manual=名字驱动右键新增/重绑
         }
 
         public sealed class FillOperand
@@ -52,6 +53,9 @@ namespace RecoNet
             public List<FillTemplateRow> Rows = new List<FillTemplateRow>();
             public List<string> BuildWarnings;   // 生成时被跳过的绑定提示（不属于源单元等）；null=无
         }
+
+        private const string FillTemplateOriginGenerated = "generated";
+        private const string FillTemplateOriginManual = "manual";
 
         // 名字驱动精确同名时的一组候选；只存在于本次预览，不写入模板 JSON。
         public sealed class NameQuotaCandidateGroup
@@ -102,7 +106,7 @@ namespace RecoNet
             public long ChosenItemSeq;     // 用户显式选择的放入条目(条目序号)；0=未选(沿用邻居锚点)
             public string ChosenItemNo;    // 对应条目编号(显示/粘贴导航用)
             public bool NeedExactNameConfirmation; // 精确同名已带出定额，但仍需用户确认
-            public bool MappingFeedbackRecorded;   // 右键绑定已即时学习，写入成功后不重复计权
+            public bool MappingFeedbackRecorded;   // 右键绑定已即时写入本地/SQL学习关系
             public string SelectedNameQuotaCandidateKey;
             public List<NameQuotaCandidateGroup> NameQuotaCandidates;
 
@@ -236,6 +240,7 @@ namespace RecoNet
 
         private static void SaveFillTemplate(FillTemplate template)
         {
+            NormalizeLegacyFillTemplateRows(template);
             JavaScriptSerializer serializer = new JavaScriptSerializer();
             serializer.MaxJsonLength = 1024 * 1024 * 16;
             string safe = String.Join("_", template.Name.Split(Path.GetInvalidFileNameChars()));
@@ -255,15 +260,94 @@ namespace RecoNet
 
         private static FillTemplate LoadFillTemplate(string name)
         {
-            string path = TemplateFillDirs()
-                .Select(dir => Path.Combine(dir, name + ".json"))
-                .Where(File.Exists)
-                .OrderByDescending(File.GetLastWriteTimeUtc)
-                .FirstOrDefault();
+            string canonicalPath = Path.Combine(TemplateFillDir(), name + ".json");
+            string path = File.Exists(canonicalPath)
+                ? canonicalPath
+                : TemplateFillDirs()
+                    .Select(dir => Path.Combine(dir, name + ".json"))
+                    .Where(File.Exists)
+                    .OrderByDescending(File.GetLastWriteTimeUtc)
+                    .FirstOrDefault();
             if (String.IsNullOrEmpty(path)) return null;
             JavaScriptSerializer serializer = new JavaScriptSerializer();
             serializer.MaxJsonLength = 1024 * 1024 * 16;
-            return serializer.Deserialize<FillTemplate>(File.ReadAllText(path, Encoding.UTF8));
+            FillTemplate template = serializer.Deserialize<FillTemplate>(File.ReadAllText(path, Encoding.UTF8));
+            NormalizeLegacyFillTemplateRows(template);
+            return template;
+        }
+
+        private static string BuildFillTemplateNameKey(FillTemplateRow row)
+        {
+            if (row == null) return "";
+            string name = NormalizeQuantityMatchName(row.MatchName ?? row.SourceName ?? "");
+            return name + "\u001f" + NormalizeMatchText(row.MatchChapter ?? "");
+        }
+
+        private static bool IsSameLegacyTemplateBinding(FillTemplateRow left, FillTemplateRow right)
+        {
+            if (left == null || right == null) return false;
+            return String.Equals(BuildFillTemplateNameKey(left), BuildFillTemplateNameKey(right), StringComparison.Ordinal) &&
+                String.Equals((left.ItemNo ?? "").Trim(), (right.ItemNo ?? "").Trim(), StringComparison.OrdinalIgnoreCase) &&
+                String.Equals((left.QuotaCode ?? "").Trim(), (right.QuotaCode ?? "").Trim(), StringComparison.OrdinalIgnoreCase) &&
+                String.Equals((left.Unit ?? "").Trim(), (right.Unit ?? "").Trim(), StringComparison.OrdinalIgnoreCase) &&
+                String.Equals((left.Adjust ?? "").Trim(), (right.Adjust ?? "").Trim(), StringComparison.Ordinal);
+        }
+
+        // 旧模板没有来源标记：有坐标的是生成行；无坐标且与生成行相同的是历史自动回写污染；
+        // 其余无坐标行按保守规则保留为右键人工行。
+        internal static int NormalizeLegacyFillTemplateRows(FillTemplate template)
+        {
+            if (template == null || template.Rows == null) return 0;
+            foreach (FillTemplateRow row in template.Rows.Where(row => row != null &&
+                String.IsNullOrWhiteSpace(row.Origin) && !String.IsNullOrWhiteSpace(row.SourceExpr)))
+            {
+                row.Origin = FillTemplateOriginGenerated;
+            }
+
+            List<FillTemplateRow> generated = template.Rows
+                .Where(row => row != null && String.Equals(row.Origin, FillTemplateOriginGenerated, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            List<FillTemplateRow> remove = new List<FillTemplateRow>();
+            foreach (FillTemplateRow row in template.Rows.Where(row => row != null && String.IsNullOrWhiteSpace(row.Origin)))
+            {
+                if (String.IsNullOrWhiteSpace(row.SourceExpr) && generated.Any(candidate => IsSameLegacyTemplateBinding(candidate, row)))
+                {
+                    remove.Add(row);
+                }
+                else
+                {
+                    row.Origin = String.IsNullOrWhiteSpace(row.SourceExpr)
+                        ? FillTemplateOriginManual
+                        : FillTemplateOriginGenerated;
+                }
+            }
+            foreach (FillTemplateRow row in remove) template.Rows.Remove(row);
+            return remove.Count;
+        }
+
+        // 同名重建只替换 generated；manual 是用户对当前模板的权威修正。
+        internal static FillTemplate MergeRegeneratedFillTemplate(FillTemplate existing, FillTemplate regenerated)
+        {
+            if (regenerated == null) return null;
+            if (regenerated.Rows == null) regenerated.Rows = new List<FillTemplateRow>();
+            foreach (FillTemplateRow row in regenerated.Rows.Where(row => row != null))
+            {
+                row.Origin = FillTemplateOriginGenerated;
+            }
+            if (existing == null || existing.Rows == null) return regenerated;
+
+            NormalizeLegacyFillTemplateRows(existing);
+            List<FillTemplateRow> manual = existing.Rows.Where(row => row != null &&
+                String.Equals(row.Origin, FillTemplateOriginManual, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (String.Equals(regenerated.MatchBy, "name", StringComparison.OrdinalIgnoreCase))
+            {
+                HashSet<string> manualKeys = new HashSet<string>(
+                    manual.Select(BuildFillTemplateNameKey).Where(key => key.Length > 1),
+                    StringComparer.Ordinal);
+                regenerated.Rows.RemoveAll(row => manualKeys.Contains(BuildFillTemplateNameKey(row)));
+            }
+            regenerated.Rows.AddRange(manual);
+            return regenerated;
         }
 
         private static void DeleteFillTemplate(string name)
@@ -353,7 +437,8 @@ namespace RecoNet
                             Adjust = r.IsDBNull(3) ? "" : Convert.ToString(r.GetValue(3)).Trim(),
                             SourceName = r.IsDBNull(5) ? "" : Convert.ToString(r.GetValue(5)).Trim(),
                             Unit = r.IsDBNull(6) ? "" : Convert.ToString(r.GetValue(6)).Trim(),
-                            SourceQuotaSeq = id
+                            SourceQuotaSeq = id,
+                            Origin = FillTemplateOriginGenerated
                         };
                         int shun;
                         shunById[id] = Int32.TryParse(Convert.ToString(r.GetValue(4)), NumberStyles.Integer, CultureInfo.InvariantCulture, out shun) ? shun : 0;
@@ -496,6 +581,12 @@ namespace RecoNet
 
                 if (String.IsNullOrWhiteSpace(row.SourceExpr))
                 {
+                    if (String.Equals(row.Origin, FillTemplateOriginManual, StringComparison.OrdinalIgnoreCase) ||
+                        String.Equals(template.MatchBy, "name", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // 名字驱动右键人工行没有坐标，只参与名字驱动；列锚点静默忽略。
+                        continue;
+                    }
                     item.Status = "模板未记录取数位置"; item.Selected = false; items.Add(item); continue;
                 }
 
@@ -938,8 +1029,7 @@ namespace RecoNet
 
         // 写入：把选中预览项对应的源定额行，直接复制到【目标单元】的对应条目（条目序号全局共享，原样保留），
         // 改 总概算序号/顺号/工程数量、丢弃旧 定额序号(新建标识)。不走界面树。
-        private static string ApplyFill(Form mainForm, string targetUnitNo, List<FillPreviewItem> items,
-            string sourceWorkbook = "", string sourceSheet = "")
+        private static string ApplyFill(Form mainForm, string targetUnitNo, List<FillPreviewItem> items)
         {
             List<FillPreviewItem> selected = items
                 .Where(i => i.Selected &&
@@ -964,7 +1054,6 @@ namespace RecoNet
                 // 每个 (条目序号) 的下一个顺号，写入时递增。
                 Dictionary<long, int> nextShun = new Dictionary<long, int>();
                 HashSet<long> markerInserted = new HashSet<long>();
-                List<FillPreviewItem> writtenOk = new List<FillPreviewItem>();
                 List<FillPreviewItem> libraryItems = new List<FillPreviewItem>();
 
                 using (SqlTransaction transaction = conn.BeginTransaction())
@@ -1051,7 +1140,6 @@ namespace RecoNet
                                 undo.Rows.Add(new AgentUndoRow { Kind = "I", QuotaSequence = newId });
                                 inserted++;
                                 nextShun[itemSeq] = shun + 1;
-                                writtenOk.Add(item);
                             }
                             else { skipped++; }
                         }
@@ -1089,11 +1177,7 @@ namespace RecoNet
                             if (!String.IsNullOrEmpty(pasteMsg)) msg.Append(pasteMsg);
                             int confirmedAdded = undo.Rows.Skip(undoCountBefore).Count(row => row.Kind == "I");
                             libraryInserted += Math.Min(confirmedAdded, groupItems.Count);
-                            if (IsInsertGroupFullyConfirmed(groupItems.Count, confirmedAdded))
-                            {
-                                writtenOk.AddRange(groupItems);
-                            }
-                            else
+                            if (!IsInsertGroupFullyConfirmed(groupItems.Count, confirmedAdded))
                             {
                                 skipped += Math.Max(0, groupItems.Count - confirmedAdded);
                             }
@@ -1105,11 +1189,6 @@ namespace RecoNet
                 {
                     GetAgentUndoStack(mainForm).Add(undo);
                     GetAgentRedoStack(mainForm).Clear();
-                }
-                List<FillPreviewItem> feedbackReady = FilterFullyWrittenNameGroups(selected, writtenOk);
-                if (feedbackReady.Count > 0)
-                {
-                    FeedbackNameMatches(feedbackReady[0].TemplateName, feedbackReady, sourceWorkbook, sourceSheet, conn);
                 }
                 RefreshCurrentQuotaGrid(mainForm);
 
@@ -1125,18 +1204,6 @@ namespace RecoNet
         internal static bool IsInsertGroupFullyConfirmed(int expectedCount, int confirmedAdded)
         {
             return expectedCount > 0 && confirmedAdded >= expectedCount;
-        }
-
-        // 同一工程量本次选中的组件成员必须全部确认成功，避免部分写入被学习成一个错误的新组件框。
-        internal static List<FillPreviewItem> FilterFullyWrittenNameGroups(List<FillPreviewItem> selected, List<FillPreviewItem> written)
-        {
-            List<FillPreviewItem> selectedNames = (selected ?? new List<FillPreviewItem>()).Where(item => item != null && item.IsNameDriven).ToList();
-            List<FillPreviewItem> writtenNames = (written ?? new List<FillPreviewItem>()).Where(item => item != null && item.IsNameDriven).ToList();
-            HashSet<int> completeRows = new HashSet<int>(selectedNames
-                .GroupBy(item => item.TargetRow)
-                .Where(group => writtenNames.Count(item => item.TargetRow == group.Key) == group.Count())
-                .Select(group => group.Key));
-            return writtenNames.Where(item => completeRows.Contains(item.TargetRow)).ToList();
         }
 
         private static void ApplyTemplateFillMarkerFields(Dictionary<string, object> row, long targetSeq, int shun, string templateName)

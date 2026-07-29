@@ -45,6 +45,10 @@ $type = [System.Reflection.Assembly]::LoadFrom($dll).GetType('RecoNet.FormPanel'
 $flags = [System.Reflection.BindingFlags]'Public,NonPublic,Static,Instance'
 $extract = $type.GetMethod('ExtractPositiveAdditiveCellAddresses', $flags)
 if ($null -eq $extract) { throw '编译结果缺少 ExtractPositiveAdditiveCellAddresses。' }
+$hasRepeatedCellInTerm = $type.GetMethod('HasRepeatedCellReferenceWithinTerm', $flags)
+if ($null -eq $hasRepeatedCellInTerm) { throw '编译结果缺少重复单元格非线性判定。' }
+$tryScaleFactor = $type.GetMethod('TryExtractPositiveCellScaleFactor', $flags)
+if ($null -eq $tryScaleFactor) { throw '编译结果缺少线性系数提取入口。' }
 
 function Assert-Addresses([string]$Expression, [string[]]$Expected) {
     $actual = @($extract.Invoke($null, @($Expression)))
@@ -58,6 +62,10 @@ Assert-Addresses '(F10/1000)+(F11/1000)' @('F10', 'F11')
 Assert-Addresses 'F10+F10' @('F10')
 Assert-Addresses 'F10+F11-F12' @('F10', 'F11')
 Assert-Addresses 'F10*F11' @()
+if (-not [bool]$hasRepeatedCellInTerm.Invoke($null, @('F10*F10*3.14'))) { throw '同一单元格在同项内重复引用未识别为非线性公式。' }
+if ([bool]$hasRepeatedCellInTerm.Invoke($null, @('F10+F10'))) { throw '独立正向加项不应因相同单元格被误判为非线性公式。' }
+$scaleArgs = [object[]]::new(3); $scaleArgs[0] = 'F10*F10*3.14'; $scaleArgs[1] = 'F10'; $scaleArgs[2] = [decimal]0
+if ([bool]$tryScaleFactor.Invoke($null, $scaleArgs.PSObject.BaseObject)) { throw '平方公式不应被简化为 V0*3.14 线性系数。' }
 Write-Host 'PASS 正向相加单元格拆分且不跨负项/乘积学习'
 
 $fixturePath = Join-Path ([IO.Path]::GetTempPath()) ('reco-binding-learning-' + [Guid]::NewGuid().ToString('N') + '.xlsx')
@@ -76,6 +84,19 @@ try {
         $row.CreateCell(1).SetCellValue($definition.Unit)
         $row.CreateCell(5).SetCellValue([double]$definition.Value)
     }
+    $partialSheet = $book.CreateSheet('Partial')
+    $partialNamedRow = $partialSheet.CreateRow(0)
+    $partialNamedRow.CreateCell(0).SetCellValue('有效别名')
+    $partialNamedRow.CreateCell(1).SetCellValue('m3')
+    $partialNamedRow.CreateCell(5).SetCellValue([double]10)
+    $partialUnnamedRow = $partialSheet.CreateRow(1)
+    $partialUnnamedRow.CreateCell(1).SetCellValue('m3')
+    $partialUnnamedRow.CreateCell(5).SetCellValue([double]20)
+    $nonlinearSheet = $book.CreateSheet('Nonlinear')
+    $nonlinearRow = $nonlinearSheet.CreateRow(0)
+    $nonlinearRow.CreateCell(0).SetCellValue('桩半径')
+    $nonlinearRow.CreateCell(1).SetCellValue('m')
+    $nonlinearRow.CreateCell(5).SetCellValue([double]2)
     $stream = [IO.File]::Create($fixturePath)
     try { $book.Write($stream) } finally { $stream.Dispose() }
 
@@ -175,6 +196,52 @@ try {
         throw "独立别名/单位/行号不正确：'$($actual -join ';')'"
     }
     Write-Host 'PASS 工程量/定额单位分开、组件共用条目且重复 HRB/HPB 不跨表达式合并'
+
+    $partialLinks = [Activator]::CreateInstance($dictionaryType)
+    $partialLink = [Activator]::CreateInstance($linkType)
+    foreach ($pair in @{
+        ExcelPath=$fixturePath; WorksheetName='Partial'; CellAddress='F1'; Expression='F1+F2';
+        QuotaCode='TEST-PARTIAL'; QuotaName='部分别名定额'; QuotaUnit='m3'; EntryCode='0101-01'; EntryName='测试条目'; Method='2024'
+    }.GetEnumerator()) { $linkType.GetProperty($pair.Key, $flags).SetValue($partialLink, $pair.Value, $null) }
+    $partialLinks.Add($partialLink, '有效别名 m3')
+    $partialGroups = @($buildGroups.Invoke($null, @($partialLinks.PSObject.BaseObject)))
+    $partialSources = @($partialGroups | ForEach-Object { [string]$_.GetType().GetField('SourceCell', $flags).GetValue($_) })
+    $partialNames = @($partialGroups | ForEach-Object { [string]$_.GetType().GetField('QuantityName', $flags).GetValue($_) })
+    if ($partialGroups.Count -ne 1 -or $partialSources[0] -ne 'F1') {
+        throw "普通正向加项的无名行不应拖掉其他有效别名：Count=$($partialGroups.Count), Sources=$($partialSources -join ','), Names=$($partialNames -join ',')"
+    }
+
+    $sameDimensionLinks = [Activator]::CreateInstance($dictionaryType)
+    $sameDimensionLink = [Activator]::CreateInstance($linkType)
+    foreach ($pair in @{
+        ExcelPath=$fixturePath; WorksheetName='Sheet1'; CellAddress='F1'; Expression='(F1+F2)*1.05';
+        QuotaCode='TEST-105'; QuotaName='同量纲业务系数'; QuotaUnit='t'; EntryCode='0101-01'; EntryName='测试条目'; Method='2024'
+    }.GetEnumerator()) { $linkType.GetProperty($pair.Key, $flags).SetValue($sameDimensionLink, $pair.Value, $null) }
+    $sameDimensionLinks.Add($sameDimensionLink, 'HRB400钢筋 kg')
+    $sameDimensionOtherTarget = [Activator]::CreateInstance($linkType)
+    foreach ($pair in @{
+        ExcelPath=$fixturePath; WorksheetName='Sheet1'; CellAddress='F1'; Expression='(F1+F2)*1.05';
+        QuotaCode='TEST-105-OTHER'; QuotaName='组件内另一目标'; QuotaUnit='m3'; EntryCode='0101-01'; EntryName='测试条目'; Method='2024'
+    }.GetEnumerator()) { $linkType.GetProperty($pair.Key, $flags).SetValue($sameDimensionOtherTarget, $pair.Value, $null) }
+    $sameDimensionLinks.Add($sameDimensionOtherTarget, 'HRB400钢筋 kg 另一目标')
+    if (@($buildGroups.Invoke($null, @($sameDimensionLinks.PSObject.BaseObject))).Count -ne 0) {
+        throw '含同量纲业务系数目标的组件框不得拆成残缺关系进入共享学习。'
+    }
+
+    $nonlinearLinks = [Activator]::CreateInstance($dictionaryType)
+    $nonlinearLink = [Activator]::CreateInstance($linkType)
+    foreach ($pair in @{
+        ExcelPath=$fixturePath; WorksheetName='Nonlinear'; CellAddress='F1'; Expression='F1*F1*3.14';
+        QuotaCode='TEST-AREA'; QuotaName='圆面积'; QuotaUnit='m2'; EntryCode='0101-01'; EntryName='测试条目'; Method='2024'
+    }.GetEnumerator()) { $linkType.GetProperty($pair.Key, $flags).SetValue($nonlinearLink, $pair.Value, $null) }
+    $nonlinearLinks.Add($nonlinearLink, '桩半径 m')
+    $nonlinearGroups = @($buildGroups.Invoke($null, @($nonlinearLinks.PSObject.BaseObject)))
+    if ($nonlinearGroups.Count -ne 1) { throw '重复单元格跨量纲公式未学习。' }
+    $nonlinearTargets = @($nonlinearGroups[0].GetType().GetField('Targets', $flags).GetValue($nonlinearGroups[0]))
+    if ([string]$nonlinearTargets[0].GetType().GetField('FormulaTemplate', $flags).GetValue($nonlinearTargets[0]) -ne 'V0*V0*3.14') {
+        throw '重复单元格平方项未保留为 V0*V0*3.14。'
+    }
+    Write-Host 'PASS 普通别名逐个学习、同量纲业务系数不共享、重复参数保留非线性公式'
 }
 finally {
     if ($book -ne $null) { $book.Close() }

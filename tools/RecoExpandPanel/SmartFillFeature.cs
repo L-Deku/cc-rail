@@ -41,6 +41,7 @@ namespace RecoNet
         {
             public SmartMapEntry Entry;
             public string EntryCode;
+            public string EntryName;
             public long EntrySeq;
             public bool HasEntry;
             public bool HasCurrentContext;
@@ -102,6 +103,8 @@ namespace RecoNet
             // 名称签名+目标编号 -> 已确认的单系数或多参数数量公式。
             public Dictionary<string, List<SmartFormulaRule>> FormulaByKey =
                 new Dictionary<string, List<SmartFormulaRule>>(StringComparer.OrdinalIgnoreCase);
+            public Dictionary<string, string> ProjectEntryNameByCode =
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
 
         private static readonly object SmartQuotaIndexCacheLock = new object();
@@ -254,6 +257,7 @@ namespace RecoNet
             List<Dictionary<string, string>> compatible = (rows ?? Enumerable.Empty<Dictionary<string, string>>())
                 .Where(row =>
                 {
+                    if (ReadFlatInt(row, "weight", 1) <= 0) return false;
                     string rowMethod = GetSmartLocalMethod(row);
                     return rowMethod.Length == 0 || String.Equals(rowMethod, currentMethod, StringComparison.OrdinalIgnoreCase);
                 }).ToList();
@@ -333,14 +337,16 @@ namespace RecoNet
         }
 
         // 目标项目条目表:条目编号 -> 条目序号(写入定位用)。
-        private static Dictionary<string, long> LoadSmartProjectEntries(SqlConnection projectConn)
+        private static Dictionary<string, long> LoadSmartProjectEntries(SqlConnection projectConn,
+            out Dictionary<string, string> entryNames)
         {
             Dictionary<string, long> map = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            entryNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             try
             {
                 using (SqlCommand cmd = projectConn.CreateCommand())
                 {
-                    cmd.CommandText = "SELECT 条目编号, 条目序号 FROM 章节表 WHERE 条目编号 IS NOT NULL";
+                    cmd.CommandText = "SELECT 条目编号, 条目序号, 工程或费用项目名称 FROM 章节表 WHERE 条目编号 IS NOT NULL";
                     using (SqlDataReader reader = cmd.ExecuteReader())
                     {
                         while (reader.Read())
@@ -348,7 +354,11 @@ namespace RecoNet
                             string code = (reader.IsDBNull(0) ? "" : reader.GetValue(0).ToString()).Trim();
                             if (code.Length == 0 || map.ContainsKey(code)) continue;
                             long seq;
-                            if (Int64.TryParse(reader.GetValue(1).ToString(), out seq)) map[code] = seq;
+                            if (Int64.TryParse(reader.GetValue(1).ToString(), out seq))
+                            {
+                                map[code] = seq;
+                                entryNames[code] = (reader.IsDBNull(2) ? "" : reader.GetValue(2).ToString()).Trim();
+                            }
                         }
                     }
                 }
@@ -868,9 +878,9 @@ namespace RecoNet
         // ②定额级(EntryByQuota),带工程前缀过滤(过滤后为空则放开)。
         private static bool TryResolveSmartEntry(SmartLearningSnapshot snapshot, Dictionary<string, long> projectEntries,
             SmartMapEntry mappingEntry, List<SmartBoxTarget> targets, string signature, HashSet<string> preferredPrefixes,
-            out string entryCode, out long entrySeq, out bool fromSignature)
+            out string entryCode, out string entryName, out long entrySeq, out bool fromSignature)
         {
-            entryCode = ""; entrySeq = 0; fromSignature = false;
+            entryCode = ""; entryName = ""; entrySeq = 0; fromSignature = false;
 
             // ① 签名级证据:先试完整签名,再试去单位签名(存量老数据单位为空)。
             string[] sigKeys = new string[] { signature ?? "", SmartNameSegment(signature ?? "") + "|" };
@@ -908,6 +918,7 @@ namespace RecoNet
             if (distinctCurrentStats.Count == 1)
             {
                 entryCode = distinctCurrentStats[0].EntryCode;
+                entryName = ResolveSmartEntryName(snapshot, entryCode, distinctCurrentStats[0].EntryName);
                 entrySeq = projectEntries[entryCode];
                 fromSignature = true;
                 return true;
@@ -925,6 +936,7 @@ namespace RecoNet
                 if (localEntries.Count == 1)
                 {
                     entryCode = localEntries[0];
+                    entryName = ResolveSmartEntryName(snapshot, entryCode, "");
                     entrySeq = projectEntries[entryCode];
                     fromSignature = true;
                     return true;
@@ -936,6 +948,7 @@ namespace RecoNet
             {
                 SmartEntryStat ambiguous = distinctCurrentStats.OrderByDescending(stat => stat.ProjectCount).First();
                 entryCode = ambiguous.EntryCode;
+                entryName = ResolveSmartEntryName(snapshot, entryCode, ambiguous.EntryName);
                 entrySeq = projectEntries[entryCode];
                 return true;
             }
@@ -945,6 +958,7 @@ namespace RecoNet
             if (generic != null)
             {
                 entryCode = generic.EntryCode;
+                entryName = ResolveSmartEntryName(snapshot, entryCode, generic.EntryName);
                 entrySeq = projectEntries[entryCode];
                 return true;
             }
@@ -957,8 +971,21 @@ namespace RecoNet
             }
             if (best == null) return false;
             entryCode = best.EntryCode;
+            entryName = ResolveSmartEntryName(snapshot, entryCode, best.EntryName);
             entrySeq = projectEntries[best.EntryCode];
             return true;
+        }
+
+        private static string ResolveSmartEntryName(SmartLearningSnapshot snapshot, string entryCode, string learnedName)
+        {
+            string projectName;
+            if (snapshot != null && snapshot.ProjectEntryNameByCode != null &&
+                snapshot.ProjectEntryNameByCode.TryGetValue(entryCode ?? "", out projectName) &&
+                !String.IsNullOrWhiteSpace(projectName))
+            {
+                return projectName.Trim();
+            }
+            return (learnedName ?? "").Trim();
         }
 
         private static SmartEntryStat FindBestQuotaEntry(SmartLearningSnapshot snapshot, Dictionary<string, long> projectEntries,
@@ -1051,9 +1078,9 @@ namespace RecoNet
             List<SmartMapCandidateScore> scores = new List<SmartMapCandidateScore>();
             foreach (SmartMapEntry hit in hits ?? new List<SmartMapEntry>())
             {
-                string entryCode; long entrySeq; bool fromContext;
+                string entryCode; string entryName; long entrySeq; bool fromContext;
                 bool hasEntry = TryResolveSmartEntry(snapshot, projectEntries, hit, hit.Targets, signature, preferredPrefixes,
-                    out entryCode, out entrySeq, out fromContext);
+                    out entryCode, out entryName, out entrySeq, out fromContext);
                 bool prefixMatch = hasEntry && entryCode.Length >= 2 && preferredPrefixes != null && preferredPrefixes.Count > 0 &&
                     preferredPrefixes.Contains(entryCode.Substring(0, 2));
                 string currentContextPrefix = (snapshot.Method ?? "").Trim() + "\n";
@@ -1071,6 +1098,7 @@ namespace RecoNet
                 {
                     Entry = hit,
                     EntryCode = entryCode,
+                    EntryName = entryName,
                     EntrySeq = entrySeq,
                     HasEntry = hasEntry,
                     HasCurrentContext = fromContext,
@@ -1109,10 +1137,19 @@ namespace RecoNet
             if (score == null || score.Entry == null) return "空组件";
             string targets = String.Join(" + ", score.Entry.Targets.Where(target => target != null)
                 .Select(target => (target.Code ?? "").Trim()).Where(code => code.Length > 0).ToArray());
-            string context = score.HasCurrentMethodMapping && score.HasCurrentContext ? "当前办法/条目" :
-                (!score.HasCurrentMethodMapping ? "兼容旧办法待确认" : (score.HasEntry ? "条目待确认" : "缺条目"));
-            return targets + "（权重" + score.Entry.Weight.ToString(CultureInfo.InvariantCulture) + "，" +
-                context + (String.IsNullOrWhiteSpace(score.EntryCode) ? "" : " " + score.EntryCode) + "）";
+            if (String.IsNullOrWhiteSpace(score.EntryCode)) return targets + "（缺条目）";
+            return targets + "（条目 " + score.EntryCode.Trim() +
+                (String.IsNullOrWhiteSpace(score.EntryName) ? "" : " " + score.EntryName.Trim()) + "）";
+        }
+
+        private static List<NameQuotaCandidateGroup> DeduplicateSmartCandidatesByLabel(
+            IEnumerable<NameQuotaCandidateGroup> candidates)
+        {
+            return (candidates ?? Enumerable.Empty<NameQuotaCandidateGroup>())
+                .Where(candidate => candidate != null)
+                .GroupBy(candidate => candidate.Label ?? "", StringComparer.Ordinal)
+                .Select(group => group.First())
+                .ToList();
         }
 
         private static void AppendRankedSmartMatch(List<FillPreviewItem> items, TargetQtyRow row, List<TargetQtyRow> targetRows,
@@ -1145,6 +1182,7 @@ namespace RecoNet
                     Items = candidateItems
                 });
             }
+            candidates = DeduplicateSmartCandidatesByLabel(candidates);
             if (candidates.Count == 0) return;
 
             List<FillPreviewItem> active = candidates[0].Items.Select(item => item.CloneForNameCandidate()).ToList();
@@ -1199,23 +1237,29 @@ namespace RecoNet
             decimal result;
             string error;
             if (!TryEvaluateDecimal(expression + outputSuffix, out result, out error)) return false;
+            if (result <= 0m) return false;
             quantityText = expression + outputSuffix;
             return true;
         }
 
-        private static bool TryResolveSmartFormula(SmartLearningSnapshot snapshot, List<TargetQtyRow> targetRows,
-            TargetQtyRow anchorRow, SmartBoxTarget target, string currentTargetUnit, string entryCode,
-            string signature, out SmartFormulaRule selectedRule, out string quantityText, out string issue)
+        private static bool IsDerivedSmartFormula(SmartFormulaRule rule)
         {
-            selectedRule = null;
-            quantityText = "";
-            issue = "";
-            List<SmartFormulaRule> rules;
-            if (!snapshot.FormulaByKey.TryGetValue(BuildSmartFormulaKey(signature, target.Kind, target.Code), out rules) || rules.Count == 0)
-            {
-                issue = "单位 " + anchorRow.Unit + "→" + currentTargetUnit + " 无可靠换算公式";
-                return false;
-            }
+            if (rule == null || String.IsNullOrWhiteSpace(rule.Template)) return false;
+            System.Text.RegularExpressions.MatchCollection variables =
+                System.Text.RegularExpressions.Regex.Matches(rule.Template, "V[0-9]+");
+            if (variables.Count == 0) return false;
+            if (rule.Operands.Count > 1 || variables.Count > 1) return true;
+
+            // 单参数纯比例 V0*k 在同量纲下仍以当前标准单位换算为准。
+            string compact = System.Text.RegularExpressions.Regex.Replace(rule.Template, "\\s+", "");
+            const string number = "(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)";
+            return !System.Text.RegularExpressions.Regex.IsMatch(compact,
+                "^V[0-9]+(?:(?:\\*|/)" + number + ")*$");
+        }
+
+        private static List<SmartFormulaRule> SelectContextualSmartFormulaRules(SmartLearningSnapshot snapshot,
+            List<SmartFormulaRule> rules, string entryCode)
+        {
             List<SmartFormulaRule> contextual = rules.Where(rule =>
                 String.Equals(rule.Method ?? "", snapshot.Method ?? "", StringComparison.OrdinalIgnoreCase) &&
                 !String.IsNullOrWhiteSpace(rule.EntryCode) &&
@@ -1226,9 +1270,55 @@ namespace RecoNet
                     (String.IsNullOrWhiteSpace(rule.Method) ||
                      String.Equals(rule.Method ?? "", snapshot.Method ?? "", StringComparison.OrdinalIgnoreCase))).ToList();
             }
+            return contextual;
+        }
+
+        private static bool HasContextualDerivedSmartFormula(SmartLearningSnapshot snapshot, string formulaKey, string entryCode)
+        {
+            List<SmartFormulaRule> rules;
+            return snapshot.FormulaByKey.TryGetValue(formulaKey, out rules) &&
+                SelectContextualSmartFormulaRules(snapshot, rules, entryCode).Any(IsDerivedSmartFormula);
+        }
+
+        private static bool TryResolveSmartFormula(SmartLearningSnapshot snapshot, List<TargetQtyRow> targetRows,
+            TargetQtyRow anchorRow, SmartBoxTarget target, string currentTargetUnit, string entryCode,
+            string signature, out SmartFormulaRule selectedRule, out string quantityText, out string issue)
+        {
+            return TryResolveSmartFormulaCore(snapshot, targetRows, anchorRow, target, currentTargetUnit, entryCode,
+                signature, false, out selectedRule, out quantityText, out issue);
+        }
+
+        private static bool TryResolveDerivedSmartFormula(SmartLearningSnapshot snapshot, List<TargetQtyRow> targetRows,
+            TargetQtyRow anchorRow, SmartBoxTarget target, string currentTargetUnit, string entryCode,
+            string signature, out SmartFormulaRule selectedRule, out string quantityText, out string issue)
+        {
+            return TryResolveSmartFormulaCore(snapshot, targetRows, anchorRow, target, currentTargetUnit, entryCode,
+                signature, true, out selectedRule, out quantityText, out issue);
+        }
+
+        private static bool TryResolveSmartFormulaCore(SmartLearningSnapshot snapshot, List<TargetQtyRow> targetRows,
+            TargetQtyRow anchorRow, SmartBoxTarget target, string currentTargetUnit, string entryCode,
+            string signature, bool derivedOnly, out SmartFormulaRule selectedRule, out string quantityText, out string issue)
+        {
+            selectedRule = null;
+            quantityText = "";
+            issue = "";
+            List<SmartFormulaRule> rules;
+            if (!snapshot.FormulaByKey.TryGetValue(BuildSmartFormulaKey(signature, target.Kind, target.Code), out rules) || rules.Count == 0)
+            {
+                issue = "单位 " + anchorRow.Unit + "→" + currentTargetUnit + " 无可靠换算公式";
+                return false;
+            }
+            List<SmartFormulaRule> contextual = SelectContextualSmartFormulaRules(snapshot, rules, entryCode);
             if (contextual.Count == 0)
             {
                 issue = "当前办法/条目没有可复用的换算公式";
+                return false;
+            }
+            if (derivedOnly) contextual = contextual.Where(IsDerivedSmartFormula).ToList();
+            if (contextual.Count == 0)
+            {
+                issue = "当前办法/条目没有可复用的派生换算公式";
                 return false;
             }
 
@@ -1269,8 +1359,9 @@ namespace RecoNet
             Dictionary<string, ProjectQuota> currentQuotaByCode, bool needConfirm, string note,
             string signature, HashSet<string> preferredPrefixes, Dictionary<string, int> prefixVotes)
         {
-            string entryCode; long entrySeq; bool fromSignature;
-            bool hasEntry = TryResolveSmartEntry(snapshot, projectEntries, entry, entry.Targets, signature, preferredPrefixes, out entryCode, out entrySeq, out fromSignature);
+            string entryCode; string entryName; long entrySeq; bool fromSignature;
+            bool hasEntry = TryResolveSmartEntry(snapshot, projectEntries, entry, entry.Targets, signature, preferredPrefixes,
+                out entryCode, out entryName, out entrySeq, out fromSignature);
             if (hasEntry && fromSignature && entryCode.Length >= 2 && prefixVotes != null)
             {
                 string prefix = entryCode.Substring(0, 2);
@@ -1320,12 +1411,27 @@ namespace RecoNet
                     string formulaQuantity = "";
                     string formulaIssue = "";
                     string standardSuffix;
-                    if (TryBuildExcelLinkUnitScaleSuffix(row.Unit, currentQuotaUnit, out standardSuffix))
+                    bool requiresDerivedFormula = hasFormula &&
+                        HasContextualDerivedSmartFormula(snapshot, formulaKey, entryCode);
+                    bool formulaResolved = false;
+                    bool standardResolved = false;
+                    if (requiresDerivedFormula)
+                    {
+                        formulaResolved = TryResolveDerivedSmartFormula(snapshot, targetRows, row, target, currentQuotaUnit,
+                            entryCode, signature, out formulaRule, out formulaQuantity, out formulaIssue);
+                    }
+                    else if (TryBuildExcelLinkUnitScaleSuffix(row.Unit, currentQuotaUnit, out standardSuffix))
                     {
                         item.QuantityText = (row.QuantityText ?? "") + standardSuffix;
+                        standardResolved = true;
                     }
-                    else if (hasFormula && TryResolveSmartFormula(snapshot, targetRows, row, target, currentQuotaUnit, entryCode,
-                        signature, out formulaRule, out formulaQuantity, out formulaIssue))
+                    else if (hasFormula)
+                    {
+                        formulaResolved = TryResolveSmartFormula(snapshot, targetRows, row, target, currentQuotaUnit, entryCode,
+                            signature, out formulaRule, out formulaQuantity, out formulaIssue);
+                    }
+
+                    if (formulaResolved)
                     {
                         item.QuantityText = formulaQuantity;
                         item.FormulaTemplate = formulaRule.Template;
@@ -1337,7 +1443,7 @@ namespace RecoNet
                         }).ToList();
                         item.AlignNote = AppendPreviewNote(item.AlignNote, "换算公式命中(样本" + formulaRule.SampleCount.ToString(CultureInfo.InvariantCulture) + ")");
                     }
-                    else
+                    else if (!standardResolved)
                     {
                         item.QuantityText = row.QuantityText;
                         item.Selected = false;
@@ -1413,12 +1519,13 @@ namespace RecoNet
 
             string method = "";
             Dictionary<string, long> projectEntries = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, string> projectEntryNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             try
             {
                 using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
                 {
                     method = SmartResolveProjectMethod(conn);
-                    projectEntries = LoadSmartProjectEntries(conn);
+                    projectEntries = LoadSmartProjectEntries(conn, out projectEntryNames);
                 }
             }
             catch (Exception ex)
@@ -1428,6 +1535,7 @@ namespace RecoNet
 
             string snapshotNote;
             SmartLearningSnapshot snapshot = LoadSmartLearningSnapshot(method, out snapshotNote);
+            snapshot.ProjectEntryNameByCode = projectEntryNames;
             if (snapshot.BySignature.Count == 0)
             {
                 warning = snapshotNote ?? "学习库为空,请先积累绑定或运行收割。";
