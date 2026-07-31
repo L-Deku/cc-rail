@@ -40,6 +40,10 @@ namespace RecoNet
             private readonly ComboBox cmbTargetSheet = new ComboBox();
             private readonly TextBox txtColumn = new TextBox();
             private readonly ComboBox cmbTargetUnit = new ComboBox();
+            private readonly Button btnSmartLearningScope = new Button();
+            private readonly ToolStripDropDown smartLearningScopeDropDown = new ToolStripDropDown();
+            private readonly TreeView smartLearningScopeTree = new TreeView();
+            private ToolStripControlHost smartLearningScopeHost;
             private readonly Button btnPreview = new Button();
             private readonly Button btnApply = new Button();
             private readonly CheckBox chkNameMode = new CheckBox();
@@ -53,7 +57,11 @@ namespace RecoNet
             private bool rebuildingTree;
             private bool updatingNameQuotaCell;
             private bool reloadingTargetWorkbooks;
+            private bool rebuildingSmartLearningScopeTree;
             private int targetWorkbookReloadCount;
+            private string smartActiveWorkbookPath = "";
+            private string smartPreviewWorkbookPath = "";
+            private SmartLearningScope selectedSmartLearningScope = SmartLearningScope.CreateAll();
 
             private readonly bool smartOnly;
 
@@ -75,7 +83,14 @@ namespace RecoNet
                     ReloadTemplateList();
                     ReloadSourceSheets();
                 }
-                ReloadTargetWorkbooks();
+                if (smartOnly)
+                {
+                    ReloadSmartLearningScopeTree();
+                    string ignoredWorkbook;
+                    string ignoredError;
+                    TryResolveSmartActiveWorkbook(out ignoredWorkbook, out ignoredError);
+                }
+                else ReloadTargetWorkbooks();
                 string cur = GetCurrentUnitNo(mainForm);
                 if (!String.IsNullOrEmpty(cur)) txtUnit.Text = cur;
             }
@@ -116,16 +131,45 @@ namespace RecoNet
                     cmbTemplate.Enabled = !smart;
                     btnDeleteTemplate.Enabled = !smart;
                 };
-                AddLabel("目标Excel", 12, targetTop + 3, 60);
-                cmbTargetWorkbook.SetBounds(75, targetTop, 190, 23);
-                cmbTargetWorkbook.DropDownWidth = 420;
-                cmbTargetWorkbook.DropDownStyle = ComboBoxStyle.DropDownList;
-                cmbTargetWorkbook.DropDown += delegate { ReloadTargetWorkbooks(); };
-                cmbTargetWorkbook.SelectedIndexChanged += delegate { if (!reloadingTargetWorkbooks) ReloadTargetSheets(); };
+                if (smartOnly)
+                {
+                    AddLabel("推荐学习库", 12, targetTop + 3, 60);
+                    btnSmartLearningScope.SetBounds(75, targetTop, 190, 23);
+                    btnSmartLearningScope.Text = "全部学习库";
+                    btnSmartLearningScope.TextAlign = ContentAlignment.MiddleLeft;
+                    btnSmartLearningScope.Click += delegate { ShowSmartLearningScopeDropDown(); };
+                    smartLearningScopeTree.BorderStyle = BorderStyle.None;
+                    smartLearningScopeTree.HideSelection = false;
+                    smartLearningScopeTree.ShowLines = true;
+                    smartLearningScopeTree.ShowPlusMinus = true;
+                    smartLearningScopeTree.ShowRootLines = true;
+                    smartLearningScopeTree.AfterSelect += delegate(object sender, TreeViewEventArgs e)
+                    {
+                        OnSmartLearningScopeSelected(e.Node);
+                    };
+                }
+                else
+                {
+                    AddLabel("目标Excel", 12, targetTop + 3, 60);
+                    cmbTargetWorkbook.SetBounds(75, targetTop, 190, 23);
+                    cmbTargetWorkbook.DropDownWidth = 420;
+                    cmbTargetWorkbook.DropDownStyle = ComboBoxStyle.DropDownList;
+                    cmbTargetWorkbook.DropDown += delegate { ReloadTargetWorkbooks(); };
+                    cmbTargetWorkbook.SelectedIndexChanged += delegate { if (!reloadingTargetWorkbooks) ReloadTargetSheets(); };
+                }
                 AddLabel("目标sheet", 275, targetTop + 3, 60);
                 cmbTargetSheet.SetBounds(340, targetTop, 105, 23); cmbTargetSheet.Text = "";
                 cmbTargetSheet.DropDownStyle = ComboBoxStyle.DropDown; // 可选可填
-                cmbTargetSheet.DropDown += delegate { ReloadTargetSheets(); };
+                cmbTargetSheet.DropDown += delegate
+                {
+                    if (smartOnly)
+                    {
+                        string ignoredWorkbook;
+                        string ignoredError;
+                        TryResolveSmartActiveWorkbook(out ignoredWorkbook, out ignoredError);
+                    }
+                    else ReloadTargetSheets();
+                };
                 AddLabel("目标列", 455, targetTop + 3, 50);
                 txtColumn.SetBounds(505, targetTop, 40, 23); txtColumn.Text = "";
                 AddLabel("目标单元", 555, targetTop + 3, 60);
@@ -279,7 +323,9 @@ namespace RecoNet
                     Controls.Add(txtUnit); Controls.Add(cmbSourceSheet); Controls.Add(txtName); Controls.Add(btnBuild);
                     Controls.Add(cmbTemplate); Controls.Add(btnDeleteTemplate); Controls.Add(cmbMode);
                 }
-                Controls.Add(cmbTargetWorkbook); Controls.Add(cmbTargetSheet); Controls.Add(txtColumn);
+                if (smartOnly) Controls.Add(btnSmartLearningScope);
+                else Controls.Add(cmbTargetWorkbook);
+                Controls.Add(cmbTargetSheet); Controls.Add(txtColumn);
                 Controls.Add(cmbTargetUnit);
                 Controls.Add(btnPreview); Controls.Add(btnApply); Controls.Add(reminder); Controls.Add(split);
             }
@@ -323,8 +369,232 @@ namespace RecoNet
 
             private string GetSelectedTargetWorkbookPath()
             {
+                if (smartOnly)
+                {
+                    return String.IsNullOrWhiteSpace(smartPreviewWorkbookPath)
+                        ? smartActiveWorkbookPath
+                        : smartPreviewWorkbookPath;
+                }
                 OpenSpreadsheetWorkbookInfo selected = cmbTargetWorkbook.SelectedItem as OpenSpreadsheetWorkbookInfo;
                 return selected == null ? "" : selected.FullName ?? "";
+            }
+
+            private bool TryResolveSmartActiveWorkbook(out string workbookPath, out string error)
+            {
+                workbookPath = "";
+                error = "";
+                List<OpenSpreadsheetWorkbookInfo> workbooks;
+                string listError;
+                if (!TryListOpenSpreadsheetWorkbooks(out workbooks, out listError))
+                {
+                    error = String.IsNullOrWhiteSpace(listError) ? "无法读取当前活动的 Excel/WPS 工作簿。" : listError;
+                    return false;
+                }
+
+                List<OpenSpreadsheetWorkbookInfo> active = (workbooks ?? new List<OpenSpreadsheetWorkbookInfo>())
+                    .Where(item => item != null && item.IsActive)
+                    .ToList();
+                if (active.Count == 0)
+                {
+                    smartActiveWorkbookPath = "";
+                    cmbTargetSheet.Items.Clear();
+                    cmbTargetSheet.Text = "";
+                    error = "没有检测到当前活动的 Excel/WPS 工作簿，请先切换到已保存的工程量工作簿。";
+                    return false;
+                }
+                if (active.Count > 1)
+                {
+                    smartActiveWorkbookPath = "";
+                    cmbTargetSheet.Items.Clear();
+                    cmbTargetSheet.Text = "";
+                    error = "同时检测到多个活动的 Excel/WPS 工作簿，无法确定推荐取数来源，请只保留一个活动工作簿后重试。";
+                    return false;
+                }
+
+                OpenSpreadsheetWorkbookInfo selected = active[0];
+                string fullName = (selected.FullName ?? "").Trim();
+                if (fullName.Length == 0 || !File.Exists(fullName))
+                {
+                    smartActiveWorkbookPath = "";
+                    cmbTargetSheet.Items.Clear();
+                    cmbTargetSheet.Text = "";
+                    error = "当前活动工作簿尚未保存到磁盘，请保存后再预览推荐定额。";
+                    return false;
+                }
+
+                string keepSheet = cmbTargetSheet.Text;
+                if (selected.SheetNames == null || selected.SheetNames.Count == 0)
+                {
+                    string sheetError;
+                    selected.SheetNames = GetTemplateFillSheetNames(fullName, out sheetError).ToList();
+                    if (selected.SheetNames.Count == 0 && !String.IsNullOrWhiteSpace(sheetError))
+                    {
+                        error = "读取当前活动工作簿的 sheet 失败：" + sheetError;
+                        return false;
+                    }
+                }
+
+                cmbTargetSheet.Items.Clear();
+                foreach (string sheetName in selected.SheetNames) cmbTargetSheet.Items.Add(sheetName);
+                string targetSheet = selected.SheetNames.FirstOrDefault(sheetName =>
+                    String.Equals(sheetName, keepSheet, StringComparison.OrdinalIgnoreCase));
+                if (String.IsNullOrWhiteSpace(targetSheet) && !String.IsNullOrWhiteSpace(selected.ActiveSheetName))
+                {
+                    targetSheet = selected.SheetNames.FirstOrDefault(sheetName =>
+                        String.Equals(sheetName, selected.ActiveSheetName, StringComparison.OrdinalIgnoreCase));
+                }
+                if (String.IsNullOrWhiteSpace(targetSheet)) targetSheet = selected.SheetNames.FirstOrDefault();
+                cmbTargetSheet.Text = targetSheet ?? "";
+                smartActiveWorkbookPath = fullName;
+                workbookPath = fullName;
+                return true;
+            }
+
+            private static string BuildSmartLearningScopeText(SmartLearningScope scope)
+            {
+                if (scope == null || String.Equals(scope.Kind, "All", StringComparison.OrdinalIgnoreCase)) return "全部学习库";
+                if (String.Equals(scope.Kind, "Unclassified", StringComparison.OrdinalIgnoreCase)) return "未归类";
+                string code = (scope.EntryCode ?? "").Trim();
+                string name = (scope.DisplayName ?? "").Trim();
+                if (code.Length == 2 && code.All(Char.IsDigit))
+                {
+                    int value;
+                    return Int32.TryParse(code, out value)
+                        ? ToChineseOrdinal(value) + "、" + (name.Length == 0 ? code : name)
+                        : code + (name.Length == 0 ? "" : " " + name);
+                }
+                if (code.Length == 4 && code.All(Char.IsDigit))
+                {
+                    return code.Substring(2, 2) + "." + (name.Length == 0 ? code : name);
+                }
+                return code + (name.Length == 0 ? "" : " " + name);
+            }
+
+            private void ReloadSmartLearningScopeTree()
+            {
+                if (!smartOnly) return;
+                string keepKind = selectedSmartLearningScope == null ? "All" : selectedSmartLearningScope.Kind ?? "All";
+                string keepCode = selectedSmartLearningScope == null ? "" : selectedSmartLearningScope.EntryCode ?? "";
+                rebuildingSmartLearningScopeTree = true;
+                try
+                {
+                    smartLearningScopeTree.BeginUpdate();
+                    smartLearningScopeTree.Nodes.Clear();
+                    SmartLearningScope allScope = SmartLearningScope.CreateAll();
+                    TreeNode allNode = new TreeNode("全部学习库") { Tag = allScope };
+                    smartLearningScopeTree.Nodes.Add(allNode);
+
+                    List<SmartLearningScope> scopes;
+                    try { scopes = LoadSmartLearningScopes(mainForm); }
+                    catch (Exception ex)
+                    {
+                        Log("Load smart learning scopes failed: " + ex.Message);
+                        scopes = new List<SmartLearningScope>();
+                    }
+
+                    SmartLearningScope unclassified = scopes.FirstOrDefault(scope => scope != null &&
+                        String.Equals(scope.Kind, "Unclassified", StringComparison.OrdinalIgnoreCase));
+                    if (unclassified != null)
+                    {
+                        allNode.Nodes.Add(new TreeNode(BuildSmartLearningScopeText(unclassified)) { Tag = unclassified });
+                    }
+
+                    List<SmartLearningScope> entries = scopes
+                        .Where(scope => scope != null && String.Equals(scope.Kind, "Entry", StringComparison.OrdinalIgnoreCase) &&
+                            !String.IsNullOrWhiteSpace(scope.EntryCode))
+                        .GroupBy(scope => scope.EntryCode, StringComparer.OrdinalIgnoreCase)
+                        .Select(group => group.First())
+                        .OrderBy(scope => scope.EntryCode, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                    Dictionary<string, TreeNode> professionNodes = new Dictionary<string, TreeNode>(StringComparer.OrdinalIgnoreCase);
+                    Dictionary<string, TreeNode> divisionNodes = new Dictionary<string, TreeNode>(StringComparer.OrdinalIgnoreCase);
+                    foreach (SmartLearningScope scope in entries.Where(item => item.EntryCode.Length == 2 && item.EntryCode.All(Char.IsDigit)))
+                    {
+                        TreeNode node = new TreeNode(BuildSmartLearningScopeText(scope)) { Tag = scope };
+                        allNode.Nodes.Add(node);
+                        professionNodes[scope.EntryCode] = node;
+                    }
+                    foreach (SmartLearningScope scope in entries.Where(item => item.EntryCode.Length == 4 && item.EntryCode.All(Char.IsDigit)))
+                    {
+                        string professionCode = scope.EntryCode.Substring(0, 2);
+                        TreeNode parent;
+                        if (!professionNodes.TryGetValue(professionCode, out parent)) parent = allNode;
+                        TreeNode node = new TreeNode(BuildSmartLearningScopeText(scope)) { Tag = scope };
+                        parent.Nodes.Add(node);
+                        divisionNodes[scope.EntryCode] = node;
+                    }
+                    foreach (SmartLearningScope scope in entries.Where(item =>
+                        !(item.EntryCode.Length == 2 && item.EntryCode.All(Char.IsDigit)) &&
+                        !(item.EntryCode.Length == 4 && item.EntryCode.All(Char.IsDigit))))
+                    {
+                        TreeNode parent;
+                        string divisionCode = scope.EntryCode.Length >= 4 ? scope.EntryCode.Substring(0, 4) : "";
+                        if (!divisionNodes.TryGetValue(divisionCode, out parent))
+                        {
+                            string professionCode = scope.EntryCode.Length >= 2 ? scope.EntryCode.Substring(0, 2) : "";
+                            if (!professionNodes.TryGetValue(professionCode, out parent)) parent = allNode;
+                        }
+                        parent.Nodes.Add(new TreeNode(BuildSmartLearningScopeText(scope)) { Tag = scope });
+                    }
+
+                    TreeNode selectedNode = FindSmartLearningScopeNode(allNode, keepKind, keepCode) ?? allNode;
+                    selectedSmartLearningScope = selectedNode.Tag as SmartLearningScope ?? allScope;
+                    smartLearningScopeTree.SelectedNode = selectedNode;
+                    btnSmartLearningScope.Text = BuildSmartLearningScopeText(selectedSmartLearningScope);
+                    allNode.Collapse();
+                }
+                finally
+                {
+                    smartLearningScopeTree.EndUpdate();
+                    rebuildingSmartLearningScopeTree = false;
+                }
+            }
+
+            private static TreeNode FindSmartLearningScopeNode(TreeNode node, string kind, string entryCode)
+            {
+                if (node == null) return null;
+                SmartLearningScope scope = node.Tag as SmartLearningScope;
+                if (scope != null &&
+                    String.Equals(scope.Kind ?? "", kind ?? "", StringComparison.OrdinalIgnoreCase) &&
+                    String.Equals(scope.EntryCode ?? "", entryCode ?? "", StringComparison.OrdinalIgnoreCase))
+                {
+                    return node;
+                }
+                foreach (TreeNode child in node.Nodes)
+                {
+                    TreeNode found = FindSmartLearningScopeNode(child, kind, entryCode);
+                    if (found != null) return found;
+                }
+                return null;
+            }
+
+            private void ShowSmartLearningScopeDropDown()
+            {
+                ReloadSmartLearningScopeTree();
+                if (smartLearningScopeHost == null)
+                {
+                    smartLearningScopeTree.Size = new Size(420, 360);
+                    smartLearningScopeHost = new ToolStripControlHost(smartLearningScopeTree)
+                    {
+                        AutoSize = false,
+                        Margin = Padding.Empty,
+                        Padding = Padding.Empty,
+                        Size = smartLearningScopeTree.Size
+                    };
+                    smartLearningScopeDropDown.Padding = Padding.Empty;
+                    smartLearningScopeDropDown.Items.Add(smartLearningScopeHost);
+                }
+                smartLearningScopeDropDown.Show(btnSmartLearningScope, new Point(0, btnSmartLearningScope.Height));
+            }
+
+            private void OnSmartLearningScopeSelected(TreeNode node)
+            {
+                if (rebuildingSmartLearningScopeTree || node == null) return;
+                SmartLearningScope scope = node.Tag as SmartLearningScope;
+                if (scope == null) return;
+                selectedSmartLearningScope = scope;
+                btnSmartLearningScope.Text = BuildSmartLearningScopeText(scope);
+                smartLearningScopeDropDown.Close();
             }
 
             private void AddTemplateSourceWorkbook(List<OpenSpreadsheetWorkbookInfo> workbooks)
@@ -537,14 +807,17 @@ namespace RecoNet
                     // 模式三·推荐定额:不需要模板,直接走学习库漏斗。
                     if (cmbMode.SelectedIndex == 2)
                     {
-                        string smartWorkbook = GetSelectedTargetWorkbookPath();
-                        if (String.IsNullOrWhiteSpace(smartWorkbook) || !File.Exists(smartWorkbook))
+                        string smartWorkbook;
+                        string smartWorkbookError;
+                        if (!TryResolveSmartActiveWorkbook(out smartWorkbook, out smartWorkbookError))
                         {
-                            MessageBox.Show(this, "没有可用的目标 Excel，请先打开并保存工作簿。", "推荐定额");
+                            MessageBox.Show(this, smartWorkbookError, "推荐定额");
                             return;
                         }
+                        smartPreviewWorkbookPath = smartWorkbook;
                         string smartWarning = null;
-                        preview = BuildPreview_SmartFill(mainForm, smartWorkbook, cmbTargetSheet.Text.Trim(), txtColumn.Text.Trim(), out smartWarning);
+                        preview = BuildPreview_SmartFill(mainForm, smartWorkbook, cmbTargetSheet.Text.Trim(), txtColumn.Text.Trim(),
+                            selectedSmartLearningScope, out smartWarning);
                         if (!String.IsNullOrEmpty(smartWarning)) MessageBox.Show(this, smartWarning, "推荐定额");
                         RebuildItemTree();
                         FillGrid();
@@ -1175,6 +1448,22 @@ namespace RecoNet
                         return;
                     }
                     if (replacements.Count == 0) return;
+                    if (smartOnly)
+                    {
+                        replacements = replacements
+                            .OrderBy(target => TemplateTargetRank(target.QuotaCode))
+                            .ThenBy(target => target.QuotaCode ?? "", StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+                        for (int i = 0; i < replacements.Count; i++)
+                        {
+                            replacements[i].GroupOrder = i;
+                            replacements[i].TargetName = i == 0 ? groupLeader.TargetName : "";
+                            replacements[i].AlignNote = i == 0
+                                ? ("已绑定 " + (replacements[i].QuotaCode ?? "") +
+                                    (replacements.Count > 1 ? "（组 " + replacements.Count.ToString(CultureInfo.InvariantCulture) + " 条）" : "（软件选中行，含条目）"))
+                                : ("组件框第 " + (i + 1).ToString(CultureInfo.InvariantCulture) + " 条（软件选中行）");
+                        }
+                    }
 
                     bool bindingChanged = !AreEquivalentNameBindingGroups(oldGroup, replacements);
                     if (!ReplacePreviewTargetGroup(preview, groupLeader.TargetRow, replacements)) return;

@@ -27,6 +27,7 @@ $entryCode = 'ENTRY-' + $suffix.Substring(0, 20)
 $entryName = 'rollback entry'
 $method = '2024'
 $boxId = 'box-test-' + $suffix.Substring(0, 24)
+$engineeringType = $entryCode.Substring(0, 2)
 
 $groupType.GetField('QuantityName', $allFlags).SetValue($group, $rawName)
 $groupType.GetField('QuantityUnit', $allFlags).SetValue($group, 'm2')
@@ -62,6 +63,12 @@ if ([int]$methodColumn.ExecuteScalar() -eq 0) {
 $formulaTableState = $connection.CreateCommand()
 $formulaTableState.CommandText = "SELECT CASE WHEN OBJECT_ID('dbo.QuantityFormulaRule','U') IS NOT NULL AND OBJECT_ID('dbo.QuantityFormulaOperand','U') IS NOT NULL THEN 1 ELSE 0 END"
 $formulaTablesExisted = [int]$formulaTableState.ExecuteScalar() -eq 1
+$engineeringTemplateState = $connection.CreateCommand()
+$engineeringTemplateState.CommandText = "SELECT CASE WHEN OBJECT_ID('dbo.EngineeringTemplate','U') IS NULL THEN 0 ELSE 1 END"
+if ([int]$engineeringTemplateState.ExecuteScalar() -eq 0) {
+    $connection.Dispose()
+    throw 'Missing dbo.EngineeringTemplate; apply the existing learning schema before running the incremental aggregate test'
+}
 $transaction = $connection.BeginTransaction()
 try {
     $ensureFormulaTables = $connection.CreateCommand()
@@ -100,6 +107,7 @@ SELECT
   (SELECT COUNT(*) FROM dbo.SignatureBoxMap WHERE signature=@signature AND method=@method AND box_id=@box) +
   (SELECT COUNT(*) FROM dbo.QuotaBoxTarget WHERE box_id=@box AND target_code=@code) +
   (SELECT COUNT(*) FROM dbo.SignatureEntryMap WHERE signature=@signature AND target_code=@code AND method=@method AND entry_code=@entry) +
+  (SELECT COUNT(*) FROM dbo.EngineeringTemplate WHERE method=@method AND engineering_type=@type AND entry_code=@entry AND box_id=@box) +
   (SELECT COUNT(*) FROM dbo.QuantityFormulaRule WHERE anchor_signature=@signature AND target_code=@code) +
   (SELECT COUNT(*) FROM dbo.QuantityFormulaOperand WHERE operand_signature=@signature)
 '@
@@ -109,8 +117,9 @@ SELECT
     [void]$command.Parameters.AddWithValue('@code', $targetCode)
     [void]$command.Parameters.AddWithValue('@method', $method)
     [void]$command.Parameters.AddWithValue('@entry', $entryCode)
+    [void]$command.Parameters.AddWithValue('@type', $engineeringType)
     $insideCount = [int]$command.ExecuteScalar()
-    if ($insideCount -ne 6) { throw "Expected six aggregate rows inside transaction, got $insideCount" }
+    if ($insideCount -ne 7) { throw "Expected seven aggregate rows inside transaction, got $insideCount" }
 
     $counts = $connection.CreateCommand()
     $counts.Transaction = $transaction
@@ -119,6 +128,7 @@ SELECT
   (SELECT seen_count FROM dbo.QuantityAlias WHERE raw_name=@name AND signature=@signature),
   (SELECT accepted_count FROM dbo.SignatureBoxMap WHERE signature=@signature AND method=@method AND box_id=@box),
   (SELECT sample_count FROM dbo.SignatureEntryMap WHERE signature=@signature AND target_code=@code AND method=@method AND entry_code=@entry),
+  (SELECT sample_count FROM dbo.EngineeringTemplate WHERE method=@method AND engineering_type=@type AND entry_code=@entry AND box_id=@box),
   (SELECT sample_count FROM dbo.QuantityFormulaRule WHERE anchor_signature=@signature AND target_code=@code)
 '@
     [void]$counts.Parameters.AddWithValue('@name', $rawName)
@@ -127,9 +137,11 @@ SELECT
     [void]$counts.Parameters.AddWithValue('@code', $targetCode)
     [void]$counts.Parameters.AddWithValue('@method', $method)
     [void]$counts.Parameters.AddWithValue('@entry', $entryCode)
+    [void]$counts.Parameters.AddWithValue('@type', $engineeringType)
     $reader = $counts.ExecuteReader()
     try {
-        if (-not $reader.Read() -or $reader.GetInt32(0) -ne 2 -or $reader.GetInt32(1) -ne 2 -or $reader.GetInt32(2) -ne 2 -or $reader.GetInt32(3) -ne 2) {
+        if (-not $reader.Read() -or $reader.GetInt32(0) -ne 2 -or $reader.GetInt32(1) -ne 2 -or
+            $reader.GetInt32(2) -ne 2 -or $reader.GetInt32(3) -ne 2 -or $reader.GetInt32(4) -ne 2) {
             throw 'Repeated aggregate upsert did not update existing rows exactly once'
         }
     }
@@ -177,6 +189,7 @@ SELECT
     $delta.CommandText = @'
 SELECT accepted_count,corrected_count,rejected_count,weight,
   (SELECT sample_count FROM dbo.SignatureEntryMap WHERE signature=@signature AND target_code=@code AND method=@method AND entry_code=@entry),
+  (SELECT sample_count FROM dbo.EngineeringTemplate WHERE method=@method AND engineering_type=@type AND entry_code=@entry AND box_id=@box),
   (SELECT sample_count FROM dbo.QuantityFormulaRule WHERE anchor_signature=@signature AND target_code=@code)
 FROM dbo.SignatureBoxMap WHERE signature=@signature AND method=@method AND box_id=@box
 '@
@@ -184,13 +197,14 @@ FROM dbo.SignatureBoxMap WHERE signature=@signature AND method=@method AND box_i
     [void]$delta.Parameters.AddWithValue('@code', $targetCode)
     [void]$delta.Parameters.AddWithValue('@method', $method)
     [void]$delta.Parameters.AddWithValue('@entry', $entryCode)
+    [void]$delta.Parameters.AddWithValue('@type', $engineeringType)
     [void]$delta.Parameters.AddWithValue('@box', $boxId)
     $deltaReader = $delta.ExecuteReader()
     try {
         if (-not $deltaReader.Read() -or $deltaReader.GetInt32(0) -ne 2 -or $deltaReader.GetInt32(1) -ne 0 -or
             $deltaReader.GetInt32(2) -ne 1 -or $deltaReader.GetInt32(3) -ne 10 -or
-            $deltaReader.GetInt32(4) -ne 2 -or $deltaReader.GetInt32(5) -ne 2) {
-            throw 'Rejection delta did not lower weight without strengthening entry/formula evidence'
+            $deltaReader.GetInt32(4) -ne 2 -or $deltaReader.GetInt32(5) -ne 2 -or $deltaReader.GetInt32(6) -ne 2) {
+            throw 'Rejection delta did not lower weight without strengthening entry/template/formula evidence'
         }
     }
     finally { $deltaReader.Dispose() }
@@ -200,15 +214,22 @@ FROM dbo.SignatureBoxMap WHERE signature=@signature AND method=@method AND box_i
     [void]$upsert.Invoke($null, $invokeArgs)
     $correction = $connection.CreateCommand()
     $correction.Transaction = $transaction
-    $correction.CommandText = 'SELECT corrected_count,rejected_count,weight FROM dbo.SignatureBoxMap WHERE signature=@signature AND method=@method AND box_id=@box'
+    $correction.CommandText = @'
+SELECT corrected_count,rejected_count,weight,
+  (SELECT sample_count FROM dbo.EngineeringTemplate WHERE method=@method AND engineering_type=@type AND entry_code=@entry AND box_id=@box)
+FROM dbo.SignatureBoxMap WHERE signature=@signature AND method=@method AND box_id=@box
+'@
     [void]$correction.Parameters.AddWithValue('@signature', $signature)
     [void]$correction.Parameters.AddWithValue('@method', $method)
+    [void]$correction.Parameters.AddWithValue('@type', $engineeringType)
+    [void]$correction.Parameters.AddWithValue('@entry', $entryCode)
     [void]$correction.Parameters.AddWithValue('@box', $boxId)
     $correctionReader = $correction.ExecuteReader()
     try {
         if (-not $correctionReader.Read() -or $correctionReader.GetInt32(0) -ne 1 -or
-            $correctionReader.GetInt32(1) -ne 1 -or $correctionReader.GetInt32(2) -ne 30) {
-            throw 'Correction delta did not raise the corrected relation weight'
+            $correctionReader.GetInt32(1) -ne 1 -or $correctionReader.GetInt32(2) -ne 30 -or
+            $correctionReader.GetInt32(3) -ne 3) {
+            throw 'Correction delta did not raise the corrected relation weight and template evidence'
         }
     }
     finally { $correctionReader.Dispose() }
@@ -236,7 +257,8 @@ SELECT
   (SELECT COUNT(*) FROM dbo.QuantityAlias WHERE raw_name=@name) +
   (SELECT COUNT(*) FROM dbo.SignatureBoxMap WHERE signature=@signature) +
   (SELECT COUNT(*) FROM dbo.QuotaBoxTarget WHERE target_code=@code) +
-  (SELECT COUNT(*) FROM dbo.SignatureEntryMap WHERE signature=@signature AND target_code=@code)
+  (SELECT COUNT(*) FROM dbo.SignatureEntryMap WHERE signature=@signature AND target_code=@code) +
+  (SELECT COUNT(*) FROM dbo.EngineeringTemplate WHERE entry_code=@entry AND box_id=@box)
 '@
 if ($formulaTablesExisted) {
     $verify.CommandText += ' + (SELECT COUNT(*) FROM dbo.QuantityFormulaRule WHERE anchor_signature=@signature AND target_code=@code) + (SELECT COUNT(*) FROM dbo.QuantityFormulaOperand WHERE operand_signature=@signature)'
@@ -244,6 +266,8 @@ if ($formulaTablesExisted) {
 [void]$verify.Parameters.AddWithValue('@name', $rawName)
 [void]$verify.Parameters.AddWithValue('@signature', $signature)
 [void]$verify.Parameters.AddWithValue('@code', $targetCode)
+[void]$verify.Parameters.AddWithValue('@entry', $entryCode)
+[void]$verify.Parameters.AddWithValue('@box', $boxId)
 $afterCount = [int]$verify.ExecuteScalar()
 $connection.Dispose()
 if ($afterCount -ne 0) { throw "Rollback left $afterCount test rows" }

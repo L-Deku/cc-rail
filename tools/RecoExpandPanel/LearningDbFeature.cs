@@ -933,6 +933,24 @@ namespace RecoNet
             {
                 string method = NormalizeLearningDbMethod(group.Method);
                 string entryName = TrimLearningText(group.EntryName, 500);
+                if (entryCode.Length >= 2)
+                {
+                    using (SqlCommand cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = transaction;
+                        cmd.CommandTimeout = 5;
+                        cmd.CommandText =
+                            "UPDATE dbo.EngineeringTemplate WITH (UPDLOCK,HOLDLOCK) SET sample_count=sample_count+1,last_seen=SYSDATETIME() " +
+                            "WHERE method=@method AND engineering_type=@type AND entry_code=@entry AND box_id=@box; " +
+                            "IF @@ROWCOUNT=0 INSERT INTO dbo.EngineeringTemplate(method,engineering_type,entry_code,box_id,sample_count,last_seen) " +
+                            "VALUES(@method,@type,@entry,@box,1,SYSDATETIME());";
+                        cmd.Parameters.AddWithValue("@method", method);
+                        cmd.Parameters.AddWithValue("@type", entryCode.Substring(0, 2));
+                        cmd.Parameters.AddWithValue("@entry", entryCode);
+                        cmd.Parameters.AddWithValue("@box", boxId);
+                        cmd.ExecuteNonQuery();
+                    }
+                }
                 foreach (MappingFeedbackTarget target in targets.Where(item => String.Equals(item.Kind ?? "quota", "quota", StringComparison.OrdinalIgnoreCase)))
                 {
                     using (SqlCommand cmd = conn.CreateCommand())

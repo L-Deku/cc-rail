@@ -295,24 +295,81 @@ try {
     $entryNameField = $candidateScoreType.GetField('EntryName', $flags)
     if ($null -eq $entryNameField) { throw '候选分数缺少条目名称字段' }
     $smartTargetType = $type.GetNestedType('SmartBoxTarget', $nestedFlags)
-    $smartTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
-    $smartTargetType.GetField('Code', $flags).SetValue($smartTarget, 'LY-89')
     $firstMapEntry = $candidateScoreType.GetField('Entry', $flags).GetValue($scoreList[0])
-    [void]$mapEntryType.GetField('Targets', $flags).GetValue($firstMapEntry).Add($smartTarget)
+    foreach ($targetCode in @('SH', '1009001002*1.224', 'LY-89')) {
+        $smartTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
+        $smartTargetType.GetField('Code', $flags).SetValue($smartTarget, $targetCode)
+        [void]$mapEntryType.GetField('Targets', $flags).GetValue($firstMapEntry).Add($smartTarget)
+    }
     $candidateScoreType.GetField('EntryCode', $flags).SetValue($scoreList[0], '0309-01-03-03')
     $entryNameField.SetValue($scoreList[0], '弃渣外运')
-    $candidateLabel = $type.GetMethod('BuildSmartCandidateLabel', $flags).Invoke($null, @($scoreList[0]))
-    if ($candidateLabel -ne 'LY-89（条目 0309-01-03-03 弃渣外运）' -or
+    $snapshotType = $type.GetNestedType('SmartLearningSnapshot', $nestedFlags)
+    $snapshot = [Activator]::CreateInstance($snapshotType, $true).PSObject.BaseObject
+    $projectNames = $snapshotType.GetField('ProjectEntryNameByCode', $flags).GetValue($snapshot)
+    $projectNames['03'] = '桥涵'
+    $candidateLabel = $type.GetMethod('BuildSmartCandidateLabel', $flags).Invoke($null, @($snapshot, $scoreList[0]))
+    if ($candidateLabel -ne 'LY-89 + 1009001002*1.224 + SH（桥涵 0309-01-03-03）' -or
+        $candidateLabel -match '条目|弃渣外运' -or
         $candidateLabel -match '权重|当前办法') {
-        throw "候选下拉应只显示组件和条目编号/名称，实际：$candidateLabel"
+        throw "候选下拉应按定额/材料/辅助排序并只显示专业与完整条目编号，实际：$candidateLabel"
     }
+    $scopeType = $type.GetNestedType('SmartLearningScope', $nestedFlags)
+    $scope = [Activator]::CreateInstance($scopeType, $true).PSObject.BaseObject
+    $scopeType.GetField('Kind', $flags).SetValue($scope, 'Entry')
+    $scopeType.GetField('EntryCode', $flags).SetValue($scope, '03')
+    $scopeMatch = $type.GetMethod('SmartEntryCodeMatchesScope', $flags)
+    if (-not $scopeMatch.Invoke($null, @('0309-01-03-03', $scope)) -or
+        $scopeMatch.Invoke($null, @('0204-01-01', $scope))) {
+        throw '前两位专业范围没有按条目边界包含下级'
+    }
+    $scopeType.GetField('EntryCode', $flags).SetValue($scope, '0309-01-03')
+    if (-not $scopeMatch.Invoke($null, @('0309-01-03-01', $scope)) -or
+        $scopeMatch.Invoke($null, @('0309-01-04-01', $scope))) {
+        throw '完整条目范围没有包含自身下级或错误纳入相邻条目'
+    }
+    $mapEntryListType = [Collections.Generic.List``1].MakeGenericType($mapEntryType)
+    $scopeHits = [Activator]::CreateInstance($mapEntryListType)
+    foreach ($definition in @(@('box-bridge', 10), @('box-road', 100), @('box-unclassified', 80))) {
+        $entry = [Activator]::CreateInstance($mapEntryType, $true).PSObject.BaseObject
+        $mapEntryType.GetField('BoxId', $flags).SetValue($entry, $definition[0])
+        $mapEntryType.GetField('Weight', $flags).SetValue($entry, $definition[1])
+        [void]$scopeHits.Add($entry)
+    }
+    $scopeMap = $snapshotType.GetField('ScopeEntriesByBox', $flags).GetValue($snapshot)
+    $scopeSetType = $scopeMap.GetType().GetGenericArguments()[1]
+    $bridgeCodes = [Activator]::CreateInstance($scopeSetType)
+    [void]$bridgeCodes.Add('0309-01-03-01')
+    $scopeMap.Add('box-bridge', $bridgeCodes)
+    $roadCodes = [Activator]::CreateInstance($scopeSetType)
+    [void]$roadCodes.Add('0204-01-01')
+    $scopeMap.Add('box-road', $roadCodes)
+    $filterByScope = $type.GetMethod('FilterSmartHitsByScope', $flags)
+    $scopeType.GetField('EntryCode', $flags).SetValue($scope, '03')
+    $filterArgs = New-Object 'object[]' 3
+    $filterArgs[0] = $snapshot
+    $filterArgs[1] = $scopeHits.PSObject.BaseObject
+    $filterArgs[2] = $scope
+    $professionalHits = @($filterByScope.Invoke($null, $filterArgs))
+    if ($professionalHits.Count -ne 1 -or
+        $mapEntryType.GetField('BoxId', $flags).GetValue($professionalHits[0]) -ne 'box-bridge') {
+        throw '专业学习库没有优先隔离专业内组件，或被全库高权重组件覆盖'
+    }
+    $scopeType.GetField('Kind', $flags).SetValue($scope, 'Unclassified')
+    $scopeType.GetField('EntryCode', $flags).SetValue($scope, '')
+    $unclassifiedHits = @($filterByScope.Invoke($null, $filterArgs))
+    if ($unclassifiedHits.Count -ne 1 -or
+        $mapEntryType.GetField('BoxId', $flags).GetValue($unclassifiedHits[0]) -ne 'box-unclassified') {
+        throw '未归类学习库没有排除已有专业归类的组件'
+    }
+    Write-Host 'PASS 专业学习库范围按条目边界包含下级'
+
     $candidateType = $type.GetNestedType('NameQuotaCandidateGroup', $nestedFlags)
     $candidateListType = [System.Collections.Generic.List``1].MakeGenericType($candidateType)
     $candidateList = [Activator]::CreateInstance($candidateListType)
     foreach ($candidateDefinition in @(
         @('box-high', $candidateLabel),
         @('box-low', $candidateLabel),
-        @('box-other', 'LY-90（条目 0309-01-03-03 弃渣外运）')
+        @('box-other', 'LY-90（桥涵 0309-01-03-03）')
     )) {
         $candidate = [Activator]::CreateInstance($candidateType)
         $candidateType.GetField('Key', $flags).SetValue($candidate, $candidateDefinition[0])

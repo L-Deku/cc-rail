@@ -18,9 +18,19 @@ if ($smart -notmatch 'TemplateName = "推荐定额"') { throw '预览项名称�
 if ($smart -notmatch 'EntryBySignatureQuota') { throw '缺少签名级条目证据' }
 if ($smart -notmatch 'prefixVotes') { throw '缺少工程前缀投票' }
 if ($smart -notmatch 'preferredPrefixes') { throw '缺少前缀过滤消歧' }
+if ($smart -notmatch 'SmartLearningScope') { throw '缺少推荐学习库范围模型' }
+if ($smart -notmatch 'LoadSmartLearningScopes') { throw '缺少推荐学习库目录加载' }
+if ($smart -notmatch '全库兜底') { throw '缺少专业学习库无命中后的全库兜底标记' }
+if ($smart -notmatch 'Status = "未匹配",\s*Selected = false') { throw '未匹配行仍可能默认勾选' }
 if ($panel -notmatch '三·推荐定额') { throw 'cmbMode 缺少第三模式(推荐定额)' }
 if ($panel -notmatch 'BuildPreview_SmartFill') { throw 'OnPreview 未挂接推荐定额分支' }
 if ($panel -notmatch 'smartOnly') { throw '缺少 smartOnly 独立窗口模式' }
+if ($panel -notmatch '推荐学习库' -or $panel -notmatch 'ToolStripDropDown' -or $panel -notmatch 'ShowPlusMinus = true') {
+    throw '推荐定额窗口缺少折叠式推荐学习库目录'
+}
+if ($panel -notmatch 'TryResolveSmartActiveWorkbook' -or $panel -notmatch '当前活动工作簿尚未保存') {
+    throw '推荐定额窗口没有改为读取当前活动且已保存的 Excel/WPS 工作簿'
+}
 if ($panel -notmatch 'CellPainting') { throw '缺少一量对多的工程量名合并绘制' }
 if ($excelLink -notmatch '"推荐定额"') { throw '缺少推荐定额菜单入口' }
 if ($excelLink -match '打开智能铺量面板') { throw '旧菜单名"打开智能铺量面板"未清除' }
