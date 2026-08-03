@@ -133,8 +133,8 @@ namespace RecoNet
                 };
                 if (smartOnly)
                 {
-                    AddLabel("推荐学习库", 12, targetTop + 3, 60);
-                    btnSmartLearningScope.SetBounds(75, targetTop, 190, 23);
+                    AddLabel("推荐学习库", 12, targetTop + 3, 70);
+                    btnSmartLearningScope.SetBounds(85, targetTop, 170, 23);
                     btnSmartLearningScope.Text = "全部学习库";
                     btnSmartLearningScope.TextAlign = ContentAlignment.MiddleLeft;
                     btnSmartLearningScope.Click += delegate { ShowSmartLearningScopeDropDown(); };
@@ -494,11 +494,6 @@ namespace RecoNet
 
                     SmartLearningScope unclassified = scopes.FirstOrDefault(scope => scope != null &&
                         String.Equals(scope.Kind, "Unclassified", StringComparison.OrdinalIgnoreCase));
-                    if (unclassified != null)
-                    {
-                        allNode.Nodes.Add(new TreeNode(BuildSmartLearningScopeText(unclassified)) { Tag = unclassified });
-                    }
-
                     List<SmartLearningScope> entries = scopes
                         .Where(scope => scope != null && String.Equals(scope.Kind, "Entry", StringComparison.OrdinalIgnoreCase) &&
                             !String.IsNullOrWhiteSpace(scope.EntryCode))
@@ -511,14 +506,14 @@ namespace RecoNet
                     foreach (SmartLearningScope scope in entries.Where(item => item.EntryCode.Length == 2 && item.EntryCode.All(Char.IsDigit)))
                     {
                         TreeNode node = new TreeNode(BuildSmartLearningScopeText(scope)) { Tag = scope };
-                        allNode.Nodes.Add(node);
+                        smartLearningScopeTree.Nodes.Add(node);
                         professionNodes[scope.EntryCode] = node;
                     }
                     foreach (SmartLearningScope scope in entries.Where(item => item.EntryCode.Length == 4 && item.EntryCode.All(Char.IsDigit)))
                     {
                         string professionCode = scope.EntryCode.Substring(0, 2);
                         TreeNode parent;
-                        if (!professionNodes.TryGetValue(professionCode, out parent)) parent = allNode;
+                        if (!professionNodes.TryGetValue(professionCode, out parent)) continue;
                         TreeNode node = new TreeNode(BuildSmartLearningScopeText(scope)) { Tag = scope };
                         parent.Nodes.Add(node);
                         divisionNodes[scope.EntryCode] = node;
@@ -532,16 +527,26 @@ namespace RecoNet
                         if (!divisionNodes.TryGetValue(divisionCode, out parent))
                         {
                             string professionCode = scope.EntryCode.Length >= 2 ? scope.EntryCode.Substring(0, 2) : "";
-                            if (!professionNodes.TryGetValue(professionCode, out parent)) parent = allNode;
+                            if (!professionNodes.TryGetValue(professionCode, out parent)) continue;
                         }
                         parent.Nodes.Add(new TreeNode(BuildSmartLearningScopeText(scope)) { Tag = scope });
                     }
 
-                    TreeNode selectedNode = FindSmartLearningScopeNode(allNode, keepKind, keepCode) ?? allNode;
+                    if (unclassified != null)
+                    {
+                        smartLearningScopeTree.Nodes.Add(new TreeNode(BuildSmartLearningScopeText(unclassified)) { Tag = unclassified });
+                    }
+
+                    TreeNode selectedNode = null;
+                    foreach (TreeNode rootNode in smartLearningScopeTree.Nodes)
+                    {
+                        selectedNode = FindSmartLearningScopeNode(rootNode, keepKind, keepCode);
+                        if (selectedNode != null) break;
+                    }
+                    if (selectedNode == null) selectedNode = allNode;
                     selectedSmartLearningScope = selectedNode.Tag as SmartLearningScope ?? allScope;
                     smartLearningScopeTree.SelectedNode = selectedNode;
                     btnSmartLearningScope.Text = BuildSmartLearningScopeText(selectedSmartLearningScope);
-                    allNode.Collapse();
                 }
                 finally
                 {

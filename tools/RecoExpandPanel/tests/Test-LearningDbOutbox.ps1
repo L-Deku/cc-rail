@@ -166,16 +166,19 @@ SELECT
  (SELECT seen_count FROM dbo.QuantityAlias WHERE raw_name=@name AND signature=@signature),
  (SELECT accepted_count FROM dbo.SignatureBoxMap WHERE signature=@signature AND method='2024' AND box_id=@box),
  (SELECT sample_count FROM dbo.SignatureEntryMap WHERE signature=@signature AND target_code=@code),
+ (SELECT sample_count FROM dbo.EngineeringTemplate WHERE method='2024' AND entry_code=@entry AND box_id=@box),
  (SELECT sample_count FROM dbo.QuantityFormulaRule WHERE anchor_signature=@signature AND target_code=@code)
 '@
         [void]$counts.Parameters.AddWithValue('@name', $rawName)
         [void]$counts.Parameters.AddWithValue('@code', $targetCode)
         [void]$counts.Parameters.AddWithValue('@signature', $signature)
         [void]$counts.Parameters.AddWithValue('@box', $boxId)
+        [void]$counts.Parameters.AddWithValue('@entry', $entryCode)
         $reader = $counts.ExecuteReader()
         try {
             if (-not $reader.Read() -or $reader.GetInt32(0) -ne 1 -or $reader.GetInt32(1) -ne 1 -or
-                $reader.GetInt32(2) -ne 1 -or $reader.GetInt32(3) -ne 1 -or $reader.GetInt32(4) -ne 1) {
+                $reader.GetInt32(2) -ne 1 -or $reader.GetInt32(3) -ne 1 -or $reader.GetInt32(4) -ne 1 -or
+                $reader.GetInt32(5) -ne 1) {
                 throw 'First outbox replay did not commit exactly one event and one aggregate increment'
             }
         }
@@ -195,13 +198,15 @@ SELECT
  (SELECT seen_count FROM dbo.QuantityAlias WHERE raw_name=@name AND signature=@signature) +
  (SELECT accepted_count FROM dbo.SignatureBoxMap WHERE signature=@signature AND method='2024' AND box_id=@box) +
  (SELECT sample_count FROM dbo.SignatureEntryMap WHERE signature=@signature AND target_code=@code) +
+ (SELECT sample_count FROM dbo.EngineeringTemplate WHERE method='2024' AND entry_code=@entry AND box_id=@box) +
  (SELECT sample_count FROM dbo.QuantityFormulaRule WHERE anchor_signature=@signature AND target_code=@code)
 '@
         [void]$unchanged.Parameters.AddWithValue('@name', $rawName)
         [void]$unchanged.Parameters.AddWithValue('@code', $targetCode)
         [void]$unchanged.Parameters.AddWithValue('@signature', $signature)
         [void]$unchanged.Parameters.AddWithValue('@box', $boxId)
-        if ([int]$unchanged.ExecuteScalar() -ne 5) { throw 'Duplicate outbox replay incremented learning counts again' }
+        [void]$unchanged.Parameters.AddWithValue('@entry', $entryCode)
+        if ([int]$unchanged.ExecuteScalar() -ne 6) { throw 'Duplicate outbox replay incremented learning counts again' }
     }
     finally { $verify.Dispose() }
 }
@@ -215,6 +220,7 @@ finally {
 DELETE FROM dbo.QuantityFormulaOperand WHERE rule_hash IN (SELECT rule_hash FROM dbo.QuantityFormulaRule WHERE anchor_signature=@signature AND target_code=@code);
 DELETE FROM dbo.QuantityFormulaRule WHERE anchor_signature=@signature AND target_code=@code;
 DELETE FROM dbo.SignatureEntryMap WHERE signature=@signature AND target_code=@code;
+DELETE FROM dbo.EngineeringTemplate WHERE method='2024' AND entry_code=@entry AND box_id=@box;
 DELETE FROM dbo.SignatureBoxMap WHERE signature=@signature AND method='2024' AND box_id=@box;
 DELETE FROM dbo.QuotaBoxTarget WHERE box_id=@box AND target_code=@code;
 DELETE FROM dbo.QuotaBox WHERE box_id=@box;
@@ -225,6 +231,7 @@ DELETE FROM dbo.BindingLog WHERE quantity_name=@name AND target_code=@code;
             [void]$cmd.Parameters.AddWithValue('@code', $targetCode)
             [void]$cmd.Parameters.AddWithValue('@signature', $signature)
             [void]$cmd.Parameters.AddWithValue('@box', $boxId)
+            [void]$cmd.Parameters.AddWithValue('@entry', $entryCode)
             [void]$cmd.ExecuteNonQuery()
         }
         finally { $cleanup.Dispose() }

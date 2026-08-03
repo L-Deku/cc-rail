@@ -41,8 +41,12 @@ try {
     if (-not $panel.Controls.Contains($button) -or $panel.Controls.Contains($workbook)) {
         throw '推荐定额窗口没有以推荐学习库替换目标Excel控件'
     }
-    if (-not $tree.ShowPlusMinus -or $tree.Nodes.Count -eq 0 -or $tree.Nodes[0].IsExpanded) {
-        throw '推荐学习库目录未保持带加号且默认折叠'
+    $learningLabel = @($panel.Controls | Where-Object { $_ -is [System.Windows.Forms.Label] -and $_.Text -eq '推荐学习库' })[0]
+    if ($null -eq $learningLabel -or $learningLabel.Width -lt 70 -or $button.Width -gt 170) {
+        throw '推荐学习库表头仍可能换行或选择框未缩窄'
+    }
+    if (-not $tree.ShowPlusMinus -or $tree.Nodes.Count -eq 0 -or $tree.Nodes[0].Nodes.Count -ne 0) {
+        throw '推荐学习库没有把全部学习库与专业目录改为同级节点'
     }
 
     $format = $panelType.GetMethod('BuildSmartLearningScopeText', $flags)

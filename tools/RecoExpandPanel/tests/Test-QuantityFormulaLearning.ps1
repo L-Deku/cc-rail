@@ -314,6 +314,12 @@ try {
         throw "候选下拉应按定额/材料/辅助排序并只显示专业与完整条目编号，实际：$candidateLabel"
     }
     $scopeType = $type.GetNestedType('SmartLearningScope', $nestedFlags)
+    $classifiedEntryCode = $type.GetMethod('IsSmartClassifiedEntryCode', $flags)
+    if (-not $classifiedEntryCode.Invoke($null, @('0309-01-03-03')) -or
+        $classifiedEntryCode.Invoke($null, @('ENTRY-test')) -or
+        $classifiedEntryCode.Invoke($null, @('EN'))) {
+        throw '推荐学习库没有过滤非数字测试条目编号'
+    }
     $scope = [Activator]::CreateInstance($scopeType, $true).PSObject.BaseObject
     $scopeType.GetField('Kind', $flags).SetValue($scope, 'Entry')
     $scopeType.GetField('EntryCode', $flags).SetValue($scope, '03')

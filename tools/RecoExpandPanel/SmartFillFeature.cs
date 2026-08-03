@@ -409,7 +409,11 @@ namespace RecoNet
                         cmd.Parameters.AddWithValue("@method", NormalizeSmartProjectMethod(method));
                         using (SqlDataReader reader = cmd.ExecuteReader())
                         {
-                            while (reader.Read()) entryCodes.Add(reader.GetString(0).Trim());
+                            while (reader.Read())
+                            {
+                                string entryCode = reader.GetString(0).Trim();
+                                if (IsSmartClassifiedEntryCode(entryCode)) entryCodes.Add(entryCode);
+                            }
                         }
                     }
                     Dictionary<string, string> learningNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -452,6 +456,13 @@ namespace RecoNet
                     result.Add(new SmartLearningScope { Kind = "Unclassified", EntryCode = "", DisplayName = "未归类" });
             }
             return result;
+        }
+
+        private static bool IsSmartClassifiedEntryCode(string entryCode)
+        {
+            string code = (entryCode ?? "").Trim();
+            return code.Length >= 2 && Char.IsDigit(code[0]) && Char.IsDigit(code[1]) &&
+                code.All(value => Char.IsDigit(value) || value == '-');
         }
 
         // 从 RecoLearning 加载快照;失败回退 jsonl(仅签名映射,无条目知识)。
@@ -569,6 +580,7 @@ namespace RecoNet
                             {
                                 string boxId = reader.GetString(0).Trim();
                                 string entryCode = reader.GetString(1).Trim();
+                                if (!IsSmartClassifiedEntryCode(entryCode)) continue;
                                 HashSet<string> codes;
                                 if (!snapshot.ScopeEntriesByBox.TryGetValue(boxId, out codes))
                                 {
@@ -1284,7 +1296,8 @@ namespace RecoNet
             if (!String.Equals(scope.Kind, "Entry", StringComparison.OrdinalIgnoreCase)) return false;
             string code = (entryCode ?? "").Trim();
             string selected = (scope.EntryCode ?? "").Trim();
-            return IsItemNoUnderChapter(code, selected);
+            return IsSmartClassifiedEntryCode(code) && IsSmartClassifiedEntryCode(selected) &&
+                IsItemNoUnderChapter(code, selected);
         }
 
         private static List<SmartMapEntry> FilterSmartHitsByScope(SmartLearningSnapshot snapshot,
@@ -1305,7 +1318,7 @@ namespace RecoNet
                         if (!String.Equals(method, snapshot == null ? "" : snapshot.Method ?? "",
                             StringComparison.OrdinalIgnoreCase)) continue;
                         string code = separator >= 0 ? key.Substring(separator + 1) : "";
-                        if (code.Length == 0) continue;
+                        if (!IsSmartClassifiedEntryCode(code)) continue;
                         if (codes == null) codes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                         codes.Add(code);
                         hasCodes = true;
@@ -1321,7 +1334,7 @@ namespace RecoNet
             if (score == null || score.Entry == null) return "空组件";
             string targets = String.Join(" + ", OrderSmartTargets(score.Entry.Targets)
                 .Select(target => (target.Code ?? "").Trim()).Where(code => code.Length > 0).ToArray());
-            if (String.IsNullOrWhiteSpace(score.EntryCode)) return targets + "（缺条目）";
+            if (!IsSmartClassifiedEntryCode(score.EntryCode)) return targets + "（缺条目）";
             return targets + "（" + ResolveSmartProfessionName(snapshot, score.EntryCode) + " " + score.EntryCode.Trim() + "）";
         }
 
