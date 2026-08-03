@@ -45,6 +45,17 @@ if ((Get-Md5Hex $normalizedName) -ne (Get-Md5Hex (Get-NormalizedPart (Get-Canoni
   throw '同名不同单位的 alias_hash 应归并为同一套'
 }
 
+$formatBaseline = Get-NormalizedPart '泥浆外运(运距10km),Φ560X33.2mm'
+$formatFullWidth = Get-NormalizedPart " 泥浆　外运（运距10km），Ф560×33.2mm "
+$formatLowerPhi = Get-NormalizedPart '泥浆外运（运距10km），φ560ｘ33.2mm'
+if ($formatBaseline -ne '泥浆外运(运距10KM),Φ560X33.2MM' -or
+    $formatFullWidth -ne $formatBaseline -or $formatLowerPhi -ne $formatBaseline) {
+  throw "空白、全半角标点、Ф/Φ/φ、x/× 未归并为同一签名: $formatBaseline / $formatFullWidth / $formatLowerPhi"
+}
+if ((Get-NormalizedPart '泥浆外运(运距5km),Φ710X33.2mm') -eq $formatBaseline) {
+  throw '距离和规格数字等业务参数不得被归一化掉'
+}
+
 $rebuild = Get-Content -LiteralPath (Join-Path $learningRoot 'Rebuild-Aggregates.ps1') -Raw -Encoding UTF8
 if ($rebuild -notmatch 'BeginTransaction\(\[System\.Data\.IsolationLevel\]::Serializable\)') { throw '聚合重建缺少 Serializable 事务' }
 if ($rebuild -notmatch 'TABLOCKX,HOLDLOCK') { throw '聚合重建没有锁住流水快照到提交' }

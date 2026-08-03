@@ -15,6 +15,7 @@ function N($s) { return $norm.Invoke($null, @($s)) }
 function S($a, $b) { return $score.Invoke($null, @((N $a), (N $b))) }
 
 if ((N "铺设 无缝线路（km）") -ne "铺设无缝线路km") { throw "归一化失败: $(N '铺设 无缝线路（km）')" }
+if ((N "Ф560×33.2mm") -ne (N "φ560ｘ33.2mm")) { throw "Ф/Φ/φ、x/× 归一化失败" }
 Write-Host "PASS 归一化"
 if ((S "铺设无缝线路" "铺设无缝线路") -ne 100) { throw "同名应100" }
 Write-Host "PASS 同名满分"

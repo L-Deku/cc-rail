@@ -23,12 +23,11 @@ namespace RecoNet
         internal static string NormalizeMatchText(string text)
         {
             if (String.IsNullOrEmpty(text)) return "";
-            StringBuilder sb = new StringBuilder(text.Length);
-            for (int i = 0; i < text.Length; i++)
+            string source = NormalizeForSignature(text);
+            StringBuilder sb = new StringBuilder(source.Length);
+            for (int i = 0; i < source.Length; i++)
             {
-                char c = text[i];
-                if (c == '　') continue;
-                if (c >= '！' && c <= '～') c = (char)(c - 0xFEE0);
+                char c = source[i];
                 if (Char.IsWhiteSpace(c) || !Char.IsLetterOrDigit(c)) continue;
                 sb.Append(Char.ToLowerInvariant(c));
             }

@@ -97,7 +97,17 @@ function Invoke-RecoBulkCopyInTransaction {
 }
 
 # 与插件 ExcelLinkFeature.NormalizeForSignature 同款的基础归一化。
-function Get-NormalizedPart { param([string]$Text) ([string]$Text).Trim().ToUpperInvariant().Replace(' ', '') }
+function Get-NormalizedPart {
+  param([string]$Text)
+  $source = ([string]$Text).Normalize([System.Text.NormalizationForm]::FormKC).ToUpperInvariant()
+  $source = $source.Replace([char]0x0424, [char]0x03A6).Replace([char]0x00D7, [char]0x0058)
+  $normalized = New-Object System.Text.StringBuilder $source.Length
+  foreach ($raw in $source.ToCharArray()) {
+    if ([char]::IsWhiteSpace($raw)) { continue }
+    [void]$normalized.Append($raw)
+  }
+  return $normalized.ToString()
+}
 
 function Test-ReliableQuantityUnit {
   param([string]$Unit)

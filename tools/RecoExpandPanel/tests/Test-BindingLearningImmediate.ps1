@@ -253,9 +253,23 @@ if ($normalizeLearningSignature.Invoke($null, @('钢筋|KG')) -ne '钢筋|' -or
     $normalizeLearningSignature.Invoke($null, @('钢筋|T')) -ne '钢筋|') {
     throw '旧名称|单位签名没有归并为名称级签名。'
 }
+if ($normalizeLearningSignature.Invoke($null, @('泥浆　外运（运距10km），Ф560×33.2mm|M3')) -ne
+    '泥浆外运(运距10KM),Φ560X33.2MM|') {
+    throw '读取存量学习签名时没有应用统一字符归一化。'
+}
 $buildQuantitySignature = $type.GetMethod('BuildSmartQuantitySignature', $flags)
 if ($buildQuantitySignature.Invoke($null, @('HRB400钢筋 kg', 'kg')) -ne 'HRB400钢筋|') {
     throw '旧名称尾部嵌入单位没有借助 QuantityAlias 归并为名称级签名。'
+}
+$formatBaseline = [string]$buildQuantitySignature.Invoke($null, @('泥浆外运(运距10km),Φ560X33.2mm', 'm3'))
+$formatFullWidth = [string]$buildQuantitySignature.Invoke($null, @(" 泥浆　外运（运距10km），Ф560×33.2mm ", 'm3'))
+$formatLowerPhi = [string]$buildQuantitySignature.Invoke($null, @('泥浆外运（运距10km），φ560ｘ33.2mm', 'm3'))
+if ($formatBaseline -ne '泥浆外运(运距10KM),Φ560X33.2MM|' -or
+    $formatFullWidth -ne $formatBaseline -or $formatLowerPhi -ne $formatBaseline) {
+    throw "插件未统一空白、全半角标点、Ф/Φ/φ、x/×：$formatBaseline / $formatFullWidth / $formatLowerPhi"
+}
+if ([string]$buildQuantitySignature.Invoke($null, @('泥浆外运(运距5km),Φ710X33.2mm', 'm3')) -eq $formatBaseline) {
+    throw '插件归一化不得删除距离和规格数字等业务参数。'
 }
 $legacyAliases = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
 $legacyAliases['HRB400钢筋KG|'] = 'HRB400钢筋|'

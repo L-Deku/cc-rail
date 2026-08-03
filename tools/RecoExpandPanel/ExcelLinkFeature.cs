@@ -2879,7 +2879,14 @@ namespace RecoNet
 
         private static string NormalizeForSignature(string text)
         {
-            return (text ?? "").Trim().ToUpperInvariant().Replace(" ", "");
+            string source = (text ?? "").Normalize(NormalizationForm.FormKC).ToUpperInvariant()
+                .Replace('\u0424', '\u03A6').Replace('\u00D7', 'X');
+            StringBuilder normalized = new StringBuilder(source.Length);
+            foreach (char value in source)
+            {
+                if (!Char.IsWhiteSpace(value)) normalized.Append(value);
+            }
+            return normalized.ToString();
         }
 
         private static string GetFlat(Dictionary<string, string> values, string key)

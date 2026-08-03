@@ -159,7 +159,7 @@ namespace RecoNet
             {
                 name = name.Substring(0, name.Length - unit.Length);
             }
-            return name + "|";
+            return NormalizeForSignature(name) + "|";
         }
 
         private static string BuildSmartFormulaKey(string signature, string kind, string code)
