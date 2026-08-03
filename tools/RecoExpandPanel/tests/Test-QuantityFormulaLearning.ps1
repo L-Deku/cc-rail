@@ -320,6 +320,17 @@ try {
         $classifiedEntryCode.Invoke($null, @('EN'))) {
         throw '推荐学习库没有过滤非数字测试条目编号'
     }
+    $scopeCodeBuilder = $type.GetMethod('BuildSmartLearningScopeCodes', $flags)
+    $learnedEntryCodes = [Collections.Generic.List[string]]::new()
+    [void]$learnedEntryCodes.Add('0202-01-01-04-01-02')
+    [void]$learnedEntryCodes.Add('0204-01-01-02-01-05')
+    [void]$learnedEntryCodes.Add('ENTRY-test')
+    $scopeCodeArgs = New-Object 'object[]' 1
+    $scopeCodeArgs[0] = $learnedEntryCodes.PSObject.BaseObject
+    $scopeCodes = @($scopeCodeBuilder.Invoke($null, $scopeCodeArgs) | Sort-Object)
+    if (($scopeCodes -join '|') -ne '02|0202|0204') {
+        throw "推荐学习库只应生成专业和分部两级目录，实际：$($scopeCodes -join '|')"
+    }
     $scope = [Activator]::CreateInstance($scopeType, $true).PSObject.BaseObject
     $scopeType.GetField('Kind', $flags).SetValue($scope, 'Entry')
     $scopeType.GetField('EntryCode', $flags).SetValue($scope, '03')

@@ -518,20 +518,6 @@ namespace RecoNet
                         parent.Nodes.Add(node);
                         divisionNodes[scope.EntryCode] = node;
                     }
-                    foreach (SmartLearningScope scope in entries.Where(item =>
-                        !(item.EntryCode.Length == 2 && item.EntryCode.All(Char.IsDigit)) &&
-                        !(item.EntryCode.Length == 4 && item.EntryCode.All(Char.IsDigit))))
-                    {
-                        TreeNode parent;
-                        string divisionCode = scope.EntryCode.Length >= 4 ? scope.EntryCode.Substring(0, 4) : "";
-                        if (!divisionNodes.TryGetValue(divisionCode, out parent))
-                        {
-                            string professionCode = scope.EntryCode.Length >= 2 ? scope.EntryCode.Substring(0, 2) : "";
-                            if (!professionNodes.TryGetValue(professionCode, out parent)) continue;
-                        }
-                        parent.Nodes.Add(new TreeNode(BuildSmartLearningScopeText(scope)) { Tag = scope });
-                    }
-
                     if (unclassified != null)
                     {
                         smartLearningScopeTree.Nodes.Add(new TreeNode(BuildSmartLearningScopeText(unclassified)) { Tag = unclassified });
@@ -866,8 +852,16 @@ namespace RecoNet
                         .Where(item => item != null && item.IsNameDriven && item.GroupOrder == 0)
                         .GroupBy(item => item.TargetRow)
                         .ToDictionary(group => group.Key, group => group.First());
-                    IEnumerable<FillPreviewItem> ordered = preview
-                        .Where(item => String.IsNullOrEmpty(scope) || IsItemNoUnderChapter(item.ItemNo ?? "", scope));
+                    HashSet<int> visibleNameGroups = new HashSet<int>(preview
+                        .Where(item => item != null && item.IsNameDriven)
+                        .GroupBy(item => item.TargetRow)
+                        .Where(group => String.IsNullOrEmpty(scope) ||
+                            group.Any(item => IsItemNoUnderChapter(item.ItemNo ?? "", scope)))
+                        .Select(group => group.Key));
+                    IEnumerable<FillPreviewItem> ordered = preview.Where(item => item != null &&
+                        (item.IsNameDriven
+                            ? visibleNameGroups.Contains(item.TargetRow)
+                            : String.IsNullOrEmpty(scope) || IsItemNoUnderChapter(item.ItemNo ?? "", scope)));
                     ordered = nameDriven
                         ? ordered.OrderBy(item => item.TargetRow).ThenBy(item => item.GroupOrder)
                         : ordered.OrderBy(item => item.ItemNo ?? "", StringComparer.OrdinalIgnoreCase).ThenBy(item => item.OrderInItem);
@@ -1036,8 +1030,7 @@ namespace RecoNet
                     .OrderBy(row => row.Index)
                     .ToList();
                 List<FillPreviewItem> desired = preview
-                    .Where(item => item != null && item.IsNameDriven && item.TargetRow == targetRow &&
-                        (String.IsNullOrEmpty(currentTreeScope) || IsItemNoUnderChapter(item.ItemNo ?? "", currentTreeScope)))
+                    .Where(item => item != null && item.IsNameDriven && item.TargetRow == targetRow)
                     .OrderBy(item => item.GroupOrder)
                     .ToList();
                 if (existing.Count == 0 || desired.Count == 0) return false;
@@ -1093,8 +1086,9 @@ namespace RecoNet
             private void OnNameQuotaSelectionCommitted(object sender, EventArgs e)
             {
                 ComboBox combo = sender as ComboBox;
-                if (combo == null || grid.CurrentRow == null) return;
-                ApplyNameQuotaOption(grid.CurrentRow, Convert.ToString(combo.SelectedItem));
+                DataGridViewRow row = grid.CurrentCell == null ? grid.CurrentRow : grid.CurrentCell.OwningRow;
+                if (combo == null || row == null) return;
+                ApplyNameQuotaOption(row, Convert.ToString(combo.SelectedItem));
             }
 
             private void ApplyNameQuotaOption(DataGridViewRow row, string label)
@@ -1105,12 +1099,6 @@ namespace RecoNet
                 NameQuotaCandidateGroup option = item.NameQuotaCandidates.FirstOrDefault(candidate =>
                     String.Equals(candidate.Label, label, StringComparison.Ordinal));
                 if (option == null) return;
-                if (HasUnsafeNameQuotaCandidate(option.Items))
-                {
-                    row.Cells["sname"].ToolTipText = "该组件存在单位、条目或公式风险，不能直接确认，请先人工调整。";
-                    return;
-                }
-
                 updatingNameQuotaCell = true;
                 try
                 {

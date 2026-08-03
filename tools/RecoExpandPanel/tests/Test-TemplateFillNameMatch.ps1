@@ -472,6 +472,8 @@ try {
     $itemType.GetField('QuotaCode', $flags).SetValue($uiFirstItems[1], 'ZLF*1.01')
     $itemType.GetField('SourceName', $flags).SetValue($uiFirstItems[0], '来源定额A')
     $itemType.GetField('SourceName', $flags).SetValue($uiFirstItems[1], '来源材料A')
+    $itemType.GetField('ItemNo', $flags).SetValue($uiFirstItems[0], '0309-01-03-01')
+    $itemType.GetField('ItemNo', $flags).SetValue($uiFirstItems[1], '0309-01-03-01')
     $uiCandidates.Add($uiFirst)
 
     $uiSecond = [Activator]::CreateInstance($candidateType)
@@ -484,9 +486,41 @@ try {
     $itemType.GetField('QuotaCode', $flags).SetValue($uiSecondItems[1], 'ZLF*1.01')
     $itemType.GetField('SourceName', $flags).SetValue($uiSecondItems[0], '来源定额B')
     $itemType.GetField('SourceName', $flags).SetValue($uiSecondItems[1], '来源材料B')
+    $itemType.GetField('ItemNo', $flags).SetValue($uiSecondItems[0], '0309-01-03-02')
+    $itemType.GetField('ItemNo', $flags).SetValue($uiSecondItems[1], '0309-01-03-02')
     $itemType.GetField('AlignNote', $flags).SetValue($uiSecondItems[0], '名称学习命中，候选待确认')
     $itemType.GetField('AlignNote', $flags).SetValue($uiSecondItems[1], '名称学习命中，候选待确认')
     $uiCandidates.Add($uiSecond)
+
+    $uiThird = [Activator]::CreateInstance($candidateType)
+    $candidateType.GetField('Key', $flags).SetValue($uiThird, 'group-c')
+    $candidateType.GetField('Label', $flags).SetValue($uiThird, '来源定额C + 来源材料C（组件2条）')
+    $uiThirdItems = $candidateType.GetField('Items', $flags).GetValue($uiThird)
+    $uiThirdItems.Add((New-PreviewItem 60 0 '重复工程量'))
+    $uiThirdItems.Add((New-PreviewItem 60 1 ''))
+    $itemType.GetField('QuotaCode', $flags).SetValue($uiThirdItems[0], 'Q-C')
+    $itemType.GetField('QuotaCode', $flags).SetValue($uiThirdItems[1], 'M-C')
+    $itemType.GetField('SourceName', $flags).SetValue($uiThirdItems[0], '来源定额C')
+    $itemType.GetField('SourceName', $flags).SetValue($uiThirdItems[1], '来源材料C')
+    $itemType.GetField('ItemNo', $flags).SetValue($uiThirdItems[0], '0401-01-01')
+    $itemType.GetField('ItemNo', $flags).SetValue($uiThirdItems[1], '0401-01-01')
+    $uiCandidates.Add($uiThird)
+
+    $uiRisk = [Activator]::CreateInstance($candidateType)
+    $candidateType.GetField('Key', $flags).SetValue($uiRisk, 'group-risk')
+    $candidateType.GetField('Label', $flags).SetValue($uiRisk, '风险定额D + 风险材料D（组件2条）')
+    $uiRiskItems = $candidateType.GetField('Items', $flags).GetValue($uiRisk)
+    $uiRiskItems.Add((New-PreviewItem 60 0 '重复工程量'))
+    $uiRiskItems.Add((New-PreviewItem 60 1 ''))
+    $itemType.GetField('QuotaCode', $flags).SetValue($uiRiskItems[0], 'Q-D')
+    $itemType.GetField('QuotaCode', $flags).SetValue($uiRiskItems[1], 'M-D')
+    $itemType.GetField('SourceName', $flags).SetValue($uiRiskItems[0], '风险定额D')
+    $itemType.GetField('SourceName', $flags).SetValue($uiRiskItems[1], '风险材料D')
+    $itemType.GetField('ItemNo', $flags).SetValue($uiRiskItems[0], '0309-01-03-03')
+    $itemType.GetField('ItemNo', $flags).SetValue($uiRiskItems[1], '0401-01-01')
+    $itemType.GetField('Status', $flags).SetValue($uiRiskItems[0], '待确认换算')
+    $itemType.GetField('Status', $flags).SetValue($uiRiskItems[1], '待确认换算')
+    $uiCandidates.Add($uiRisk)
     $itemType.GetField('NameQuotaCandidates', $flags).SetValue($uiLeader, $uiCandidates)
     $itemType.GetField('SelectedNameQuotaCandidateKey', $flags).SetValue($uiLeader, 'group-a')
     $panelPreview.Add($uiLeader)
@@ -563,6 +597,48 @@ try {
         ($uiGrid.Rows[1].Cells['sel'] -is [System.Windows.Forms.DataGridViewCheckBoxCell])) {
         throw '界面选择组件候选后应整组勾选'
     }
+
+    $currentTreeScopeField = $panelType.GetField('currentTreeScope', $flags)
+    $currentTreeScopeField.SetValue($panel, '03')
+    $leaderRow = @($uiGrid.Rows | Where-Object { $_.Tag.TargetRow -eq 60 -and $_.Tag.GroupOrder -eq 0 })[0]
+    if (-not $prepareDropDown.Invoke($panel, @($leaderRow.PSObject.BaseObject))) { throw '第二次源行定额下拉应创建成功' }
+    $panelType.GetMethod('ApplyNameQuotaOption', $flags).Invoke($panel,
+        @($leaderRow.PSObject.BaseObject, '来源定额C + 来源材料C（组件2条）'))
+    $secondSwitchRows = @($uiGrid.Rows | Where-Object { $_.Tag.TargetRow -eq 60 } | Sort-Object { $_.Tag.GroupOrder })
+    if ($secondSwitchRows.Count -ne 2 -or $secondSwitchRows[0].Cells['code'].Value -ne 'Q-C' -or
+        $secondSwitchRows[1].Cells['code'].Value -ne 'M-C' -or
+        $secondSwitchRows[0].Tag.NameQuotaCandidates.Count -ne 4) {
+        throw '第二次切换到当前树范围外候选后，界面与组件组未同步刷新'
+    }
+
+    $leaderRow = $secondSwitchRows[0]
+    if (-not $prepareDropDown.Invoke($panel, @($leaderRow.PSObject.BaseObject))) { throw '第三次源行定额下拉应创建成功' }
+    $panelType.GetMethod('ApplyNameQuotaOption', $flags).Invoke($panel,
+        @($leaderRow.PSObject.BaseObject, '风险定额D + 风险材料D（组件2条）'))
+    $riskRows = @($uiGrid.Rows | Where-Object { $_.Tag.TargetRow -eq 60 } | Sort-Object { $_.Tag.GroupOrder })
+    if ($riskRows.Count -ne 2 -or $riskRows[0].Cells['code'].Value -ne 'Q-D' -or
+        $riskRows[1].Cells['code'].Value -ne 'M-D' -or
+        @($riskRows | Where-Object { $_.Tag.Selected }).Count -ne 0 -or
+        @($riskRows | Where-Object { $_.Tag.Status -ne '待确认换算' }).Count -ne 0) {
+        throw '风险候选应刷新完整组件但保持未勾选和风险状态'
+    }
+    $panelType.GetMethod('FillGrid', $flags).Invoke($panel, $null)
+    if (@($uiGrid.Rows | Where-Object { $_.Tag.TargetRow -eq 60 }).Count -ne 2) {
+        throw '组件组成员条目不同时，按左树范围刷新不得拆散组件'
+    }
+
+    $leaderRow = @($uiGrid.Rows | Where-Object { $_.Tag.TargetRow -eq 60 -and $_.Tag.GroupOrder -eq 0 })[0]
+    if (-not $prepareDropDown.Invoke($panel, @($leaderRow.PSObject.BaseObject))) { throw '风险候选后再次下拉应创建成功' }
+    $panelType.GetMethod('ApplyNameQuotaOption', $flags).Invoke($panel,
+        @($leaderRow.PSObject.BaseObject, '来源定额A + 来源材料A（组件2条）'))
+    $fourthSwitchRows = @($uiGrid.Rows | Where-Object { $_.Tag.TargetRow -eq 60 } | Sort-Object { $_.Tag.GroupOrder })
+    if ($fourthSwitchRows.Count -ne 2 -or $fourthSwitchRows[0].Cells['code'].Value -ne 'DY-959' -or
+        $fourthSwitchRows[1].Cells['code'].Value -ne 'ZLF*1.01' -or
+        @($fourthSwitchRows | Where-Object { -not $_.Tag.Selected }).Count -ne 0) {
+        throw '连续多次切换后，安全候选应恢复完整组件并整组勾选'
+    }
+    $currentTreeScopeField.SetValue($panel, '')
+
     $uiGrid.Rows[0].Cells['sel'].Value = $false
     $panelType.GetMethod('ApplyNameGroupSelectionFromCheck', $flags).Invoke(
         $panel, @($uiGrid.Rows[0].PSObject.BaseObject))

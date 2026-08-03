@@ -1349,15 +1349,23 @@ namespace RecoNet
                 .Select(item => item.CloneForNameCandidate())
                 .ToList();
             if (replacements.Count == 0) return false;
+            bool hasRisk = replacements.Any(item => !String.IsNullOrWhiteSpace(item.Status));
             for (int i = 0; i < replacements.Count; i++)
             {
                 FillPreviewItem item = replacements[i];
-                item.Selected = true;
-                item.NeedExactNameConfirmation = false;
-                item.Status = "";
-                item.AlignNote = i == 0
-                    ? "人工选择同名绑定"
-                    : "组件框第 " + (i + 1).ToString(CultureInfo.InvariantCulture) + " 条（人工选择同名绑定）";
+                item.Selected = !hasRisk;
+                item.NeedExactNameConfirmation = hasRisk;
+                if (!hasRisk)
+                {
+                    item.Status = "";
+                    item.AlignNote = i == 0
+                        ? "人工选择同名绑定"
+                        : "组件框第 " + (i + 1).ToString(CultureInfo.InvariantCulture) + " 条（人工选择同名绑定）";
+                }
+                else
+                {
+                    item.AlignNote = AppendPreviewNote(item.AlignNote, "人工选择候选，仍需处理组件风险");
+                }
             }
             replacements[0].NameQuotaCandidates = leader.NameQuotaCandidates;
             replacements[0].SelectedNameQuotaCandidateKey = candidate.Key;

@@ -428,13 +428,7 @@ namespace RecoNet
                         }
                     }
                     result.Add(new SmartLearningScope { Kind = "Unclassified", EntryCode = "", DisplayName = "未归类" });
-                    HashSet<string> scopeCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (string entryCode in entryCodes)
-                    {
-                        if (entryCode.Length >= 2) scopeCodes.Add(entryCode.Substring(0, 2));
-                        if (entryCode.Length >= 4) scopeCodes.Add(entryCode.Substring(0, 4));
-                        scopeCodes.Add(entryCode);
-                    }
+                    HashSet<string> scopeCodes = BuildSmartLearningScopeCodes(entryCodes);
                     foreach (string code in scopeCodes.OrderBy(value => value, StringComparer.OrdinalIgnoreCase))
                     {
                         string name;
@@ -463,6 +457,19 @@ namespace RecoNet
             string code = (entryCode ?? "").Trim();
             return code.Length >= 2 && Char.IsDigit(code[0]) && Char.IsDigit(code[1]) &&
                 code.All(value => Char.IsDigit(value) || value == '-');
+        }
+
+        private static HashSet<string> BuildSmartLearningScopeCodes(IEnumerable<string> entryCodes)
+        {
+            HashSet<string> result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string value in entryCodes ?? Enumerable.Empty<string>())
+            {
+                string entryCode = (value ?? "").Trim();
+                if (!IsSmartClassifiedEntryCode(entryCode)) continue;
+                result.Add(entryCode.Substring(0, 2));
+                if (entryCode.Length >= 4) result.Add(entryCode.Substring(0, 4));
+            }
+            return result;
         }
 
         // 从 RecoLearning 加载快照;失败回退 jsonl(仅签名映射,无条目知识)。
