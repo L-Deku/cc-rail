@@ -56,6 +56,19 @@ if ((Get-NormalizedPart '泥浆外运(运距5km),Φ710X33.2mm') -eq $formatBasel
   throw '距离和规格数字等业务参数不得被归一化掉'
 }
 
+$shDisposalKey = Get-LearningTargetIdentityKey 'quota' 'SH' '消纳费' 'm³'
+$shGraveKey = Get-LearningTargetIdentityKey 'quota' 'SH' '坟墓' '座'
+if ($shDisposalKey -eq $shGraveKey -or $shDisposalKey -notmatch '^quota:SH\|') {
+  throw '通用辅助代码没有按代码、名称和单位拆分组件身份'
+}
+if ((Get-LearningTargetIdentityKey 'quota' 'LY-89' '历史名称' '100m3') -ne 'quota:LY-89') {
+  throw '普通定额不应因历史名称或单位变化拆分组件身份'
+}
+if (-not (Test-ContextSensitiveLearningCode 'ZLF*1.01') -or
+    (Test-ContextSensitiveLearningCode 'LY-89')) {
+  throw '通用辅助代码识别范围错误'
+}
+
 $rebuild = Get-Content -LiteralPath (Join-Path $learningRoot 'Rebuild-Aggregates.ps1') -Raw -Encoding UTF8
 if ($rebuild -notmatch 'BeginTransaction\(\[System\.Data\.IsolationLevel\]::Serializable\)') { throw '聚合重建缺少 Serializable 事务' }
 if ($rebuild -notmatch 'TABLOCKX,HOLDLOCK') { throw '聚合重建没有锁住流水快照到提交' }
@@ -66,6 +79,9 @@ if ($rebuild -notmatch '存量尾部单位推断' -or $rebuild -notmatch '潜在
 if ($rebuild -notmatch "'signature','box_id','method'" -or $rebuild -notmatch '\$m\.Method') { throw 'SignatureBoxMap 重建数据缺少 method' }
 if ($rebuild -notmatch '\$mapKey = Get-MethodScopedMapKey \$method \$sig \$boxId') { throw '同签名组件框未按 method 隔离聚合' }
 if ($rebuild -notmatch '\$methodSignature = \(Get-LearningMethodPartition \(\[string\]\$g\.Method\)\) \+ "`n" \+ \$sig') { throw 'DryRun 冲突统计未按 2020/2024 办法隔离' }
+if ($rebuild -notmatch 'Get-LearningTargetIdentityKey' -or
+    $rebuild -notmatch 'UnsafeContextTargets' -or
+    $rebuild -notmatch '跳过同码多义组件') { throw '聚合重建没有隔离通用辅助代码或报告不安全组件' }
 
 $import = Get-Content -LiteralPath (Join-Path $learningRoot 'Import-JsonlLibraries.ps1') -Raw -Encoding UTF8
 if ($import -notmatch '\[switch\]\$ImportBindingHistory' -or $import -notmatch '\[string\]\$SourceId') { throw '历史 JSONL 导入未改成显式一次性操作' }

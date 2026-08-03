@@ -2574,17 +2574,22 @@ namespace RecoNet
         // 整组 upsert：相同目标集合共用一个 box_id；相同工程量样本的计数在各目标行保持一致。
         private static void UpsertMappingBoxGroup(List<Dictionary<string, string>> rows, MappingFeedbackGroup group)
         {
-            List<MappingFeedbackTarget> targets = group.Targets
+            List<MappingFeedbackTarget> eligibleTargets = group.Targets
                 .Where(t => t != null && !String.IsNullOrWhiteSpace(t.Code) &&
                     BuildMappingTargetKey(t.Kind, t.Code).StartsWith("quota:", StringComparison.OrdinalIgnoreCase) &&
                     IsAutoMatchQuotaCode(t.Code))
+                .ToList();
+            if (HasConflictingContextSensitiveTargets(eligibleTargets) ||
+                !IsLearningGroupRecommendable(eligibleTargets, group.EntryName)) return;
+
+            List<MappingFeedbackTarget> targets = eligibleTargets
                 .GroupBy(t => BuildMappingTargetKey(t.Kind, t.Code), StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.First())
                 .OrderBy(t => BuildMappingTargetKey(t.Kind, t.Code), StringComparer.OrdinalIgnoreCase)
                 .ToList();
             if (targets.Count == 0) return;
 
-            List<string> targetKeys = targets.Select(t => BuildMappingTargetKey(t.Kind, t.Code)).ToList();
+            List<string> targetKeys = targets.Select(t => BuildLearningTargetIdentityKey(t.Kind, t.Code, t.Name, t.Unit)).ToList();
             string boxId = FindExistingMappingBoxId(rows, targetKeys) ??
                 BuildStableMappingBoxId(String.Join("|", targetKeys.ToArray()));
             group.BoxId = boxId;
@@ -2661,6 +2666,50 @@ namespace RecoNet
             return normalizedKind + ":" + rawCode.ToUpperInvariant();
         }
 
+        private static string GetLearningBaseTargetCode(string code)
+        {
+            string normalized = (code ?? "").Trim().ToUpperInvariant();
+            int suffixIndex = normalized.IndexOfAny(new[] { '*', '/' });
+            return suffixIndex < 0 ? normalized : normalized.Substring(0, suffixIndex);
+        }
+
+        private static bool IsContextSensitiveLearningCode(string code)
+        {
+            string baseCode = GetLearningBaseTargetCode(code);
+            return baseCode == "SF" || baseCode == "SH" || baseCode == "SQ" || baseCode == "ZLF" ||
+                baseCode == "LF" || baseCode == "YF" || baseCode == "TLF" || baseCode == "GF" ||
+                baseCode == "JF" || baseCode == "XGT1";
+        }
+
+        private static string BuildLearningTargetIdentityKey(string kind, string code, string name, string unit)
+        {
+            string baseKey = BuildMappingTargetKey(kind, code);
+            if (!IsContextSensitiveLearningCode(code)) return baseKey;
+            return baseKey + "|" + NormalizeForSignature(name) + "|" + NormalizeExcelLinkUnit(unit).ToUpperInvariant();
+        }
+
+        private static bool HasConflictingContextSensitiveTargets(IEnumerable<MappingFeedbackTarget> targets)
+        {
+            foreach (IGrouping<string, MappingFeedbackTarget> group in (targets ?? Enumerable.Empty<MappingFeedbackTarget>())
+                .Where(target => target != null && !String.IsNullOrWhiteSpace(target.Code) && IsContextSensitiveLearningCode(target.Code))
+                .GroupBy(target => BuildMappingTargetKey(target.Kind, target.Code), StringComparer.OrdinalIgnoreCase))
+            {
+                if (group.Select(target => BuildLearningTargetIdentityKey(target.Kind, target.Code, target.Name, target.Unit))
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Skip(1).Any()) return true;
+            }
+            return false;
+        }
+
+        private static bool IsLearningGroupRecommendable(IEnumerable<MappingFeedbackTarget> targets, string entryName)
+        {
+            List<MappingFeedbackTarget> list = (targets ?? Enumerable.Empty<MappingFeedbackTarget>())
+                .Where(target => target != null && !String.IsNullOrWhiteSpace(target.Code)).ToList();
+            if (list.Count == 0) return false;
+            if (list.Any(target => !IsContextSensitiveLearningCode(target.Code))) return true;
+            return list.Count == 1 && GetLearningBaseTargetCode(list[0].Code) == "SF" &&
+                (entryName ?? "").IndexOf("\u8bbe\u5907\u8d2d\u7f6e\u8d39", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         private static string FindRecoQuotaDataDir()
         {
             return Path.Combine(Path.GetDirectoryName(typeof(FormPanel).Assembly.Location), "RecoQuotaData");
@@ -2729,7 +2778,7 @@ namespace RecoNet
                     {
                         string kind = GetFlat(row, "target_kind").Trim();
                         string code = GetFlat(row, "target_code").Trim();
-                        return (String.IsNullOrWhiteSpace(kind) ? (code.All(Char.IsDigit) ? "material" : "quota") : kind.ToLowerInvariant()) + ":" + code.ToUpperInvariant();
+                        return BuildLearningTargetIdentityKey(kind, code, GetFlat(row, "target_name"), GetFlat(row, "target_unit"));
                     })
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();

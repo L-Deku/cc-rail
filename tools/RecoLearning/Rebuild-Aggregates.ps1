@@ -35,14 +35,26 @@ $groups = @{}
 foreach ($row in $log.Rows) {
   $gk = [string]$row.group_key
   if (-not $groups.ContainsKey($gk)) {
-    $groups[$gk] = @{ Name = [string]$row.quantity_name; Unit = [string]$row.quantity_unit; At = $row.occurred_at; Extra = [string]$row.extra; Targets = @{}; Method = ''; EntryCode = '' }
+    $groups[$gk] = @{ Name = [string]$row.quantity_name; Unit = [string]$row.quantity_unit; At = $row.occurred_at; Extra = [string]$row.extra; Targets = @{}; Method = ''; EntryCode = ''; EntryName = ''; UnsafeContextTargets = $false }
   }
   $g = $groups[$gk]
   if ($row.occurred_at -gt $g.At) { $g.At = $row.occurred_at }
   if ($g.Method -eq '' -and [string]$row.method -ne '') { $g.Method = Get-LearningMethodPartition ([string]$row.method) }
   if ($g.EntryCode -eq '' -and [string]$row.entry_code -ne '') { $g.EntryCode = [string]$row.entry_code }
-  $tk = ([string]$row.target_kind) + ':' + ([string]$row.target_code)
-  if (-not $g.Targets.ContainsKey($tk)) { $g.Targets[$tk] = @{ Kind = [string]$row.target_kind; Code = [string]$row.target_code; Name = [string]$row.target_name; Unit = [string]$row.target_unit } }
+  if ($g.EntryName -eq '' -and [string]$row.entry_name -ne '') { $g.EntryName = [string]$row.entry_name }
+  $targetKind = ([string]$row.target_kind).Trim()
+  $targetCode = ([string]$row.target_code).Trim()
+  if ($targetKind -eq '') { $targetKind = if ($targetCode -match '^\d+$') { 'material' } else { 'quota' } }
+  $baseKey = $targetKind.ToLowerInvariant() + ':' + $targetCode.ToUpperInvariant()
+  $identityKey = Get-LearningTargetIdentityKey $targetKind $targetCode ([string]$row.target_name) ([string]$row.target_unit)
+  if ($g.Targets.ContainsKey($baseKey)) {
+    if ((Test-ContextSensitiveLearningCode $targetCode) -and
+        -not [string]::Equals([string]$g.Targets[$baseKey].Identity, $identityKey, [System.StringComparison]::OrdinalIgnoreCase)) {
+      $g.UnsafeContextTargets = $true
+    }
+  } else {
+    $g.Targets[$baseKey] = @{ Kind = $targetKind; Code = $targetCode; Name = [string]$row.target_name; Unit = [string]$row.target_unit; Identity = $identityKey }
+  }
 }
 
 function Get-ExtraInt { param([string]$Extra, [string]$Name, [int]$Fallback)
@@ -59,12 +71,40 @@ function Test-PositiveLearningEvidence { param([string]$Extra)
   return ((Get-ExtraInt $Extra 'accepted_count' 1) + (Get-ExtraInt $Extra 'corrected_count' 0)) -gt 0
 }
 
+function Test-AggregateLearningGroupRecommendable { param($Group)
+  $targets = @($Group.Targets.Values)
+  if ($targets.Count -eq 0 -or $Group.UnsafeContextTargets) { return $false }
+  $ordinaryTargets = @($targets | Where-Object { -not (Test-ContextSensitiveLearningCode ([string]$_.Code)) })
+  if ($ordinaryTargets.Count -gt 0) { return $true }
+  return $targets.Count -eq 1 -and (Get-LearningBaseTargetCode ([string]$targets[0].Code)) -eq 'SF' -and
+    ([string]$Group.EntryName).IndexOf('设备购置费', [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+}
+
+$unsafeContextGroupCount = @($groups.Values | Where-Object { $_.UnsafeContextTargets }).Count
+$skippedPureContextGroupCount = @($groups.Values | Where-Object {
+  -not $_.UnsafeContextTargets -and -not (Test-AggregateLearningGroupRecommendable $_)
+}).Count
+$aggregateGroups = @($groups.Values | Where-Object { Test-AggregateLearningGroupRecommendable $_ })
+
 # 2a) 第一遍:先为每个目标集合定死 box 编号(mapping-boxes 原始编号优先,取字典序最小者保证确定性)
-$boxes = @{}    # target_set_hash → @{ Id; Targets }
-foreach ($g in $groups.Values) {
-  $keys = @($g.Targets.Keys | Sort-Object)
-  $setHash = Get-Md5Hex ($keys -join ';')
+$preferredHashes = @{}
+foreach ($g in $aggregateGroups) {
+  $identityKeys = @($g.Targets.Values | ForEach-Object { [string]$_.Identity } | Sort-Object)
+  $setHash = Get-Md5Hex ($identityKeys -join ';')
   $g['SetHash'] = $setHash
+  $g['ContainsContextSensitiveTarget'] = @($g.Targets.Values | Where-Object { Test-ContextSensitiveLearningCode ([string]$_.Code) }).Count -gt 0
+  if ($g.ContainsContextSensitiveTarget) { continue }
+  $preferredId = Get-ExtraText $g.Extra 'box_id'
+  if (-not $preferredId) { continue }
+  if (-not $preferredHashes.ContainsKey($preferredId)) {
+    $preferredHashes[$preferredId] = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+  }
+  [void]$preferredHashes[$preferredId].Add($setHash)
+}
+
+$boxes = @{}    # target_set_hash → @{ Id; Targets }
+foreach ($g in $aggregateGroups) {
+  $setHash = $g.SetHash
   $g['EffectiveUnit'] = ([string]$g.Unit).Trim()
   if ($g.EffectiveUnit -eq '') { $g.EffectiveUnit = Get-InferredTrailingQuantityUnit $g.Name $knownUnits }
   $g['UnitInferred'] = ([string]$g.Unit).Trim() -eq '' -and $g.EffectiveUnit -ne ''
@@ -73,7 +113,7 @@ foreach ($g in $groups.Values) {
   if (-not $boxes.ContainsKey($setHash)) {
     $boxes[$setHash] = @{ Id = ('auto-' + $setHash.Substring(0, 16)); Targets = $g.Targets }
   }
-  if ($preferredId) {
+  if ($preferredId -and -not $g.ContainsContextSensitiveTarget -and $preferredHashes[$preferredId].Count -eq 1) {
     $current = $boxes[$setHash].Id
     if ($current.StartsWith('auto-') -or [string]::CompareOrdinal($preferredId, $current) -lt 0) {
       $boxes[$setHash].Id = $preferredId
@@ -84,7 +124,7 @@ foreach ($g in $groups.Values) {
 # 2b) 第二遍:用定稿的 box 编号归并别名与签名映射
 $aliases = @{}  # alias_hash → @{ Raw; Unit; Sig; Count; First; Last }
 $maps = @{}     # method + signature + box_id → 计数，2020/2024 隔离，101 号文估算归入 2020
-foreach ($g in $groups.Values) {
+foreach ($g in $aggregateGroups) {
   $boxId = $boxes[$g.SetHash].Id
 
   $canonicalName = $g.CanonicalName
@@ -107,7 +147,7 @@ foreach ($g in $groups.Values) {
 }
 
 $inferenceBySignature = @{}
-foreach ($g in $groups.Values) {
+foreach ($g in $aggregateGroups) {
   $sig = Get-QuantitySignature $g.CanonicalName $g.EffectiveUnit $knownUnits
   $methodSignature = (Get-LearningMethodPartition ([string]$g.Method)) + "`n" + $sig
   if (-not $inferenceBySignature.ContainsKey($methodSignature)) {
@@ -251,7 +291,7 @@ Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $re
 
 # 5) 工程模板归集:条目前缀(前2位)=工程类型,统计每个工程类型下条目与定额组的共现。
 $tmpl = @{}
-foreach ($g in $groups.Values) {
+foreach ($g in $aggregateGroups) {
   if (-not (Test-PositiveLearningEvidence ([string]$g.Extra))) { continue }
   if ($g.EntryCode -eq '' -or $g.EntryCode.Length -lt 2) { continue }
   $prefix = $g.EntryCode.Substring(0, 2)
@@ -272,7 +312,7 @@ Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $re
 
 # 6) 表模板行归集(一表一模板原料):带工作簿/工作表上下文的事件组,按表内行号有序沉淀。
 $sheetRows = @{}
-foreach ($g in $groups.Values) {
+foreach ($g in $aggregateGroups) {
   if (-not (Test-PositiveLearningEvidence ([string]$g.Extra))) { continue }
   $wb = Get-ExtraText $g.Extra 'workbook'
   if ($wb -eq '') { continue }
@@ -303,6 +343,7 @@ foreach ($sr in $sheetRows.Values) { [void]$dtSheet.Rows.Add($sr.Method, $sr.Wb,
 Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Table $dtSheet -TargetTable 'dbo.SheetTemplateRow'
 
 $completionPrefix = "聚合完成"
+Write-Host ("跳过同码多义组件: " + $unsafeContextGroupCount + " 组；跳过纯辅助组件: " + $skippedPureContextGroupCount + " 组；保留原始 BindingLog")
 if ($DryRun) {
   Write-Host ("存量尾部单位推断: " + $inferredRows + " 行 / " + $inferredGroups.Count + " 组 / " + $inferredNames.Count + " 个原始名称 / " + $inferredSignatureCount + " 个名称级签名 / " + $inferredUnits.Count + " 种单位")
   Write-Host ("潜在归并冲突(按办法隔离): 与显式单位样本合流 " + $inferredMergeCount + " 个签名/办法 / 同名多推断单位 " + $multiUnitInferenceCount + " 个签名/办法 / 归并后多组件框 " + $potentialMappingConflictCount + " 个签名/办法")

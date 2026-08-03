@@ -28,6 +28,11 @@ $entryName = 'rollback entry'
 $method = '2024'
 $boxId = 'box-test-' + $suffix.Substring(0, 24)
 $engineeringType = $entryCode.Substring(0, 2)
+$contextTargetCode = 'CTX-' + $suffix.Substring(0, 18)
+$conflictTargetCode = 'CTX-CONFLICT-' + $suffix.Substring(0, 9)
+$contextNameA = $rawName + '-A'
+$contextNameB = $rawName + '-B'
+$conflictName = $rawName + '-CONFLICT'
 
 $groupType.GetField('QuantityName', $allFlags).SetValue($group, $rawName)
 $groupType.GetField('QuantityUnit', $allFlags).SetValue($group, 'm2')
@@ -50,6 +55,32 @@ $operands = $groupType.GetField('FormulaOperands', $allFlags).GetValue($group).P
 
 $getConnection = $panelType.GetMethod('GetLearningDbConnectionString', $allFlags)
 $upsert = $panelType.GetMethod('UpsertBindingGroupAggregates', $allFlags)
+function New-ContextAggregateGroup([string]$quantityName, [string]$ordinaryCode,
+    [string]$auxiliaryName, [string]$auxiliaryUnit, [string]$secondAuxiliaryName = '', [string]$secondAuxiliaryUnit = '') {
+    $testGroup = [Activator]::CreateInstance($groupType, $true).PSObject.BaseObject
+    foreach ($pair in @{ QuantityName=$quantityName; QuantityUnit='100m3'; EntryCode='0309-01-03-01'; EntryName='桥涵工程'; Method='2024'; BoxId=('box-shared-' + $suffix.Substring(0, 20)) }.GetEnumerator()) {
+        $groupType.GetField($pair.Key, $allFlags).SetValue($testGroup, $pair.Value)
+    }
+    $testTargets = $groupType.GetField('Targets', $allFlags).GetValue($testGroup).PSObject.BaseObject
+    $ordinaryTarget = [Activator]::CreateInstance($targetType, $true).PSObject.BaseObject
+    foreach ($definition in @(@('Kind','quota'),@('Code',$ordinaryCode),@('Name','ordinary target'),@('Unit','100m3'))) {
+        $targetType.GetField($definition[0], $allFlags).SetValue($ordinaryTarget, $definition[1])
+    }
+    [void]$testTargets.Add($ordinaryTarget)
+    $auxiliaryDefinitions = New-Object System.Collections.ArrayList
+    [void]$auxiliaryDefinitions.Add([object[]]@($auxiliaryName,$auxiliaryUnit))
+    if (-not [String]::IsNullOrWhiteSpace($secondAuxiliaryName)) {
+        [void]$auxiliaryDefinitions.Add([object[]]@($secondAuxiliaryName,$secondAuxiliaryUnit))
+    }
+    foreach ($auxiliary in $auxiliaryDefinitions) {
+        $auxiliaryTarget = [Activator]::CreateInstance($targetType, $true).PSObject.BaseObject
+        foreach ($definition in @(@('Kind','quota'),@('Code','SH'),@('Name',[string]$auxiliary[0]),@('Unit',[string]$auxiliary[1]))) {
+            $targetType.GetField($definition[0], $allFlags).SetValue($auxiliaryTarget, $definition[1])
+        }
+        [void]$testTargets.Add($auxiliaryTarget)
+    }
+    Write-Output -NoEnumerate $testGroup
+}
 $connectionString = [string]$getConnection.Invoke($null, $null)
 $connection = New-Object System.Data.SqlClient.SqlConnection($connectionString)
 $connection.Open()
@@ -245,6 +276,45 @@ WHERE r.anchor_signature=@signature AND r.target_code=@code
     [void]$formula.Parameters.AddWithValue('@signature', $signature)
     [void]$formula.Parameters.AddWithValue('@code', $targetCode)
     if ([string]$formula.ExecuteScalar() -ne ('V0*0.2|m3|' + $rawName + '|m2')) { throw 'Formula rule/operand metadata was not persisted' }
+
+    $contextGroupA = New-ContextAggregateGroup $contextNameA $contextTargetCode '消纳费' 'm3'
+    $contextGroupB = New-ContextAggregateGroup $contextNameB $contextTargetCode 'PE' 'm'
+    foreach ($contextGroup in @($contextGroupA,$contextGroupB)) {
+        $contextArgs = New-Object 'object[]' 3
+        $contextArgs[0] = $connection.PSObject.BaseObject
+        $contextArgs[1] = $transaction.PSObject.BaseObject
+        $contextArgs[2] = $contextGroup.PSObject.BaseObject
+        [void]$upsert.Invoke($null, $contextArgs)
+    }
+    $contextQuery = $connection.CreateCommand()
+    $contextQuery.Transaction = $transaction
+    $contextQuery.CommandText = @'
+SELECT sh.target_name + '|' + sh.target_unit + '|' + sh.box_id
+FROM dbo.QuotaBoxTarget ordinary
+JOIN dbo.QuotaBoxTarget sh ON sh.box_id=ordinary.box_id AND sh.target_code='SH'
+WHERE ordinary.target_code=@code
+ORDER BY sh.target_name,sh.target_unit
+'@
+    [void]$contextQuery.Parameters.AddWithValue('@code', $contextTargetCode)
+    $contextRows = @()
+    $contextReader = $contextQuery.ExecuteReader()
+    try { while ($contextReader.Read()) { $contextRows += $contextReader.GetString(0) } } finally { $contextReader.Dispose() }
+    if ($contextRows.Count -ne 2 -or $contextRows[0] -notmatch '^PE\|m\|' -or $contextRows[1] -notmatch '^消纳费\|m3\|' -or
+        ($contextRows[0].Split('|')[-1] -eq $contextRows[1].Split('|')[-1])) {
+        throw "Context-sensitive SH identities were not split into stable boxes: $($contextRows -join '; ')"
+    }
+
+    $conflictGroup = New-ContextAggregateGroup $conflictName $conflictTargetCode '消纳费' 'm3' 'PE' 'm'
+    $conflictArgs = New-Object 'object[]' 3
+    $conflictArgs[0] = $connection.PSObject.BaseObject
+    $conflictArgs[1] = $transaction.PSObject.BaseObject
+    $conflictArgs[2] = $conflictGroup.PSObject.BaseObject
+    [void]$upsert.Invoke($null, $conflictArgs)
+    $conflictQuery = $connection.CreateCommand()
+    $conflictQuery.Transaction = $transaction
+    $conflictQuery.CommandText = 'SELECT COUNT(*) FROM dbo.QuantityAlias WHERE raw_name=@name'
+    [void]$conflictQuery.Parameters.AddWithValue('@name', $conflictName)
+    if ([int]$conflictQuery.ExecuteScalar() -ne 0) { throw 'Same-event SH conflicts must remain only in BindingLog and not enter aggregates' }
 }
 finally {
     $transaction.Rollback()
@@ -269,7 +339,15 @@ if ($formulaTablesExisted) {
 [void]$verify.Parameters.AddWithValue('@entry', $entryCode)
 [void]$verify.Parameters.AddWithValue('@box', $boxId)
 $afterCount = [int]$verify.ExecuteScalar()
+$contextVerify = $connection.CreateCommand()
+$contextVerify.CommandText = 'SELECT (SELECT COUNT(*) FROM dbo.QuotaBoxTarget WHERE target_code IN (@context,@conflict)) + (SELECT COUNT(*) FROM dbo.QuantityAlias WHERE raw_name IN (@nameA,@nameB,@conflictName))'
+[void]$contextVerify.Parameters.AddWithValue('@context', $contextTargetCode)
+[void]$contextVerify.Parameters.AddWithValue('@conflict', $conflictTargetCode)
+[void]$contextVerify.Parameters.AddWithValue('@nameA', $contextNameA)
+[void]$contextVerify.Parameters.AddWithValue('@nameB', $contextNameB)
+[void]$contextVerify.Parameters.AddWithValue('@conflictName', $conflictName)
+$contextAfterCount = [int]$contextVerify.ExecuteScalar()
 $connection.Dispose()
-if ($afterCount -ne 0) { throw "Rollback left $afterCount test rows" }
+if ($afterCount -ne 0 -or $contextAfterCount -ne 0) { throw "Rollback left $afterCount ordinary and $contextAfterCount context test rows" }
 
-Write-Host 'Test-LearningDbIncrementalAggregate: PASS (visible in transaction, no residue after rollback)'
+Write-Host 'Test-LearningDbIncrementalAggregate: PASS (ordinary idempotence, SH identity split/conflict guard, no residue after rollback)'

@@ -989,7 +989,9 @@ namespace RecoNet
             Dictionary<string, ProjectQuota> result = new Dictionary<string, ProjectQuota>(StringComparer.OrdinalIgnoreCase);
             foreach (ProjectQuota quota in LoadProjectQuotas(mainForm))
             {
-                if (quota != null && requiredCodes.Contains(quota.Code ?? "") && !result.ContainsKey(quota.Code)) result[quota.Code] = quota;
+                if (quota == null || !requiredCodes.Contains(quota.Code ?? "")) continue;
+                string currentKey = BuildSmartCurrentQuotaKey(quota.Code, quota.Name, quota.Unit);
+                if (!result.ContainsKey(currentKey)) result[currentKey] = quota;
             }
 
             try
@@ -999,7 +1001,7 @@ namespace RecoNet
                 {
                     string code = pair.Key;
                     ProjectQuota indexed = pair.Value;
-                    if (!requiredCodes.Contains(code) || indexed == null) continue;
+                    if (!requiredCodes.Contains(code) || indexed == null || IsContextSensitiveLearningCode(code)) continue;
                     ProjectQuota existing;
                     if (result.TryGetValue(code, out existing))
                     {
@@ -1017,6 +1019,45 @@ namespace RecoNet
                 Log("Smart fill current quota metadata failed: " + ex.Message);
             }
             return result;
+        }
+
+        private static string BuildSmartCurrentQuotaKey(string code, string name, string unit)
+        {
+            return IsContextSensitiveLearningCode(code)
+                ? BuildLearningTargetIdentityKey("quota", code, name, unit)
+                : (code ?? "").Trim().ToUpperInvariant();
+        }
+
+        private static bool TryGetCurrentSmartQuota(Dictionary<string, ProjectQuota> currentQuotaByCode,
+            SmartBoxTarget target, out ProjectQuota currentQuota)
+        {
+            currentQuota = null;
+            if (currentQuotaByCode == null || target == null || String.IsNullOrWhiteSpace(target.Code)) return false;
+            string key = BuildSmartCurrentQuotaKey(target.Code, target.Name, target.Unit);
+            return currentQuotaByCode.TryGetValue(key, out currentQuota) && currentQuota != null;
+        }
+
+        private static bool IsSmartMapEntryUsableInCurrentProject(SmartMapEntry entry, string entryName,
+            Dictionary<string, ProjectQuota> currentQuotaByCode)
+        {
+            List<SmartBoxTarget> targets = entry == null
+                ? new List<SmartBoxTarget>()
+                : entry.Targets.Where(target => target != null && !String.IsNullOrWhiteSpace(target.Code)).ToList();
+            if (targets.Count == 0) return false;
+            bool hasOrdinaryTarget = false;
+            foreach (SmartBoxTarget target in targets)
+            {
+                if (!String.Equals(target.Kind ?? "quota", "quota", StringComparison.OrdinalIgnoreCase)) return false;
+                bool contextSensitive = IsContextSensitiveLearningCode(target.Code);
+                if (contextSensitive && (String.IsNullOrWhiteSpace(target.Name) || String.IsNullOrWhiteSpace(target.Unit))) return false;
+                if (!contextSensitive) hasOrdinaryTarget = true;
+                ProjectQuota currentQuota;
+                if (!TryGetCurrentSmartQuota(currentQuotaByCode, target, out currentQuota) ||
+                    String.IsNullOrWhiteSpace(currentQuota.Unit)) return false;
+            }
+            if (hasOrdinaryTarget) return true;
+            return targets.Count == 1 && GetLearningBaseTargetCode(targets[0].Code) == "SF" &&
+                (entryName ?? "").IndexOf("\u8bbe\u5907\u8d2d\u7f6e\u8d39", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         // 为一组定额目标解析放置条目。证据优先级:①签名级(该工程量配该定额历史放过的条目)
@@ -1232,13 +1273,8 @@ namespace RecoNet
                 bool currentMethodMapping = hit.CurrentMethodMapping || (hit.LocalContextKeys != null &&
                     !String.IsNullOrWhiteSpace(snapshot.Method) && hit.LocalContextKeys.Any(key =>
                         key.StartsWith(currentContextPrefix, StringComparison.OrdinalIgnoreCase)));
-                bool targetsValid = hit.Targets.Count > 0 && hit.Targets.All(target =>
-                {
-                    ProjectQuota current;
-                    return target != null && String.Equals(target.Kind ?? "quota", "quota", StringComparison.OrdinalIgnoreCase) &&
-                        !String.IsNullOrWhiteSpace(target.Code) && currentQuotaByCode.TryGetValue(target.Code, out current) &&
-                        current != null && !String.IsNullOrWhiteSpace(current.Unit);
-                });
+                bool targetsValid = IsSmartMapEntryUsableInCurrentProject(hit, entryName, currentQuotaByCode);
+                if (!targetsValid) continue;
                 scores.Add(new SmartMapCandidateScore
                 {
                     Entry = hit,
@@ -1616,7 +1652,7 @@ namespace RecoNet
             {
                 if (target == null || String.IsNullOrEmpty(target.Code)) continue;
                 ProjectQuota currentQuota;
-                currentQuotaByCode.TryGetValue(target.Code, out currentQuota);
+                TryGetCurrentSmartQuota(currentQuotaByCode, target, out currentQuota);
                 string currentQuotaUnit = currentQuota == null ? "" : currentQuota.Unit;
                 FillPreviewItem item = new FillPreviewItem
                 {

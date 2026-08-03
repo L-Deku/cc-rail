@@ -295,6 +295,70 @@ try {
     $entryNameField = $candidateScoreType.GetField('EntryName', $flags)
     if ($null -eq $entryNameField) { throw '候选分数缺少条目名称字段' }
     $smartTargetType = $type.GetNestedType('SmartBoxTarget', $nestedFlags)
+    $targetIdentity = $type.GetMethod('BuildLearningTargetIdentityKey', $flags)
+    $shDisposalIdentity = [string]$targetIdentity.Invoke($null, @('quota', 'SH', '消纳费', 'm³'))
+    $shPeIdentity = [string]$targetIdentity.Invoke($null, @('quota', 'SH', 'PE', 'm'))
+    if ($shDisposalIdentity -eq $shPeIdentity -or
+        [string]$targetIdentity.Invoke($null, @('quota', 'LY-89', '旧名称', '100m3')) -ne 'quota:LY-89') {
+        throw '推荐端没有按名称和单位隔离通用辅助代码，或错误拆分普通定额'
+    }
+
+    $projectQuotaType = $type.GetNestedType('ProjectQuota', $nestedFlags)
+    $quotaDictionaryType = [Collections.Generic.Dictionary``2].MakeGenericType([string], $projectQuotaType)
+    $currentMetadata = [Activator]::CreateInstance($quotaDictionaryType)
+    $currentKey = $type.GetMethod('BuildSmartCurrentQuotaKey', $flags)
+    function Add-CurrentQuota([object]$dictionary, [string]$code, [string]$name, [string]$unit) {
+        $quota = [Activator]::CreateInstance($projectQuotaType, $true).PSObject.BaseObject
+        $projectQuotaType.GetField('Code', $flags).SetValue($quota, $code)
+        $projectQuotaType.GetField('Name', $flags).SetValue($quota, $name)
+        $projectQuotaType.GetField('Unit', $flags).SetValue($quota, $unit)
+        $key = [string]$currentKey.Invoke($null, @($code, $name, $unit))
+        $dictionary[$key] = $quota
+    }
+    Add-CurrentQuota $currentMetadata 'SH' '消纳费' 'm³'
+    Add-CurrentQuota $currentMetadata 'LY-89' '挖掘机挖装石' '100m3'
+
+    $safetyEntry = [Activator]::CreateInstance($mapEntryType, $true).PSObject.BaseObject
+    $safetyTargets = $mapEntryType.GetField('Targets', $flags).GetValue($safetyEntry)
+    $shTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
+    foreach ($definition in @(@('Kind', 'quota'), @('Code', 'SH'), @('Name', '消纳费'), @('Unit', 'm3'))) {
+        $smartTargetType.GetField($definition[0], $flags).SetValue($shTarget, $definition[1])
+    }
+    [void]$safetyTargets.Add($shTarget)
+    $usableEntry = $type.GetMethod('IsSmartMapEntryUsableInCurrentProject', $flags)
+    $usableArgs = New-Object 'object[]' 3
+    $usableArgs[0] = $safetyEntry
+    $usableArgs[1] = '弃渣外运'
+    $usableArgs[2] = $currentMetadata.PSObject.BaseObject
+    if ($usableEntry.Invoke($null, $usableArgs)) { throw '纯 SH 组件不得进入普通推荐' }
+
+    $lyTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
+    foreach ($definition in @(@('Kind', 'quota'), @('Code', 'LY-89'), @('Name', '历史名称可变化'), @('Unit', '100m3'))) {
+        $smartTargetType.GetField($definition[0], $flags).SetValue($lyTarget, $definition[1])
+    }
+    [void]$safetyTargets.Add($lyTarget)
+    if (-not $usableEntry.Invoke($null, $usableArgs)) { throw '辅助名称单位精确一致的混合组件应保留完整候选' }
+
+    $mismatchMetadata = [Activator]::CreateInstance($quotaDictionaryType)
+    Add-CurrentQuota $mismatchMetadata 'SH' 'PE' 'm'
+    Add-CurrentQuota $mismatchMetadata 'LY-89' '挖掘机挖装石' '100m3'
+    $usableArgs[2] = $mismatchMetadata.PSObject.BaseObject
+    if ($usableEntry.Invoke($null, $usableArgs)) { throw '辅助名称或单位不一致时必须过滤整个混合组件' }
+
+    $sfEntry = [Activator]::CreateInstance($mapEntryType, $true).PSObject.BaseObject
+    $sfTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
+    foreach ($definition in @(@('Kind', 'quota'), @('Code', 'SF'), @('Name', '设备购置费'), @('Unit', '元'))) {
+        $smartTargetType.GetField($definition[0], $flags).SetValue($sfTarget, $definition[1])
+    }
+    [void]$mapEntryType.GetField('Targets', $flags).GetValue($sfEntry).Add($sfTarget)
+    $sfMetadata = [Activator]::CreateInstance($quotaDictionaryType)
+    Add-CurrentQuota $sfMetadata 'SF' '设备购置费' '元'
+    $usableArgs[0] = $sfEntry
+    $usableArgs[1] = '设备购置费'
+    $usableArgs[2] = $sfMetadata.PSObject.BaseObject
+    if (-not $usableEntry.Invoke($null, $usableArgs)) { throw 'SF 设备购置费的既有业务例外被误过滤' }
+    Write-Host 'PASS 通用辅助代码按名称单位隔离，混合组件原子过滤并保留 SF 设备购置费例外'
+
     $firstMapEntry = $candidateScoreType.GetField('Entry', $flags).GetValue($scoreList[0])
     foreach ($targetCode in @('SH', '1009001002*1.224', 'LY-89')) {
         $smartTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject

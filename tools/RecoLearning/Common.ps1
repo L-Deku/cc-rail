@@ -109,6 +109,53 @@ function Get-NormalizedPart {
   return $normalized.ToString()
 }
 
+function Get-NormalizedLearningUnit {
+  param([string]$Text)
+  $unit = ([string]$Text).Trim().ToLowerInvariant()
+  $unit = $unit.Replace(' ', '').Replace(([string][char]0x3000), '')
+  $unit = $unit.Replace([char]0xff08, '(').Replace([char]0xff09, ')')
+  $unit = $unit.Replace([char]0xff0e, '.').Replace([char]0x00b7, '.').Replace([char]0xfe52, '.')
+  $unit = $unit.Replace([char]0xff4d, 'm').Replace([char]0xff2d, 'm')
+  for ($i = 0; $i -le 9; $i++) { $unit = $unit.Replace([char](0xff10 + $i), [char](0x30 + $i)) }
+  $unit = $unit.Replace([char]0x00b2, '2').Replace([char]0x00b3, '3')
+  $unit = $unit.Replace(([string][char]0x33a1), 'm2').Replace(([string][char]0x33a5), 'm3')
+  $unit = $unit.Replace('m^2', 'm2').Replace('m＾2', 'm2')
+  $unit = $unit.Replace('m^3', 'm3').Replace('m＾3', 'm3')
+  $unit = $unit.Replace('千米', 'km').Replace('公里', 'km').Replace('百米', 'hm')
+  $unit = $unit.Replace('千克', 'kg').Replace('公斤', 'kg').Replace('吨', 't')
+  $unit = $unit.Replace('立方米', 'm3').Replace('平米', 'm2').Replace('平方米', 'm2').Replace('米', 'm')
+  return $unit.ToUpperInvariant()
+}
+
+function Get-LearningBaseTargetCode {
+  param([string]$Code)
+  $normalized = ([string]$Code).Trim().ToUpperInvariant()
+  $asterisk = $normalized.IndexOf('*')
+  $slash = $normalized.IndexOf('/')
+  $suffix = -1
+  if ($asterisk -ge 0) { $suffix = $asterisk }
+  if ($slash -ge 0 -and ($suffix -lt 0 -or $slash -lt $suffix)) { $suffix = $slash }
+  if ($suffix -ge 0) { return $normalized.Substring(0, $suffix) }
+  return $normalized
+}
+
+function Test-ContextSensitiveLearningCode {
+  param([string]$Code)
+  return @('SF','SH','SQ','ZLF','LF','YF','TLF','GF','JF','XGT1') -contains (Get-LearningBaseTargetCode $Code)
+}
+
+function Get-LearningTargetIdentityKey {
+  param([string]$Kind, [string]$Code, [string]$Name, [string]$Unit)
+  $rawCode = ([string]$Code).Trim()
+  $normalizedKind = ([string]$Kind).Trim().ToLowerInvariant()
+  if ($normalizedKind -eq '') {
+    $normalizedKind = if ($rawCode -match '^\d+$') { 'material' } else { 'quota' }
+  }
+  $baseKey = $normalizedKind + ':' + $rawCode.ToUpperInvariant()
+  if (-not (Test-ContextSensitiveLearningCode $rawCode)) { return $baseKey }
+  return $baseKey + '|' + (Get-NormalizedPart $Name) + '|' + (Get-NormalizedLearningUnit $Unit)
+}
+
 function Test-ReliableQuantityUnit {
   param([string]$Unit)
   $unitText = ([string]$Unit).Trim()

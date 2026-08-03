@@ -53,6 +53,10 @@ if ($learning -notmatch 'missing or unsupported' -or
 if (([regex]::Matches($learning, 'string method = NormalizeLearningDbMethod\(group\.Method\);')).Count -lt 3) { throw '组件、公式和条目增量表未全部使用同一规范办法' }
 if ($learning -notmatch 'NormalizeLearningDbMethod\(group\.Method\)\) \+ "\|" \+ \(group == null \? "" : group\.EntryCode') { throw '公式规则键没有同时保留规范办法和稳定条目上下文' }
 if ($learning -notmatch 'dbo\.QuotaBoxTarget') { throw '增量学习没有更新 QuotaBoxTarget' }
+if ($learning -notmatch 'BuildLearningTargetIdentityKey' -or
+    $learning -notmatch 'HasConflictingContextSensitiveTargets') { throw '增量聚合没有隔离同码异义的通用辅助代码' }
+if ($excelLink -notmatch 'BuildLearningTargetIdentityKey' -or
+    $excelLink -notmatch 'HasConflictingContextSensitiveTargets') { throw '本地组件框仍可能把同码异义辅助行合并' }
 if ($learning -notmatch 'method, project_id, entry_code, entry_name') { throw 'BindingLog 没有写入真实办法/项目/条目信息' }
 if ($learning -notmatch 'NormalizeForSignature\(name\) \+ "\|"') { throw 'SQL 聚合签名仍未改成名称级' }
 if ($learning -match 'NormalizeForSignature\(unit\)') { throw 'SQL 聚合签名不应包含工程量单位' }

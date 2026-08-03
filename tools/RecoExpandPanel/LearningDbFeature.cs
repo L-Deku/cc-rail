@@ -319,14 +319,28 @@ namespace RecoNet
             {
                 if (group == null) continue;
                 group.Method = NormalizeLearningDbMethod(group.Method);
-                if (!String.IsNullOrWhiteSpace(group.BoxId)) continue;
-                List<string> targetKeys = (group.Targets ?? new List<MappingFeedbackTarget>())
+                List<MappingFeedbackTarget> targets = (group.Targets ?? new List<MappingFeedbackTarget>())
                     .Where(target => target != null && !String.IsNullOrWhiteSpace(target.Code))
-                    .Select(target => BuildMappingTargetKey(target.Kind, target.Code))
+                    .ToList();
+                bool containsContextSensitiveTarget = targets.Any(target => IsContextSensitiveLearningCode(target.Code));
+                if (!containsContextSensitiveTarget && !String.IsNullOrWhiteSpace(group.BoxId)) continue;
+                List<string> targetKeys = targets
+                    .Select(target => BuildLearningTargetIdentityKey(target.Kind, target.Code, target.Name, target.Unit))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(key => key, StringComparer.OrdinalIgnoreCase)
                     .ToList();
-                if (targetKeys.Count > 0) group.BoxId = BuildStableMappingBoxId(String.Join("|", targetKeys.ToArray()));
+                if (targetKeys.Count > 0)
+                {
+                    if (containsContextSensitiveTarget)
+                    {
+                        string targetSetHash = BuildLearningMd5(String.Join(";", targetKeys.ToArray()));
+                        group.BoxId = "auto-" + targetSetHash.Substring(0, 16);
+                    }
+                    else
+                    {
+                        group.BoxId = BuildStableMappingBoxId(String.Join("|", targetKeys.ToArray()));
+                    }
+                }
             }
         }
 
@@ -758,8 +772,13 @@ namespace RecoNet
         // 绑定流水是审计源；同时增量维护推荐预览直接读取的核心聚合表，避免等待全量收割。
         private static void UpsertBindingGroupAggregates(SqlConnection conn, SqlTransaction transaction, MappingFeedbackGroup group)
         {
-            List<MappingFeedbackTarget> targets = (group.Targets ?? new List<MappingFeedbackTarget>())
+            List<MappingFeedbackTarget> eligibleTargets = (group.Targets ?? new List<MappingFeedbackTarget>())
                 .Where(target => target != null && !String.IsNullOrWhiteSpace(target.Code))
+                .ToList();
+            if (HasConflictingContextSensitiveTargets(eligibleTargets) ||
+                !IsLearningGroupRecommendable(eligibleTargets, group.EntryName)) return;
+
+            List<MappingFeedbackTarget> targets = eligibleTargets
                 .GroupBy(target => BuildMappingTargetKey(target.Kind, target.Code), StringComparer.OrdinalIgnoreCase)
                 .Select(items => items.First())
                 .OrderBy(target => BuildMappingTargetKey(target.Kind, target.Code), StringComparer.OrdinalIgnoreCase)
@@ -771,10 +790,15 @@ namespace RecoNet
             string signature = NormalizeForSignature(name) + "|";
             if (signature.Length > 450) signature = signature.Substring(0, 450);
             string aliasHash = BuildLearningMd5(NormalizeForSignature(name));
-            List<string> targetKeys = targets.Select(target => BuildMappingTargetKey(target.Kind, target.Code)).ToList();
+            List<string> targetKeys = targets.Select(target =>
+                BuildLearningTargetIdentityKey(target.Kind, target.Code, target.Name, target.Unit)).ToList();
             string targetSetHash = BuildLearningMd5(String.Join(";", targetKeys.ToArray()));
+            bool containsContextSensitiveTarget = targets.Any(target => IsContextSensitiveLearningCode(target.Code));
+            string stableAggregateBoxId = containsContextSensitiveTarget
+                ? "auto-" + targetSetHash.Substring(0, 16)
+                : BuildStableMappingBoxId(String.Join("|", targetKeys.ToArray()));
             string boxId = TrimLearningText(group.BoxId, 64);
-            if (String.IsNullOrWhiteSpace(boxId)) boxId = BuildStableMappingBoxId(String.Join("|", targetKeys.ToArray()));
+            if (containsContextSensitiveTarget || String.IsNullOrWhiteSpace(boxId)) boxId = stableAggregateBoxId;
 
             using (SqlCommand cmd = conn.CreateCommand())
             {
@@ -800,6 +824,19 @@ namespace RecoNet
                 if (existing != null && existing != DBNull.Value)
                 {
                     boxId = Convert.ToString(existing);
+                }
+            }
+            using (SqlCommand cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandTimeout = 5;
+                cmd.CommandText = "SELECT target_set_hash FROM dbo.QuotaBox WITH (UPDLOCK,HOLDLOCK) WHERE box_id=@box";
+                cmd.Parameters.AddWithValue("@box", boxId);
+                object existingHash = cmd.ExecuteScalar();
+                if (existingHash != null && existingHash != DBNull.Value &&
+                    !String.Equals(Convert.ToString(existingHash), targetSetHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    boxId = stableAggregateBoxId;
                 }
             }
             using (SqlCommand cmd = conn.CreateCommand())
