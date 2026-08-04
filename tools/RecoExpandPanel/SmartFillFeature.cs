@@ -11,6 +11,10 @@ namespace RecoNet
 {
     public partial class FormPanel : Form
     {
+        private const string SmartMethodNo30 = "30号文";
+        private const string SmartMethodNo101Estimate = "101号文估算";
+        private const string SmartMethodNo2024 = "TB 10801—2024";
+
         // ============ 智能铺量(学习库)漏斗匹配引擎 ============
         // 漏斗:①名称级签名 ②模糊候选(仅进下拉,不自动采纳) ③手挂。
         // 数据源:RecoLearning(SQL);连不上时回退 mapping-boxes.jsonl(无条目知识)。
@@ -64,6 +68,14 @@ namespace RecoNet
             {
                 return new SmartLearningScope { Kind = "All", EntryCode = "", DisplayName = "全部学习库" };
             }
+        }
+
+        private sealed class SmartMethodRoute
+        {
+            public string RawMethod;
+            public string LearningMethod;
+            public string LibraryMethod;
+            public string MethodNo;
         }
 
         private sealed class SmartQuotaSource
@@ -151,6 +163,50 @@ namespace RecoNet
                 text.IndexOf("101-estimate", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 text.IndexOf("2020", StringComparison.OrdinalIgnoreCase) >= 0) return "2020";
             return text;
+        }
+
+        private static SmartMethodRoute ResolveSmartMethodRoute(string rawMethod)
+        {
+            string raw = (rawMethod ?? "").Trim();
+            string learningMethod = NormalizeSmartProjectMethod(raw);
+            if (raw.IndexOf("101号文", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                raw.IndexOf("101-estimate", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return new SmartMethodRoute
+                {
+                    RawMethod = raw,
+                    LearningMethod = "2020",
+                    LibraryMethod = "101-estimate",
+                    MethodNo = SmartMethodNo101Estimate
+                };
+            }
+            if (String.Equals(learningMethod, "2024", StringComparison.OrdinalIgnoreCase))
+            {
+                return new SmartMethodRoute
+                {
+                    RawMethod = raw,
+                    LearningMethod = "2024",
+                    LibraryMethod = "2024",
+                    MethodNo = SmartMethodNo2024
+                };
+            }
+            if (String.Equals(learningMethod, "2020", StringComparison.OrdinalIgnoreCase))
+            {
+                return new SmartMethodRoute
+                {
+                    RawMethod = raw,
+                    LearningMethod = "2020",
+                    LibraryMethod = "2020",
+                    MethodNo = SmartMethodNo30
+                };
+            }
+            return new SmartMethodRoute
+            {
+                RawMethod = raw,
+                LearningMethod = learningMethod,
+                LibraryMethod = learningMethod,
+                MethodNo = ""
+            };
         }
 
         private static string NormalizeSmartLearningSignature(string signature)
@@ -336,7 +392,7 @@ namespace RecoNet
             }
         }
 
-        // 当前项目办法:项目信息.编制办法文号 含2024->2024,含2020->2020,否则原文。
+        // 保留项目信息.编制办法文号的原始办法身份；学习与参考库分区由 ResolveSmartMethodRoute 分别解析。
         private static string SmartResolveProjectMethod(SqlConnection projectConn)
         {
             try
@@ -346,7 +402,7 @@ namespace RecoNet
                     cmd.CommandText = "SELECT TOP 1 编制办法文号 FROM 项目信息";
                     object raw = cmd.ExecuteScalar();
                     string text = raw != null ? raw.ToString() : "";
-                    return NormalizeSmartProjectMethod(text);
+                    return text.Trim();
                 }
             }
             catch (Exception ex)
@@ -399,6 +455,7 @@ namespace RecoNet
                 return result;
             }
             string method = "";
+            SmartMethodRoute route = ResolveSmartMethodRoute("");
             Dictionary<string, string> projectNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             bool learningDbAccessStarted = false;
             try
@@ -406,6 +463,7 @@ namespace RecoNet
                 using (SqlConnection projectConn = AgentCreateWorkConnection(mainForm))
                 {
                     method = SmartResolveProjectMethod(projectConn);
+                    route = ResolveSmartMethodRoute(method);
                     Dictionary<string, long> ignored = LoadSmartProjectEntries(projectConn, out projectNames);
                 }
                 learningDbAccessStarted = true;
@@ -417,7 +475,7 @@ namespace RecoNet
                     {
                         cmd.CommandTimeout = 15;
                         cmd.CommandText = "SELECT DISTINCT entry_code FROM dbo.EngineeringTemplate WHERE method=@method AND entry_code<>''";
-                        cmd.Parameters.AddWithValue("@method", NormalizeSmartProjectMethod(method));
+                        cmd.Parameters.AddWithValue("@method", route.LearningMethod);
                         using (SqlDataReader reader = cmd.ExecuteReader())
                         {
                             while (reader.Read())
@@ -431,8 +489,9 @@ namespace RecoNet
                     using (SqlCommand cmd = conn.CreateCommand())
                     {
                         cmd.CommandTimeout = 15;
-                        cmd.CommandText = "SELECT entry_code,entry_name FROM dbo.ChapterEntry WHERE method=@method";
-                        cmd.Parameters.AddWithValue("@method", NormalizeSmartProjectMethod(method));
+                        cmd.CommandText = "SELECT entry_code,entry_name FROM dbo.ChapterEntry WHERE method=@library_method AND method_no=@method_no";
+                        cmd.Parameters.AddWithValue("@library_method", route.LibraryMethod);
+                        cmd.Parameters.AddWithValue("@method_no", route.MethodNo);
                         using (SqlDataReader reader = cmd.ExecuteReader())
                         {
                             while (reader.Read()) learningNames[reader.GetString(0).Trim()] = reader.IsDBNull(1) ? "" : reader.GetString(1).Trim();
@@ -485,10 +544,11 @@ namespace RecoNet
         }
 
         // 从 RecoLearning 加载快照;失败回退 jsonl(仅签名映射,无条目知识)。
-        private static SmartLearningSnapshot LoadSmartLearningSnapshot(string method, out string note)
+        private static SmartLearningSnapshot LoadSmartLearningSnapshot(string learningMethod, string libraryMethod,
+            string methodNo, out string note)
         {
             note = null;
-            SmartLearningSnapshot snapshot = new SmartLearningSnapshot { Method = NormalizeSmartProjectMethod(method) };
+            SmartLearningSnapshot snapshot = new SmartLearningSnapshot { Method = NormalizeSmartProjectMethod(learningMethod) };
             try
             {
                 // 推荐页每次打开都先尝试重放本机待同步批次；SQL 快照随后实时读取最新聚合。
@@ -622,8 +682,9 @@ namespace RecoNet
                     using (SqlCommand cmd = conn.CreateCommand())
                     {
                         cmd.CommandTimeout = 15;
-                        cmd.CommandText = "SELECT entry_code,entry_name FROM dbo.ChapterEntry WHERE method=@scope_method";
-                        cmd.Parameters.AddWithValue("@scope_method", snapshot.Method ?? "");
+                        cmd.CommandText = "SELECT entry_code,entry_name FROM dbo.ChapterEntry WHERE method=@library_method AND method_no=@method_no";
+                        cmd.Parameters.AddWithValue("@library_method", libraryMethod ?? "");
+                        cmd.Parameters.AddWithValue("@method_no", methodNo ?? "");
                         using (SqlDataReader reader = cmd.ExecuteReader())
                         {
                             while (reader.Read())
@@ -689,14 +750,31 @@ namespace RecoNet
 
                     if (!String.IsNullOrEmpty(snapshot.Method))
                     {
+                        int basePartitionCount;
+                        using (SqlCommand count = conn.CreateCommand())
+                        {
+                            count.CommandTimeout = 15;
+                            count.CommandText =
+                                "SELECT COUNT(*) FROM dbo.EntryQuota " +
+                                "WHERE method=@library_method AND method_no=@method_no AND target_kind='quota'";
+                            count.Parameters.AddWithValue("@library_method", libraryMethod ?? "");
+                            count.Parameters.AddWithValue("@method_no", methodNo ?? "");
+                            basePartitionCount = Convert.ToInt32(count.ExecuteScalar(), CultureInfo.InvariantCulture);
+                        }
+                        if (ShouldWarnSmartLibraryPartitionMissing(basePartitionCount))
+                        {
+                            Log("Smart fill exact EntryQuota partition is empty: method=" + (libraryMethod ?? "") +
+                                ", method_no=" + (methodNo ?? "") + "; continuing with empty library evidence and no fallback.");
+                        }
                         using (SqlCommand cmd = conn.CreateCommand())
                         {
                             cmd.CommandTimeout = 15;
                             cmd.CommandText =
                                 "SELECT quota_code, entry_code, entry_name, project_count FROM dbo.EntryQuota q " +
-                                "WHERE q.method = @method AND q.target_kind = 'quota' AND EXISTS " +
+                                "WHERE q.method=@library_method AND q.method_no=@method_no AND q.target_kind='quota' AND EXISTS " +
                                 "(SELECT 1 FROM dbo.QuotaBoxTarget t WHERE t.target_code = q.quota_code AND t.target_kind = 'quota')";
-                            cmd.Parameters.AddWithValue("@method", snapshot.Method);
+                            cmd.Parameters.AddWithValue("@library_method", libraryMethod ?? "");
+                            cmd.Parameters.AddWithValue("@method_no", methodNo ?? "");
                             using (SqlDataReader reader = cmd.ExecuteReader())
                             {
                                 while (reader.Read())
@@ -891,6 +969,11 @@ namespace RecoNet
                 note = "学习库与本地映射均不可用:" + ex.Message;
                 return snapshot;
             }
+        }
+
+        private static bool ShouldWarnSmartLibraryPartitionMissing(int basePartitionCount)
+        {
+            return basePartitionCount == 0;
         }
 
         // SQL 主库优先；本机只叠加 outbox 中仍待同步的“名称签名+组件框”，不比较跨机器时间。
@@ -1877,6 +1960,7 @@ namespace RecoNet
             }
 
             string method = "";
+            SmartMethodRoute route = ResolveSmartMethodRoute("");
             Dictionary<string, long> projectEntries = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
             Dictionary<string, string> projectEntryNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             try
@@ -1884,6 +1968,7 @@ namespace RecoNet
                 using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
                 {
                     method = SmartResolveProjectMethod(conn);
+                    route = ResolveSmartMethodRoute(method);
                     projectEntries = LoadSmartProjectEntries(conn, out projectEntryNames);
                 }
             }
@@ -1893,7 +1978,8 @@ namespace RecoNet
             }
 
             string snapshotNote;
-            SmartLearningSnapshot snapshot = LoadSmartLearningSnapshot(method, out snapshotNote);
+            SmartLearningSnapshot snapshot = LoadSmartLearningSnapshot(route.LearningMethod,
+                route.LibraryMethod, route.MethodNo, out snapshotNote);
             snapshot.ProjectEntryNameByCode = projectEntryNames;
             if (snapshot.BySignature.Count == 0)
             {

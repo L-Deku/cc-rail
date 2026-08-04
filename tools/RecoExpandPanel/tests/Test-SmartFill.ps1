@@ -75,17 +75,70 @@ $allFlags = [System.Reflection.BindingFlags]'Public,NonPublic,Static,Instance'
 $candidateType = $panelType.GetNestedType('SmartMapCandidateScore', [System.Reflection.BindingFlags]'Public,NonPublic')
 $entryType = $panelType.GetNestedType('SmartMapEntry', [System.Reflection.BindingFlags]'Public,NonPublic')
 $targetType = $panelType.GetNestedType('SmartBoxTarget', [System.Reflection.BindingFlags]'Public,NonPublic')
+$routeType = $panelType.GetNestedType('SmartMethodRoute', [System.Reflection.BindingFlags]'Public,NonPublic')
+$snapshotType = $panelType.GetNestedType('SmartLearningSnapshot', [System.Reflection.BindingFlags]'Public,NonPublic')
 $canAutoSelect = $panelType.GetMethod('CanAutoSelectSmartMapEntry', $allFlags)
 $isClassifiedEntryCode = $panelType.GetMethod('IsSmartClassifiedEntryCode', $allFlags)
+$resolveRoute = $panelType.GetMethod('ResolveSmartMethodRoute', $allFlags)
+$resolveEntryName = $panelType.GetMethod('ResolveSmartEntryName', $allFlags)
+$shouldWarnPartition = $panelType.GetMethod('ShouldWarnSmartLibraryPartitionMissing', $allFlags)
 $applyPending = $panelType.GetMethod('ApplyPendingLocalSmartMapEntry', $allFlags)
 $orderCandidates = $panelType.GetMethod('OrderSmartMapCandidateScores', $allFlags)
-if ($null -eq $candidateType -or $null -eq $entryType -or $null -eq $targetType -or $null -eq $canAutoSelect -or
+if ($null -eq $candidateType -or $null -eq $entryType -or $null -eq $targetType -or $null -eq $routeType -or
+    $null -eq $snapshotType -or $null -eq $canAutoSelect -or $null -eq $resolveRoute -or
+    $null -eq $resolveEntryName -or $null -eq $shouldWarnPartition -or
     $null -eq $isClassifiedEntryCode -or
     $null -eq $applyPending -or $null -eq $orderCandidates) {
     throw '缺少跨专业同名冲突判定入口'
 }
 if ($null -ne $candidateType.GetField('PendingLocal', $allFlags)) {
     throw 'PendingLocal 不应在 SmartMapCandidateScore 重复存储'
+}
+$routeCases = @(
+    @('101号文估算', '2020', '101-estimate', '101号文估算'),
+    @('101-estimate', '2020', '101-estimate', '101号文估算'),
+    @('国铁科法〔2017〕30号文', '2020', '2020', '30号文'),
+    @('2020', '2020', '2020', '30号文'),
+    @('2024', '2024', '2024', 'TB 10801—2024'),
+    @('TB10801-2024', '2024', '2024', 'TB 10801—2024')
+)
+foreach ($routeCase in $routeCases) {
+    $routeArgs = New-Object 'object[]' 1
+    $routeArgs[0] = $routeCase[0]
+    $route = $resolveRoute.Invoke($null, $routeArgs)
+    if ($routeType.GetField('RawMethod', $allFlags).GetValue($route) -ne $routeCase[0] -or
+        $routeType.GetField('LearningMethod', $allFlags).GetValue($route) -ne $routeCase[1] -or
+        $routeType.GetField('LibraryMethod', $allFlags).GetValue($route) -ne $routeCase[2] -or
+        $routeType.GetField('MethodNo', $allFlags).GetValue($route) -ne $routeCase[3]) {
+        throw "办法分区路由错误：$($routeCase[0])"
+    }
+}
+if ([regex]::Matches($smart, 'FROM dbo\.ChapterEntry WHERE method=@library_method AND method_no=@method_no').Count -ne 2 -or
+    $smart -notmatch 'q\.method=@library_method AND q\.method_no=@method_no' -or
+    $smart -match "method\s+IN\s*\(\s*'2020'\s*,\s*'101-estimate'" -or
+    -not $smart.Contains("WHERE m.weight > 0 AND (m.method=@map_method OR m.method='')") -or
+    -not $smart.Contains("WHERE method = @m3 OR method = ''")) {
+    throw '参考库未精确路由，或误改了学习库二分口径'
+}
+$basePartitionPosition = $smart.IndexOf('SELECT COUNT(*) FROM dbo.EntryQuota', [StringComparison]::Ordinal)
+$semiJoinPosition = $smart.IndexOf('SELECT quota_code, entry_code, entry_name, project_count FROM dbo.EntryQuota', [StringComparison]::Ordinal)
+if ($basePartitionPosition -lt 0 -or $semiJoinPosition -lt 0 -or $basePartitionPosition -gt $semiJoinPosition) {
+    throw '零命中告警没有在 EntryQuota 半连接前检查精确基础分区'
+}
+$warnArgs = New-Object 'object[]' 1
+$warnArgs[0] = 1
+if ([bool]$shouldWarnPartition.Invoke($null, $warnArgs)) { throw '基础分区存在但半连接可为 0 时被误告警' }
+$warnArgs[0] = 0
+if (-not [bool]$shouldWarnPartition.Invoke($null, $warnArgs)) { throw 'MethodNo 错误导致基础分区为 0 时未告警' }
+$nameSnapshot = [Activator]::CreateInstance($snapshotType, $true).PSObject.BaseObject
+$projectNames = $snapshotType.GetField('ProjectEntryNameByCode', $allFlags).GetValue($nameSnapshot)
+$projectNames['0101'] = '当前项目条目名'
+$nameArgs = New-Object 'object[]' 3
+$nameArgs[0] = $nameSnapshot
+$nameArgs[1] = '0101'
+$nameArgs[2] = '30号文学习侧条目名'
+if ($resolveEntryName.Invoke($null, $nameArgs) -ne '当前项目条目名') {
+    throw '101 号文缺少 ChapterEntry 分区时未优先使用当前项目条目名'
 }
 $classifiedCases = @{
     '12-01' = $true
