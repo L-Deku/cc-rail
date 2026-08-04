@@ -13,6 +13,8 @@
 - 条目与模板参考：`SignatureEntryMap`、`EntryQuota`、`ChapterEntry`、`EngineeringTemplate`、`SheetTemplateRow`
 
 推荐预览直接读取推荐核心、数量公式和条目映射；`BindingLog` 是审计及全量重建来源。
+`SheetTemplateRow` 是三期“一表一模板”的预留原料，目前只由全量重算脚本写入，插件尚未读取，保留不删。
+`EngineeringTemplate` 仅归集前两位为数字且其余字符只含数字或横杠的分类条目码；这是预防性过滤，当前只读核对未发现既有非法行，不能据此推断曾发生推荐错误。
 
 ## 脚本
 
@@ -21,12 +23,13 @@
 | Initialize-RecoLearning.ps1 | 建库建表 |
 | Import-JsonlLibraries.ps1 | 默认只重载章节树/条目定额库；旧映射流水必须显式一次性迁移 |
 | Import-ExcelLinks.ps1 | 收割 ExcelLinks\*.xml 绑定明细(回连项目库解析条目号) |
-| Rebuild-Aggregates.ps1 | 在同一事务内由流水全量重算聚合表；`-DryRun` 全程演练后回滚 |
+| Rebuild-Aggregates.ps1 | 在同一事务内由流水全量重算聚合表；`-DryRun` 全程演练后回滚，但同样持有 `BindingLog` 独占锁 |
 | Get-LearningStats.ps1 | 体检报告 |
 
 ## 标准流程
 
-新机器初始化 / 定期整理的安全序列：
+新机器初始化 / 定期整理的安全序列如下。`-DryRun` 不是普通只读检查：它与正式执行一样获取
+`BindingLog` 的 `TABLOCKX` 独占锁，在事务内执行 `TRUNCATE` 和批量写入，最后才回滚；两者都必须放在冻结绑定写入的维护窗口内。
 
     pwsh -File Initialize-RecoLearning.ps1
     pwsh -File Import-JsonlLibraries.ps1
@@ -35,6 +38,8 @@
     # 核对演练统计后，维护窗口内再正式执行：
     pwsh -File Rebuild-Aggregates.ps1
     pwsh -File Get-LearningStats.ps1
+
+执行前后都应记录 `SELECT ISNULL(MAX(id),0) FROM dbo.BindingLog`。只有水位一致时才比较演练与正式重算的聚合行数；期间若有新流水，两次行数不保证相同。
 
 旧 `mapping-boxes.jsonl` / `learning.jsonl` 仅在确认尚未双写时迁移一次：
 

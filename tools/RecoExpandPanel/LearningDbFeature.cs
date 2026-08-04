@@ -1035,7 +1035,7 @@ namespace RecoNet
             {
                 string method = NormalizeLearningDbMethod(group.Method);
                 string entryName = TrimLearningText(group.EntryName, 500);
-                if (entryCode.Length >= 2)
+                if (IsSmartClassifiedEntryCode(entryCode))
                 {
                     using (SqlCommand cmd = conn.CreateCommand())
                     {

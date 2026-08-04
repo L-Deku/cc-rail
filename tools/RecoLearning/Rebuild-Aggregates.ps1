@@ -2,10 +2,16 @@
 # 由 BindingLog 流水全量重算推荐核心、公式、条目和模板聚合表。
 # 可随时重跑;这是"定期整理"的入口。
 # 聚合规则:同一 group_key 的多目标构成一个定额组样本;
-#   weight = max(0, min(100, 10*accepted + 20*corrected - 10*rejected));
+#   weight = max(0, 10*accepted + 20*corrected - 10*rejected);
 #   box_id 优先沿用 mapping-boxes 原始编号(extra.box_id),否则 auto- + 目标集合哈希前 16 位。
 param([switch]$DryRun)
 . "$PSScriptRoot\Common.ps1"
+
+function Test-ClassifiedEntryCode {
+  param([string]$EntryCode)
+  $code = ([string]$EntryCode).Trim()
+  return $code -match '^\d{2}[\d-]*$'
+}
 
 $rebuildConnection = New-Object System.Data.SqlClient.SqlConnection (Get-RecoConnectionString)
 $rebuildTransaction = $null
@@ -293,7 +299,7 @@ Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $re
 $tmpl = @{}
 foreach ($g in $aggregateGroups) {
   if (-not (Test-PositiveLearningEvidence ([string]$g.Extra))) { continue }
-  if ($g.EntryCode -eq '' -or $g.EntryCode.Length -lt 2) { continue }
+  if (-not (Test-ClassifiedEntryCode $g.EntryCode)) { continue }
   $prefix = $g.EntryCode.Substring(0, 2)
   $boxId = $boxes[$g.SetHash].Id
   $key = $g.Method + "`n" + $prefix + "`n" + $g.EntryCode + "`n" + $boxId

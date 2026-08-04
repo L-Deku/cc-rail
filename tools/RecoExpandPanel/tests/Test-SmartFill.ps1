@@ -76,14 +76,39 @@ $candidateType = $panelType.GetNestedType('SmartMapCandidateScore', [System.Refl
 $entryType = $panelType.GetNestedType('SmartMapEntry', [System.Reflection.BindingFlags]'Public,NonPublic')
 $targetType = $panelType.GetNestedType('SmartBoxTarget', [System.Reflection.BindingFlags]'Public,NonPublic')
 $canAutoSelect = $panelType.GetMethod('CanAutoSelectSmartMapEntry', $allFlags)
+$isClassifiedEntryCode = $panelType.GetMethod('IsSmartClassifiedEntryCode', $allFlags)
 $applyPending = $panelType.GetMethod('ApplyPendingLocalSmartMapEntry', $allFlags)
 $orderCandidates = $panelType.GetMethod('OrderSmartMapCandidateScores', $allFlags)
 if ($null -eq $candidateType -or $null -eq $entryType -or $null -eq $targetType -or $null -eq $canAutoSelect -or
+    $null -eq $isClassifiedEntryCode -or
     $null -eq $applyPending -or $null -eq $orderCandidates) {
     throw '缺少跨专业同名冲突判定入口'
 }
 if ($null -ne $candidateType.GetField('PendingLocal', $allFlags)) {
     throw 'PendingLocal 不应在 SmartMapCandidateScore 重复存储'
+}
+$classifiedCases = @{
+    '12-01' = $true
+    'SF' = $false
+    'XGT1' = $false
+    '12A' = $false
+}
+foreach ($case in $classifiedCases.GetEnumerator()) {
+    $caseArgs = New-Object 'object[]' 1
+    $caseArgs[0] = [string]$case.Key
+    if ([bool]$isClassifiedEntryCode.Invoke($null, $caseArgs) -ne [bool]$case.Value) {
+        throw "C# 条目分类过滤错误：$($case.Key)"
+    }
+}
+$rebuildFilter = [regex]::Match($rebuildAggregates, '(?ms)^function Test-ClassifiedEntryCode\s*\{.*?^\}')
+if (-not $rebuildFilter.Success -or $learningDb -notmatch 'if \(IsSmartClassifiedEntryCode\(entryCode\)\)') {
+    throw '增量写入与全量重算未同时接入条目分类过滤'
+}
+. ([ScriptBlock]::Create($rebuildFilter.Value))
+foreach ($case in $classifiedCases.GetEnumerator()) {
+    if ([bool](Test-ClassifiedEntryCode ([string]$case.Key)) -ne [bool]$case.Value) {
+        throw "重算脚本条目分类过滤错误：$($case.Key)"
+    }
 }
 function New-SmartCandidate([int]$Weight, [bool]$PendingLocal = $false) {
     $entry = [Activator]::CreateInstance($entryType, $true).PSObject.BaseObject
