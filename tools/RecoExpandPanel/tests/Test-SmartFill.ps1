@@ -58,4 +58,37 @@ $arguments[1] = '精确签名命中'
 $arguments[2] = $null
 $scores = $scoreMethod.Invoke($null, $arguments)
 if ($null -eq $scores -or $scores.Count -ne 0) { throw '精确签名命中后仍进入了模糊打分路径' }
+
+$globalExactPosition = $smart.IndexOf('"名称学习命中，全库兜底"', [StringComparison]::Ordinal)
+$fuzzyPosition = $smart.IndexOf('BuildSmartFuzzyScoresIfUnmatched(matched', [StringComparison]::Ordinal)
+if ($globalExactPosition -lt 0 -or $fuzzyPosition -lt 0 -or $globalExactPosition -gt $fuzzyPosition) {
+    throw '全库精确命中未优先于模糊打分'
+}
+
+$allFlags = [System.Reflection.BindingFlags]'Public,NonPublic,Static,Instance'
+$candidateType = $panelType.GetNestedType('SmartMapCandidateScore', [System.Reflection.BindingFlags]'Public,NonPublic')
+$entryType = $panelType.GetNestedType('SmartMapEntry', [System.Reflection.BindingFlags]'Public,NonPublic')
+$canAutoSelect = $panelType.GetMethod('CanAutoSelectSmartMapEntry', $allFlags)
+if ($null -eq $candidateType -or $null -eq $entryType -or $null -eq $canAutoSelect) {
+    throw '缺少跨专业同名冲突判定入口'
+}
+function New-SmartCandidate([int]$Weight) {
+    $entry = [Activator]::CreateInstance($entryType, $true).PSObject.BaseObject
+    $entryType.GetField('Weight', $allFlags).SetValue($entry, $Weight)
+    $candidate = [Activator]::CreateInstance($candidateType, $true).PSObject.BaseObject
+    $candidateType.GetField('Entry', $allFlags).SetValue($candidate, $entry)
+    foreach ($fieldName in @('HasEntry', 'HasCurrentContext', 'HasCurrentMethodMapping', 'CurrentTargetsValid')) {
+        $candidateType.GetField($fieldName, $allFlags).SetValue($candidate, $true)
+    }
+    return $candidate
+}
+$candidateListType = [System.Collections.Generic.List``1].MakeGenericType($candidateType)
+$candidates = [Activator]::CreateInstance($candidateListType).PSObject.BaseObject
+[void]$candidates.Add((New-SmartCandidate 20))
+[void]$candidates.Add((New-SmartCandidate 20))
+$canAutoArgs = New-Object 'object[]' 1
+$canAutoArgs[0] = $candidates
+if ([bool]$canAutoSelect.Invoke($null, $canAutoArgs)) {
+    throw '跨专业同名的同权重候选不应自动勾选'
+}
 Write-Host 'Test-SmartFill: PASS'

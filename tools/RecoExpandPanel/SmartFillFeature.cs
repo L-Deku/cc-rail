@@ -577,9 +577,7 @@ namespace RecoNet
                     {
                         cmd.CommandTimeout = 15;
                         cmd.CommandText =
-                            "SELECT e.box_id,e.entry_code,ISNULL(c.entry_name,'') " +
-                            "FROM dbo.EngineeringTemplate e LEFT JOIN dbo.ChapterEntry c ON c.method=e.method AND c.entry_code=e.entry_code " +
-                            "WHERE e.method=@scope_method";
+                            "SELECT box_id,entry_code FROM dbo.EngineeringTemplate WHERE method=@scope_method";
                         cmd.Parameters.AddWithValue("@scope_method", snapshot.Method ?? "");
                         using (SqlDataReader reader = cmd.ExecuteReader())
                         {
@@ -595,8 +593,6 @@ namespace RecoNet
                                     snapshot.ScopeEntriesByBox[boxId] = codes;
                                 }
                                 if (entryCode.Length > 0) codes.Add(entryCode);
-                                if (entryCode.Length > 0 && !snapshot.LearningEntryNameByCode.ContainsKey(entryCode))
-                                    snapshot.LearningEntryNameByCode[entryCode] = reader.IsDBNull(2) ? "" : reader.GetString(2).Trim();
                             }
                         }
                     }
@@ -674,8 +670,9 @@ namespace RecoNet
                         {
                             cmd.CommandTimeout = 15;
                             cmd.CommandText =
-                                "SELECT quota_code, entry_code, entry_name, project_count FROM dbo.EntryQuota " +
-                                "WHERE method = @method AND target_kind = 'quota'";
+                                "SELECT quota_code, entry_code, entry_name, project_count FROM dbo.EntryQuota q " +
+                                "WHERE q.method = @method AND q.target_kind = 'quota' AND EXISTS " +
+                                "(SELECT 1 FROM dbo.QuotaBoxTarget t WHERE t.target_code = q.quota_code AND t.target_kind = 'quota')";
                             cmd.Parameters.AddWithValue("@method", snapshot.Method);
                             using (SqlDataReader reader = cmd.ExecuteReader())
                             {
@@ -1350,8 +1347,12 @@ namespace RecoNet
             if (scope == null || String.Equals(scope.Kind, "All", StringComparison.OrdinalIgnoreCase)) return source;
             return source.Where(entry =>
             {
-                HashSet<string> codes = null;
-                bool hasCodes = snapshot != null && snapshot.ScopeEntriesByBox.TryGetValue(entry.BoxId ?? "", out codes) && codes.Count > 0;
+                HashSet<string> scopeCodes;
+                HashSet<string> merged = snapshot != null &&
+                    snapshot.ScopeEntriesByBox.TryGetValue(entry.BoxId ?? "", out scopeCodes)
+                    ? new HashSet<string>(scopeCodes, StringComparer.OrdinalIgnoreCase)
+                    : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                bool hasPersistedScope = merged.Count > 0;
                 if (entry.LocalContextKeys != null)
                 {
                     foreach (string key in entry.LocalContextKeys)
@@ -1362,13 +1363,11 @@ namespace RecoNet
                             StringComparison.OrdinalIgnoreCase)) continue;
                         string code = separator >= 0 ? key.Substring(separator + 1) : "";
                         if (!IsSmartClassifiedEntryCode(code)) continue;
-                        if (codes == null) codes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                        codes.Add(code);
-                        hasCodes = true;
+                        merged.Add(code);
                     }
                 }
-                if (String.Equals(scope.Kind, "Unclassified", StringComparison.OrdinalIgnoreCase)) return !hasCodes;
-                return hasCodes && codes.Any(code => SmartEntryCodeMatchesScope(code, scope));
+                if (String.Equals(scope.Kind, "Unclassified", StringComparison.OrdinalIgnoreCase)) return !hasPersistedScope;
+                return merged.Any(code => SmartEntryCodeMatchesScope(code, scope));
             }).ToList();
         }
 
@@ -1881,19 +1880,8 @@ namespace RecoNet
                     }
                 }
 
-                // 模糊层:只有精确/同名都未命中时才打分,取最高的至多 3 个名称段供人工确认。
-                List<KeyValuePair<int, string>> scored = BuildSmartFuzzyScoresIfUnmatched(matched, nameSig, snapshot.NameFeatures);
-                List<NameQuotaCandidateGroup> fuzzyCandidates = new List<NameQuotaCandidateGroup>();
-                string fuzzySourceNote = "";
-                if (!matched)
+                if (!matched && scoped)
                 {
-                    fuzzyCandidates = BuildSmartFuzzyCandidateGroups(scored, selectedScope, scopedSource, snapshot,
-                        nameLevelSig, preferredPrefixes, projectEntries, currentQuotaByCode, row, targetRows);
-                    if (fuzzyCandidates.Count > 0) fuzzySourceNote = scopedSource;
-                }
-                if (!matched && fuzzyCandidates.Count == 0 && scoped)
-                {
-                    SmartLearningScope allScope = SmartLearningScope.CreateAll();
                     if (exactHits != null && exactHits.Count > 0)
                     {
                         matched = AppendRankedSmartMatch(items, row, targetRows, exactHits, snapshot, projectEntries, currentQuotaByCode,
@@ -1906,12 +1894,24 @@ namespace RecoNet
                             "名称兼容命中，全库兜底", nameLevelSig, preferredPrefixes, prefixVotes);
                         if (matched) hitNameOnly++;
                     }
-                    if (!matched)
-                    {
-                        fuzzyCandidates = BuildSmartFuzzyCandidateGroups(scored, allScope, "全库兜底", snapshot,
-                            nameLevelSig, preferredPrefixes, projectEntries, currentQuotaByCode, row, targetRows);
-                        if (fuzzyCandidates.Count > 0) fuzzySourceNote = "全库兜底";
-                    }
+                }
+
+                // 模糊层:只有范围内/全库的精确和同名都未命中时才打分。
+                List<KeyValuePair<int, string>> scored = BuildSmartFuzzyScoresIfUnmatched(matched, nameSig, snapshot.NameFeatures);
+                List<NameQuotaCandidateGroup> fuzzyCandidates = new List<NameQuotaCandidateGroup>();
+                string fuzzySourceNote = "";
+                if (!matched)
+                {
+                    fuzzyCandidates = BuildSmartFuzzyCandidateGroups(scored, selectedScope, scopedSource, snapshot,
+                        nameLevelSig, preferredPrefixes, projectEntries, currentQuotaByCode, row, targetRows);
+                    if (fuzzyCandidates.Count > 0) fuzzySourceNote = scopedSource;
+                }
+                if (!matched && fuzzyCandidates.Count == 0 && scoped)
+                {
+                    SmartLearningScope allScope = SmartLearningScope.CreateAll();
+                    fuzzyCandidates = BuildSmartFuzzyCandidateGroups(scored, allScope, "全库兜底", snapshot,
+                        nameLevelSig, preferredPrefixes, projectEntries, currentQuotaByCode, row, targetRows);
+                    if (fuzzyCandidates.Count > 0) fuzzySourceNote = "全库兜底";
                 }
                 if (matched) continue;
 
