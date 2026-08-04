@@ -186,9 +186,70 @@ if ($matches.Count -ne 1 -or $matches[0].Targets.Count -ne 1 -or $matches[0].Tar
 }
 Write-Host 'PASS local learning applies correction and rejection deltas'
 
+$collectAccepted = $type.GetMethod('CollectFullyWrittenNameDrivenGroups', $flags)
+$shouldRecordLocal = $type.GetMethod('ShouldRecordAcceptedFillGroupLocally', $flags)
+$shouldRetryRemote = $type.GetMethod('ShouldRetryAcceptedFillGroupRemotely', $flags)
+$buildAccepted = $type.GetMethod('BuildTemplateRightClickFeedbackGroup', $flags)
+if ($null -eq $collectAccepted -or $null -eq $shouldRecordLocal -or
+    $null -eq $shouldRetryRemote -or $null -eq $buildAccepted) {
+    throw 'Accepted apply learning behavior entry points are missing.'
+}
+$acceptedItems = [Activator]::CreateInstance($itemListType)
+foreach ($code in @('Q-1', 'Q-2', 'Q-3')) {
+    $acceptedItems.Add((New-PreviewItem 'Mud transport accepted' $code '0101' 'm3' 20))
+}
+$writtenSetType = [Collections.Generic.HashSet``1].MakeGenericType($itemType)
+$writtenItems = [Activator]::CreateInstance($writtenSetType)
+[void]$writtenItems.Add($acceptedItems[0])
+[void]$writtenItems.Add($acceptedItems[1])
+$collectArgs = [object[]]::new(2)
+$collectArgs[0] = $acceptedItems.PSObject.BaseObject
+$collectArgs[1] = $writtenItems.PSObject.BaseObject
+$partialGroups = $collectAccepted.Invoke($null, $collectArgs)
+if ($partialGroups.Count -ne 0) { throw 'A three-target group with only two successful writes produced accepted feedback.' }
+[void]$writtenItems.Add($acceptedItems[2])
+$fullGroups = $collectAccepted.Invoke($null, $collectArgs)
+if ($fullGroups.Count -ne 1 -or $fullGroups[0].Count -ne 3) {
+    throw 'A fully written three-target group did not produce exactly one accepted group.'
+}
+$buildArgs = [object[]]::new(8)
+$buildArgs[0] = $fullGroups[0]
+$buildArgs[1] = 'accepted.xlsx'
+$buildArgs[2] = 'Sheet1'
+$buildArgs[3] = $null
+$buildArgs[4] = 1
+$buildArgs[5] = 0
+$buildArgs[6] = 0
+$buildArgs[7] = 'accepted'
+$acceptedFeedback = $buildAccepted.Invoke($null, $buildArgs)
+if ($null -eq $acceptedFeedback -or $acceptedFeedback.AcceptedCount -ne 1 -or
+    $acceptedFeedback.Targets.Count -ne 3 -or $acceptedFeedback.Workbook -ne 'accepted.xlsx') {
+    throw 'A fully written group did not build one complete accepted mapping group.'
+}
+$anchorItem = New-PreviewItem 'Column anchor' 'Q-A' '0101' 'm3' 21
+$anchorItem.IsNameDriven = $false
+$anchorItems = [Activator]::CreateInstance($itemListType)
+[void]$anchorItems.Add($anchorItem)
+$anchorWritten = [Activator]::CreateInstance($writtenSetType)
+[void]$anchorWritten.Add($anchorItem)
+$anchorArgs = [object[]]::new(2)
+$anchorArgs[0] = $anchorItems.PSObject.BaseObject
+$anchorArgs[1] = $anchorWritten.PSObject.BaseObject
+if ($collectAccepted.Invoke($null, $anchorArgs).Count -ne 0) { throw 'Column-anchor apply produced accepted feedback.' }
+
+$gateArgs = [object[]]::new(1)
+$gateArgs[0] = $fullGroups[0]
+if (-not [bool]$shouldRecordLocal.Invoke($null, $gateArgs)) { throw 'Fresh accepted group did not request local feedback.' }
+foreach ($item in $acceptedItems) { $item.LocalFeedbackRecorded = $true; $item.RemoteFeedbackDurable = $false }
+if ([bool]$shouldRecordLocal.Invoke($null, $gateArgs)) { throw 'Repeated apply would add a second local vote after remote failure.' }
+if (-not [bool]$shouldRetryRemote.Invoke($null, $gateArgs)) { throw 'Remote-only retry was not preserved after local feedback.' }
+foreach ($item in $acceptedItems) { $item.RemoteFeedbackDurable = $true }
+if ([bool]$shouldRetryRemote.Invoke($null, $gateArgs)) { throw 'Durable accepted feedback was scheduled for another remote retry.' }
+Write-Host 'PASS accepted apply learns only complete name-driven groups and keeps local/remote idempotence separate'
+
 $applySource = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\TemplateFillFeature.cs') -Raw
-if ($applySource -match 'FeedbackNameMatches\s*\(') {
-    throw 'Direct template apply still calls learning feedback.'
+if ($applySource -notmatch 'apply-accept' -or $applySource -notmatch 'CollectFullyWrittenNameDrivenGroups') {
+    throw 'Direct apply is missing complete-group accepted feedback.'
 }
 $excelLinkSource = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\ExcelLinkFeature.cs') -Raw
 if ($excelLinkSource -notmatch 'template-right-click') { throw 'Right-click learning source marker is missing.' }
@@ -197,5 +258,5 @@ foreach ($required in @('accepted_count=accepted_count+@accepted', 'corrected_co
     'rejected_count=rejected_count+@rejected')) {
     if ($learningSource -notlike "*$required*") { throw "SQL learning delta is missing: $required" }
 }
-Write-Host 'PASS direct apply has no learning side effect and SQL deltas are explicit'
+Write-Host 'PASS direct apply records complete-group accepted feedback and SQL deltas are explicit'
 Write-Host 'ALL PASS'

@@ -1483,7 +1483,7 @@ namespace RecoNet
         {
             List<MappingFeedbackGroup> mappingGroups = new List<MappingFeedbackGroup>();
             foreach (IGrouping<int, FillPreviewItem> group in (written ?? new List<FillPreviewItem>())
-                .Where(item => item != null && item.IsNameDriven && !item.MappingFeedbackRecorded &&
+                .Where(item => item != null && item.IsNameDriven && !item.LocalFeedbackRecorded &&
                     !String.IsNullOrWhiteSpace(item.QuotaCode))
                 .GroupBy(item => item.TargetRow))
             {
@@ -1522,10 +1522,13 @@ namespace RecoNet
 
             RecordNameMatchesToMappingStore(mappingGroups);
             bool learningDurable = ConsumeLearningDbDurableResult(mappingGroups);
-            foreach (FillPreviewItem item in (written ?? new List<FillPreviewItem>())
-                .Where(item => item != null && item.IsNameDriven && learningDurable))
+            foreach (FillPreviewItem item in mappingGroups.Count == 0
+                ? Enumerable.Empty<FillPreviewItem>()
+                : (written ?? new List<FillPreviewItem>())
+                    .Where(item => item != null && item.IsNameDriven && !item.LocalFeedbackRecorded))
             {
-                item.MappingFeedbackRecorded = true;
+                item.LocalFeedbackRecorded = true;
+                item.RemoteFeedbackDurable = learningDurable;
             }
         }
     }

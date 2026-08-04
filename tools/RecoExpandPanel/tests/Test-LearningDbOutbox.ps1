@@ -102,6 +102,26 @@ try {
     $replay = $panelType.GetMethod('ReplayPendingLearningDbEvents', $allFlags)
     $pendingKeysMethod = $panelType.GetMethod('LoadPendingLearningMappingKeys', $allFlags)
     $consume = $panelType.GetMethod('ConsumeLearningDbDurableResult', $allFlags)
+    $openCircuit = $panelType.GetMethod('OpenLearningDbCircuit', $allFlags)
+    $clearCircuit = $panelType.GetMethod('ClearLearningDbCircuit', $allFlags)
+    $isCircuitOpen = $panelType.GetMethod('IsLearningDbCircuitOpen', $allFlags)
+    $isCircuitSqlNumber = $panelType.GetMethod('IsLearningDbCircuitBreakingSqlErrorNumber', $allFlags)
+    $connectionAttemptsField = $panelType.GetField('learningDbConnectionOpenAttempts', $allFlags)
+    $retrySleepsField = $panelType.GetField('learningDbRetrySleepCount', $allFlags)
+    if ($null -eq $openCircuit -or $null -eq $clearCircuit -or $null -eq $isCircuitOpen -or
+        $null -eq $isCircuitSqlNumber -or $null -eq $connectionAttemptsField -or $null -eq $retrySleepsField) {
+        throw 'Learning DB circuit breaker behavior entry points are missing'
+    }
+    foreach ($number in @(-2, 53, 121, 258, 10053, 10054, 10060, 10061, 10065, 11001)) {
+        $numberArgs = New-Object 'object[]' 1
+        $numberArgs[0] = $number
+        if (-not [bool]$isCircuitSqlNumber.Invoke($null, $numberArgs)) { throw "Network SQL error did not open circuit: $number" }
+    }
+    foreach ($number in @(1205, 2601, 2627)) {
+        $numberArgs = New-Object 'object[]' 1
+        $numberArgs[0] = $number
+        if ([bool]$isCircuitSqlNumber.Invoke($null, $numberArgs)) { throw "Non-network SQL error incorrectly opened circuit: $number" }
+    }
 
     $connectionField.SetValue($null, 'Server=127.0.0.1,1;Database=NoDb;User ID=x;Password=x;Connect Timeout=1')
     $groupType.GetField('Method', $allFlags).SetValue($group, '')
@@ -111,11 +131,30 @@ try {
     if ([bool]$consume.Invoke($null, $blankConsumeArgs)) { throw 'Blank method binding must not confirm MappingFeedbackRecorded' }
     $outboxPath = Join-Path $testRoot 'RecoQuotaData\learning-db-outbox.jsonl'
     if (Test-Path -LiteralPath $outboxPath) { throw 'Blank method binding entered the active outbox' }
-
-    $groupType.GetField('Method', $allFlags).SetValue($group, '2024')
-    if (-not [bool]$record.Invoke($null, $invokeArgs)) { throw 'SQL failure was not durably queued to the local outbox' }
     $consumeArgs = New-Object 'object[]' 1
     $consumeArgs[0] = $groups
+
+    $groupType.GetField('Method', $allFlags).SetValue($group, '2024')
+    $connectionAttemptsField.SetValue($null, [long]0)
+    $retrySleepsField.SetValue($null, [long]0)
+    [void]$openCircuit.Invoke($null, $null)
+    if (-not [bool]$isCircuitOpen.Invoke($null, $null)) { throw 'Learning DB circuit did not open' }
+    $circuitFirst = [bool]$record.Invoke($null, $invokeArgs)
+    [void]$consume.Invoke($null, $consumeArgs)
+    $circuitSecond = [bool]$record.Invoke($null, $invokeArgs)
+    [void]$consume.Invoke($null, $consumeArgs)
+    if (-not $circuitFirst -or -not $circuitSecond) { throw 'Circuit-open writes were not durably queued' }
+    if ([long]$connectionAttemptsField.GetValue($null) -ne 0 -or [long]$retrySleepsField.GetValue($null) -ne 0) {
+        throw 'Circuit-open write attempted a connection or retry sleep'
+    }
+    $circuitLines = [System.IO.File]::ReadAllLines($outboxPath, [System.Text.Encoding]::UTF8)
+    if ($circuitLines.Count -ne 2 -or $circuitLines[0] -eq $circuitLines[1]) {
+        throw 'Circuit-open replay did not retain the head batch while appending a new batch'
+    }
+    [void]$clearCircuit.Invoke($null, $null)
+    [System.IO.File]::Delete($outboxPath)
+
+    if (-not [bool]$record.Invoke($null, $invokeArgs)) { throw 'SQL failure was not durably queued to the local outbox' }
     if (-not [bool]$consume.Invoke($null, $consumeArgs)) { throw 'Durable outbox result did not allow MappingFeedbackRecorded confirmation' }
     if ([bool]$consume.Invoke($null, $consumeArgs)) { throw 'Durable result must be consumed only once' }
 
@@ -146,6 +185,7 @@ try {
         $poisonLine -like '*"g0_method":"2024"*') { throw 'Failed to prepare a deterministic poison outbox batch' }
     [System.IO.File]::WriteAllLines($outboxPath, [string[]]@($poisonLine, $savedLine), (New-Object System.Text.UTF8Encoding($false)))
 
+    [void]$clearCircuit.Invoke($null, $null)
     $connectionField.SetValue($null, $connectionString)
     [void]$replay.Invoke($null, $null)
     if ((Get-Content -LiteralPath $outboxPath -ErrorAction SilentlyContinue | Measure-Object -Line).Lines -ne 0) { throw 'Committed outbox batch was not cleared' }

@@ -389,8 +389,14 @@ namespace RecoNet
         private static List<SmartLearningScope> LoadSmartLearningScopes(Form mainForm)
         {
             List<SmartLearningScope> result = new List<SmartLearningScope> { SmartLearningScope.CreateAll() };
+            if (IsLearningDbCircuitOpen())
+            {
+                result.Add(new SmartLearningScope { Kind = "Unclassified", EntryCode = "", DisplayName = "未归类" });
+                return result;
+            }
             string method = "";
             Dictionary<string, string> projectNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            bool learningDbAccessStarted = false;
             try
             {
                 using (SqlConnection projectConn = AgentCreateWorkConnection(mainForm))
@@ -398,6 +404,7 @@ namespace RecoNet
                     method = SmartResolveProjectMethod(projectConn);
                     Dictionary<string, long> ignored = LoadSmartProjectEntries(projectConn, out projectNames);
                 }
+                learningDbAccessStarted = true;
                 using (SqlConnection conn = new SqlConnection(GetLearningDbConnectionString()))
                 {
                     conn.Open();
@@ -445,6 +452,7 @@ namespace RecoNet
             }
             catch (Exception ex)
             {
+                if (learningDbAccessStarted) ObserveLearningDbFailure(ex);
                 Log("Smart fill load learning scopes failed: " + ex.Message);
                 if (!result.Any(scope => String.Equals(scope.Kind, "Unclassified", StringComparison.OrdinalIgnoreCase)))
                     result.Add(new SmartLearningScope { Kind = "Unclassified", EntryCode = "", DisplayName = "未归类" });
@@ -488,6 +496,7 @@ namespace RecoNet
             }
             try
             {
+                if (IsLearningDbCircuitOpen()) throw new InvalidOperationException("学习库熔断中");
                 string connectionString = GetLearningDbConnectionString();
                 if (String.IsNullOrEmpty(connectionString)) throw new InvalidOperationException("学习库连接串为空");
                 using (SqlConnection conn = new SqlConnection(connectionString))
@@ -806,10 +815,12 @@ namespace RecoNet
                     snapshot.NameFeatures.Add(new KeyValuePair<string, MatchTextFeatures>(nameSeg, BuildMatchTextFeatures(nameSeg)));
                 }
                 snapshot.FromSql = true;
+                ClearLearningDbCircuit();
                 return snapshot;
             }
             catch (Exception ex)
             {
+                ObserveLearningDbFailure(ex);
                 Log("Smart fill SQL snapshot failed, fallback to jsonl: " + ex.Message);
             }
 

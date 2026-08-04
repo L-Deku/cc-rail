@@ -5,6 +5,7 @@ using System.Data.SqlClient;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -19,8 +20,12 @@ namespace RecoNet
         private const string LearningDbOutboxFileName = "learning-db-outbox.jsonl";
         private const string LearningDbDeadLetterFileName = "learning-db-outbox.dead-letter.jsonl";
         private const string LearningDbOutboxMutexName = "RecoQuotaData.learning-db-outbox.lock";
+        private const long LearningDbCircuitWindowTicks = TimeSpan.TicksPerSecond * 60;
 
         private static string learningDbConnectionString;
+        private static long learningDbCircuitOpenUntilTicks;
+        private static long learningDbConnectionOpenAttempts;
+        private static long learningDbRetrySleepCount;
         [ThreadStatic]
         private static List<MappingFeedbackGroup> lastLearningDbResultGroups;
         [ThreadStatic]
@@ -38,6 +43,42 @@ namespace RecoNet
             Succeeded,
             RetryableFailure,
             PermanentFailure
+        }
+
+        private static bool IsLearningDbCircuitOpen()
+        {
+            return Interlocked.Read(ref learningDbCircuitOpenUntilTicks) > DateTime.UtcNow.Ticks;
+        }
+
+        private static void OpenLearningDbCircuit()
+        {
+            Interlocked.Exchange(ref learningDbCircuitOpenUntilTicks, DateTime.UtcNow.Ticks + LearningDbCircuitWindowTicks);
+        }
+
+        private static void ClearLearningDbCircuit()
+        {
+            Interlocked.Exchange(ref learningDbCircuitOpenUntilTicks, 0L);
+        }
+
+        private static bool IsLearningDbCircuitBreakingSqlErrorNumber(int number)
+        {
+            return number == -2 || number == 53 || number == 121 || number == 258 ||
+                number == 10053 || number == 10054 || number == 10060 || number == 10061 ||
+                number == 10065 || number == 11001;
+        }
+
+        private static bool IsLearningDbCircuitBreakingException(Exception ex)
+        {
+            if (ex == null) return false;
+            SqlException sql = ex as SqlException;
+            if (sql != null) return sql.Errors.Cast<SqlError>().Any(error => IsLearningDbCircuitBreakingSqlErrorNumber(error.Number));
+            if (ex is TimeoutException || ex is IOException || ex is SocketException) return true;
+            return ex.InnerException != null && IsLearningDbCircuitBreakingException(ex.InnerException);
+        }
+
+        private static void ObserveLearningDbFailure(Exception ex)
+        {
+            if (IsLearningDbCircuitBreakingException(ex)) OpenLearningDbCircuit();
         }
 
         // RecoLearning 是多人共享主学习库：流水与推荐核心聚合在同一事务提交；
@@ -115,6 +156,7 @@ namespace RecoNet
 
             using (SqlConnection conn = new SqlConnection(connectionString))
             {
+                Interlocked.Increment(ref learningDbConnectionOpenAttempts);
                 conn.Open();
                 using (SqlTransaction transaction = conn.BeginTransaction())
                 {
@@ -212,6 +254,11 @@ namespace RecoNet
                 Log("Learning DB batch " + (batch.BatchId ?? "") + " is permanently invalid: " + failureReason);
                 return LearningDbWriteResult.PermanentFailure;
             }
+            if (IsLearningDbCircuitOpen())
+            {
+                failureReason = "learning_db_circuit_open";
+                return LearningDbWriteResult.RetryableFailure;
+            }
             string connectionString = GetLearningDbConnectionString();
             if (String.IsNullOrEmpty(connectionString))
             {
@@ -233,10 +280,19 @@ namespace RecoNet
                     {
                         return LearningDbWriteResult.Succeeded;
                     }
+                    if (IsLearningDbCircuitBreakingException(ex))
+                    {
+                        OpenLearningDbCircuit();
+                        failureReason = "connection_sql_" + GetLearningDbSqlErrorNumbers(ex);
+                        Log("Learning DB connection failure for batch " + (batch.BatchId ?? "") +
+                            " (SQL " + GetLearningDbSqlErrorNumbers(ex) + "); circuit opened and active outbox replay will retry later.");
+                        return LearningDbWriteResult.RetryableFailure;
+                    }
                     if (attempt == 0 && IsRetryableLearningDbException(ex))
                     {
                         Log("Learning DB transient write failure for batch " + (batch.BatchId ?? "") +
                             "; retrying once (SQL " + GetLearningDbSqlErrorNumbers(ex) + ").");
+                        Interlocked.Increment(ref learningDbRetrySleepCount);
                         Thread.Sleep(100);
                         continue;
                     }
@@ -254,6 +310,14 @@ namespace RecoNet
                 }
                 catch (Exception ex)
                 {
+                    if (IsLearningDbCircuitBreakingException(ex))
+                    {
+                        OpenLearningDbCircuit();
+                        failureReason = "connection_" + ex.GetType().Name;
+                        Log("Learning DB connection failure for batch " + (batch.BatchId ?? "") +
+                            " (" + ex.GetType().Name + "); circuit opened and active outbox replay will retry later.");
+                        return LearningDbWriteResult.RetryableFailure;
+                    }
                     failureReason = "non_retryable_" + ex.GetType().Name;
                     Log("Learning DB non-retryable write failure for batch " + (batch.BatchId ?? "") +
                         " (" + ex.GetType().Name + "); moving it to dead-letter storage.");
@@ -611,6 +675,7 @@ namespace RecoNet
 
         private static bool TryReplayPendingLearningDbEvents()
         {
+            if (IsLearningDbCircuitOpen()) return false;
             List<LearningDbOutboxBatch> batches = LoadLearningDbOutboxBatches();
             foreach (LearningDbOutboxBatch batch in batches.Take(20))
             {
@@ -738,7 +803,8 @@ namespace RecoNet
         private static void RememberLearningDbDurableResult(string source, List<MappingFeedbackGroup> groups, bool durable)
         {
             if (!String.Equals(source ?? "", "template-right-click", StringComparison.OrdinalIgnoreCase) &&
-                !String.Equals(source ?? "", "name-match", StringComparison.OrdinalIgnoreCase)) return;
+                !String.Equals(source ?? "", "name-match", StringComparison.OrdinalIgnoreCase) &&
+                !String.Equals(source ?? "", "apply-accept", StringComparison.OrdinalIgnoreCase)) return;
             lastLearningDbResultGroups = groups;
             lastLearningDbResultDurable = durable;
         }

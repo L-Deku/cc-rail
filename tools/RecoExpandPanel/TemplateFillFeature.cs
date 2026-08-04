@@ -106,7 +106,8 @@ namespace RecoNet
             public long ChosenItemSeq;     // 用户显式选择的放入条目(条目序号)；0=未选(沿用邻居锚点)
             public string ChosenItemNo;    // 对应条目编号(显示/粘贴导航用)
             public bool NeedExactNameConfirmation; // 精确同名已带出定额，但仍需用户确认
-            public bool MappingFeedbackRecorded;   // 右键绑定已即时写入本地/SQL学习关系
+            public bool LocalFeedbackRecorded;     // 当前预览已给本机学习关系加票
+            public bool RemoteFeedbackDurable;     // SQL 已提交或已持久化进 outbox
             public string SelectedNameQuotaCandidateKey;
             public List<NameQuotaCandidateGroup> NameQuotaCandidates;
 
@@ -1029,7 +1030,8 @@ namespace RecoNet
 
         // 写入：把选中预览项对应的源定额行，直接复制到【目标单元】的对应条目（条目序号全局共享，原样保留），
         // 改 总概算序号/顺号/工程数量、丢弃旧 定额序号(新建标识)。不走界面树。
-        private static string ApplyFill(Form mainForm, string targetUnitNo, List<FillPreviewItem> items)
+        private static string ApplyFill(Form mainForm, string targetUnitNo, List<FillPreviewItem> items,
+            string sourceWorkbookName, string sourceWorksheet)
         {
             List<FillPreviewItem> selected = items
                 .Where(i => i.Selected &&
@@ -1055,6 +1057,7 @@ namespace RecoNet
                 Dictionary<long, int> nextShun = new Dictionary<long, int>();
                 HashSet<long> markerInserted = new HashSet<long>();
                 List<FillPreviewItem> libraryItems = new List<FillPreviewItem>();
+                HashSet<FillPreviewItem> writtenNameDrivenItems = new HashSet<FillPreviewItem>();
 
                 using (SqlTransaction transaction = conn.BeginTransaction())
                 {
@@ -1140,6 +1143,7 @@ namespace RecoNet
                                 undo.Rows.Add(new AgentUndoRow { Kind = "I", QuotaSequence = newId });
                                 inserted++;
                                 nextShun[itemSeq] = shun + 1;
+                                if (item.IsNameDriven) writtenNameDrivenItems.Add(item);
                             }
                             else { skipped++; }
                         }
@@ -1177,7 +1181,12 @@ namespace RecoNet
                             if (!String.IsNullOrEmpty(pasteMsg)) msg.Append(pasteMsg);
                             int confirmedAdded = undo.Rows.Skip(undoCountBefore).Count(row => row.Kind == "I");
                             libraryInserted += Math.Min(confirmedAdded, groupItems.Count);
-                            if (!IsInsertGroupFullyConfirmed(groupItems.Count, confirmedAdded))
+                            if (IsInsertGroupFullyConfirmed(groupItems.Count, confirmedAdded))
+                            {
+                                foreach (FillPreviewItem groupItem in groupItems.Where(item => item.IsNameDriven))
+                                    writtenNameDrivenItems.Add(groupItem);
+                            }
+                            else
                             {
                                 skipped += Math.Max(0, groupItems.Count - confirmedAdded);
                             }
@@ -1190,6 +1199,64 @@ namespace RecoNet
                     GetAgentUndoStack(mainForm).Add(undo);
                     GetAgentRedoStack(mainForm).Clear();
                 }
+
+                List<List<FillPreviewItem>> acceptedGroups = CollectFullyWrittenNameDrivenGroups(selected, writtenNameDrivenItems);
+                if (acceptedGroups.Count > 0)
+                {
+                    try
+                    {
+                        List<MappingFeedbackGroup> localGroups = new List<MappingFeedbackGroup>();
+                        List<List<FillPreviewItem>> localPreviewGroups = new List<List<FillPreviewItem>>();
+                        List<MappingFeedbackGroup> remoteRetryGroups = new List<MappingFeedbackGroup>();
+                        List<List<FillPreviewItem>> remoteRetryPreviewGroups = new List<List<FillPreviewItem>>();
+                        foreach (List<FillPreviewItem> acceptedItems in acceptedGroups)
+                        {
+                            bool recordLocal = ShouldRecordAcceptedFillGroupLocally(acceptedItems);
+                            bool retryRemote = ShouldRetryAcceptedFillGroupRemotely(acceptedItems);
+                            if (!recordLocal && !retryRemote) continue;
+                            MappingFeedbackGroup accepted = BuildTemplateRightClickFeedbackGroup(
+                                acceptedItems, sourceWorkbookName, sourceWorksheet, conn, 1, 0, 0, "accepted");
+                            if (accepted == null) continue;
+                            if (recordLocal)
+                            {
+                                localGroups.Add(accepted);
+                                localPreviewGroups.Add(acceptedItems);
+                            }
+                            else
+                            {
+                                remoteRetryGroups.Add(accepted);
+                                remoteRetryPreviewGroups.Add(acceptedItems);
+                            }
+                        }
+                        if (localGroups.Count > 0)
+                        {
+                            RecordMappingGroupsToStore(localGroups, "apply-accept");
+                            bool remoteDurable = ConsumeLearningDbDurableResult(localGroups);
+                            foreach (List<FillPreviewItem> acceptedItems in localPreviewGroups)
+                            {
+                                foreach (FillPreviewItem item in acceptedItems)
+                                {
+                                    item.LocalFeedbackRecorded = true;
+                                    item.RemoteFeedbackDurable = remoteDurable;
+                                }
+                            }
+                        }
+                        if (remoteRetryGroups.Count > 0)
+                        {
+                            bool remoteDurable = RecordBindingEventsToLearningDb("apply-accept", remoteRetryGroups);
+                            ConsumeLearningDbDurableResult(remoteRetryGroups);
+                            if (remoteDurable)
+                            {
+                                foreach (List<FillPreviewItem> acceptedItems in remoteRetryPreviewGroups)
+                                    foreach (FillPreviewItem item in acceptedItems) item.RemoteFeedbackDurable = true;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log("Apply accept feedback failed: " + ex.Message);
+                    }
+                }
                 RefreshCurrentQuotaGrid(mainForm);
 
                 msg.Append("已向单元 ").Append(targetUnitNo).Append(" 追加定额 ")
@@ -1199,6 +1266,29 @@ namespace RecoNet
                 msg.Append("。请在软件点一次“计算”刷新单价/合价与汇总。");
                 return msg.ToString();
             }
+        }
+
+        private static List<List<FillPreviewItem>> CollectFullyWrittenNameDrivenGroups(
+            IEnumerable<FillPreviewItem> selected, HashSet<FillPreviewItem> writtenItems)
+        {
+            HashSet<FillPreviewItem> written = writtenItems ?? new HashSet<FillPreviewItem>();
+            return (selected ?? Enumerable.Empty<FillPreviewItem>())
+                .Where(item => item != null && item.IsNameDriven)
+                .GroupBy(item => item.TargetRow)
+                .Select(group => group.ToList())
+                .Where(group => group.Count > 0 && group.All(written.Contains))
+                .ToList();
+        }
+
+        private static bool ShouldRecordAcceptedFillGroupLocally(List<FillPreviewItem> group)
+        {
+            return group != null && group.Count > 0 && group.All(item => item != null && !item.LocalFeedbackRecorded);
+        }
+
+        private static bool ShouldRetryAcceptedFillGroupRemotely(List<FillPreviewItem> group)
+        {
+            return group != null && group.Count > 0 &&
+                group.All(item => item != null && item.LocalFeedbackRecorded && !item.RemoteFeedbackDurable);
         }
 
         internal static bool IsInsertGroupFullyConfirmed(int expectedCount, int confirmedAdded)
