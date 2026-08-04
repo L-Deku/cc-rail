@@ -1438,6 +1438,22 @@ namespace RecoNet
             return true;
         }
 
+        private static List<KeyValuePair<int, string>> BuildSmartFuzzyScoresIfUnmatched(bool matched, string nameSignature,
+            List<KeyValuePair<string, MatchTextFeatures>> nameFeatures)
+        {
+            List<KeyValuePair<int, string>> scored = new List<KeyValuePair<int, string>>();
+            if (matched) return scored;
+
+            MatchTextFeatures rowFeatures = BuildMatchTextFeatures(nameSignature);
+            foreach (KeyValuePair<string, MatchTextFeatures> pair in nameFeatures)
+            {
+                int score = MatchNameScore(rowFeatures, pair.Value);
+                if (score > 0) scored.Add(new KeyValuePair<int, string>(score, pair.Key));
+            }
+            scored.Sort(delegate(KeyValuePair<int, string> a, KeyValuePair<int, string> b) { return b.Key.CompareTo(a.Key); });
+            return scored;
+        }
+
         private static List<NameQuotaCandidateGroup> BuildSmartFuzzyCandidateGroups(
             IEnumerable<KeyValuePair<int, string>> scored, SmartLearningScope scope, string sourceNote,
             SmartLearningSnapshot snapshot, string signature, HashSet<string> preferredPrefixes,
@@ -1865,16 +1881,8 @@ namespace RecoNet
                     }
                 }
 
-                // 模糊层:取相似度最高的至多 3 个名称段,只作候选供人工确认。
-                MatchTextFeatures rowFeatures = BuildMatchTextFeatures(nameSig);
-                List<KeyValuePair<int, string>> scored = new List<KeyValuePair<int, string>>();
-                foreach (KeyValuePair<string, MatchTextFeatures> pair in snapshot.NameFeatures)
-                {
-                    int score = MatchNameScore(rowFeatures, pair.Value);
-                    if (score > 0) scored.Add(new KeyValuePair<int, string>(score, pair.Key));
-                }
-                scored.Sort(delegate(KeyValuePair<int, string> a, KeyValuePair<int, string> b) { return b.Key.CompareTo(a.Key); });
-
+                // 模糊层:只有精确/同名都未命中时才打分,取最高的至多 3 个名称段供人工确认。
+                List<KeyValuePair<int, string>> scored = BuildSmartFuzzyScoresIfUnmatched(matched, nameSig, snapshot.NameFeatures);
                 List<NameQuotaCandidateGroup> fuzzyCandidates = new List<NameQuotaCandidateGroup>();
                 string fuzzySourceNote = "";
                 if (!matched)

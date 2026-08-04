@@ -1,4 +1,4 @@
-# tools/RecoLearning/Initialize-RecoLearning.ps1
+﻿# tools/RecoLearning/Initialize-RecoLearning.ps1
 # 建库+建表,幂等可重跑。
 . "$PSScriptRoot\Common.ps1"
 

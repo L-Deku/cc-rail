@@ -8,6 +8,17 @@ $panel = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\Te
 $excelLink = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\ExcelLinkFeature.cs') -Raw
 $quotaPanel = Get-Content -LiteralPath (Join-Path $repoRoot 'RecoQuotaRecommend\QuotaRecommendPanel.cs') -Raw
 $oldDialog = Get-Content -LiteralPath (Join-Path $repoRoot 'RecoQuotaRecommend\RecommendDialog.cs') -Raw
+$dll = if (-not [String]::IsNullOrWhiteSpace($env:RECO_EXPAND_DLL)) {
+    $env:RECO_EXPAND_DLL
+} else {
+    Join-Path $repoRoot 'RecoQuotaRecommend\bin\RecoExpandPanel.dll'
+}
+if (-not (Test-Path -LiteralPath $dll)) { throw "Missing DLL: $dll" }
+$dllDir = Split-Path -Parent $dll
+foreach ($dependency in @('NPOI.dll', 'NPOI.OpenXmlFormats.dll', 'NPOI.OpenXml4Net.dll', 'NPOI.OOXML.dll', 'ICSharpCode.SharpZipLib.dll')) {
+    $dependencyPath = Join-Path $dllDir $dependency
+    if (Test-Path -LiteralPath $dependencyPath) { [void][System.Reflection.Assembly]::LoadFrom($dependencyPath) }
+}
 
 if ($smart -notmatch 'BuildPreview_SmartFill') { throw '缺少 BuildPreview_SmartFill' }
 if ($smart -notmatch 'LoadSmartLearningSnapshot') { throw '缺少学习库快照加载 LoadSmartLearningSnapshot' }
@@ -36,4 +47,15 @@ if ($excelLink -notmatch '"推荐定额"') { throw '缺少推荐定额菜单入�
 if ($excelLink -match '打开智能铺量面板') { throw '旧菜单名"打开智能铺量面板"未清除' }
 if ($quotaPanel -match 'ShowRecommendDialog') { throw '老推荐定额窗口入口未删除' }
 if ($oldDialog -match ': Form') { throw '老推荐定额窗口类未删除(仍继承 Form)' }
+
+$panelType = [System.Reflection.Assembly]::LoadFrom($dll).GetType('RecoNet.FormPanel', $true)
+$flags = [System.Reflection.BindingFlags]'Public,NonPublic,Static'
+$scoreMethod = $panelType.GetMethod('BuildSmartFuzzyScoresIfUnmatched', $flags)
+if ($null -eq $scoreMethod) { throw '缺少可行为验证的模糊打分延后入口' }
+$arguments = New-Object 'object[]' 3
+$arguments[0] = $true
+$arguments[1] = '精确签名命中'
+$arguments[2] = $null
+$scores = $scoreMethod.Invoke($null, $arguments)
+if ($null -eq $scores -or $scores.Count -ne 0) { throw '精确签名命中后仍进入了模糊打分路径' }
 Write-Host 'Test-SmartFill: PASS'

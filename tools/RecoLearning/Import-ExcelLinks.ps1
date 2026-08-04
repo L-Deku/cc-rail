@@ -1,4 +1,4 @@
-# tools/RecoLearning/Import-ExcelLinks.ps1
+﻿# tools/RecoLearning/Import-ExcelLinks.ps1
 # 收割 ExcelLinks\*.xml 绑定明细 → BindingLog。
 # ProjectId 形如 "192.168.2.13,1433|Reco20260622092010550":按其中的服务器地址连对应项目库,
 # 解析 办法(项目信息)、条目(章节表 by 条目序号)、定额单位(定额输入 by 定额序号)。

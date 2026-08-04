@@ -1,4 +1,4 @@
-# tools/RecoLearning/Get-LearningStats.ps1
+﻿# tools/RecoLearning/Get-LearningStats.ps1
 # 学习库体检报告:各表规模、流水来源分布、条目解析率、权重榜。
 . "$PSScriptRoot\Common.ps1"
 

@@ -1,4 +1,4 @@
-# tools/RecoLearning/Rebuild-Aggregates.ps1
+﻿# tools/RecoLearning/Rebuild-Aggregates.ps1
 # 由 BindingLog 流水全量重算推荐核心、公式、条目和模板聚合表。
 # 可随时重跑;这是"定期整理"的入口。
 # 聚合规则:同一 group_key 的多目标构成一个定额组样本;
