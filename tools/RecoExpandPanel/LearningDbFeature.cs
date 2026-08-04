@@ -945,13 +945,12 @@ namespace RecoNet
                 int correctedDelta = Math.Max(0, group.CorrectedCount);
                 int rejectedDelta = Math.Max(0, group.RejectedCount);
                 if (acceptedDelta + correctedDelta + rejectedDelta == 0) acceptedDelta = 1;
-                int initialWeight = Math.Max(0, Math.Min(100,
-                    10 * acceptedDelta + 20 * correctedDelta - 10 * rejectedDelta));
+                int initialWeight = Math.Max(0,
+                    10 * acceptedDelta + 20 * correctedDelta - 10 * rejectedDelta);
                 cmd.CommandText =
                     "UPDATE dbo.SignatureBoxMap WITH (UPDLOCK,HOLDLOCK) SET accepted_count=accepted_count+@accepted, " +
                     "corrected_count=corrected_count+@corrected, rejected_count=rejected_count+@rejected, " +
-                    "weight=CASE WHEN 10*(accepted_count+@accepted)+20*(corrected_count+@corrected)-10*(rejected_count+@rejected)>100 THEN 100 " +
-                    "WHEN 10*(accepted_count+@accepted)+20*(corrected_count+@corrected)-10*(rejected_count+@rejected)<0 THEN 0 " +
+                    "weight=CASE WHEN 10*(accepted_count+@accepted)+20*(corrected_count+@corrected)-10*(rejected_count+@rejected)<0 THEN 0 " +
                     "ELSE 10*(accepted_count+@accepted)+20*(corrected_count+@corrected)-10*(rejected_count+@rejected) END, last_used_at=SYSDATETIME() " +
                     "WHERE signature=@s AND method=@method AND box_id=@box; " +
                     "IF @@ROWCOUNT=0 INSERT INTO dbo.SignatureBoxMap(signature,method,box_id,weight,accepted_count,corrected_count,rejected_count,last_used_at) " +

@@ -6,6 +6,8 @@ if (-not (Test-Path -LiteralPath $smartPath)) { throw '缺少 SmartFillFeature.c
 $smart = Get-Content -LiteralPath $smartPath -Raw
 $panel = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\TemplateFillPanel.cs') -Raw
 $excelLink = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\ExcelLinkFeature.cs') -Raw
+$learningDb = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\LearningDbFeature.cs') -Raw
+$rebuildAggregates = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoLearning\Rebuild-Aggregates.ps1') -Raw
 $quotaPanel = Get-Content -LiteralPath (Join-Path $repoRoot 'RecoQuotaRecommend\QuotaRecommendPanel.cs') -Raw
 $oldDialog = Get-Content -LiteralPath (Join-Path $repoRoot 'RecoQuotaRecommend\RecommendDialog.cs') -Raw
 $dll = if (-not [String]::IsNullOrWhiteSpace($env:RECO_EXPAND_DLL)) {
@@ -47,6 +49,10 @@ if ($excelLink -notmatch '"推荐定额"') { throw '缺少推荐定额菜单入�
 if ($excelLink -match '打开智能铺量面板') { throw '旧菜单名"打开智能铺量面板"未清除' }
 if ($quotaPanel -match 'ShowRecommendDialog') { throw '老推荐定额窗口入口未删除' }
 if ($oldDialog -match ': Form') { throw '老推荐定额窗口类未删除(仍继承 Form)' }
+if ($learningDb -match 'Math\.Min\(100' -or $learningDb -match '>100 THEN 100' -or
+    $excelLink -match 'Math\.Min\(100' -or $rebuildAggregates -match '\[Math\]::Min\(100') {
+    throw '学习权重仍存在 100 上限'
+}
 
 $panelType = [System.Reflection.Assembly]::LoadFrom($dll).GetType('RecoNet.FormPanel', $true)
 $flags = [System.Reflection.BindingFlags]'Public,NonPublic,Static'
@@ -69,12 +75,19 @@ $allFlags = [System.Reflection.BindingFlags]'Public,NonPublic,Static,Instance'
 $candidateType = $panelType.GetNestedType('SmartMapCandidateScore', [System.Reflection.BindingFlags]'Public,NonPublic')
 $entryType = $panelType.GetNestedType('SmartMapEntry', [System.Reflection.BindingFlags]'Public,NonPublic')
 $canAutoSelect = $panelType.GetMethod('CanAutoSelectSmartMapEntry', $allFlags)
-if ($null -eq $candidateType -or $null -eq $entryType -or $null -eq $canAutoSelect) {
+$applyPending = $panelType.GetMethod('ApplyPendingLocalSmartMapEntry', $allFlags)
+$orderCandidates = $panelType.GetMethod('OrderSmartMapCandidateScores', $allFlags)
+if ($null -eq $candidateType -or $null -eq $entryType -or $null -eq $canAutoSelect -or
+    $null -eq $applyPending -or $null -eq $orderCandidates) {
     throw '缺少跨专业同名冲突判定入口'
 }
-function New-SmartCandidate([int]$Weight) {
+if ($null -ne $candidateType.GetField('PendingLocal', $allFlags)) {
+    throw 'PendingLocal 不应在 SmartMapCandidateScore 重复存储'
+}
+function New-SmartCandidate([int]$Weight, [bool]$PendingLocal = $false) {
     $entry = [Activator]::CreateInstance($entryType, $true).PSObject.BaseObject
     $entryType.GetField('Weight', $allFlags).SetValue($entry, $Weight)
+    $entryType.GetField('PendingLocal', $allFlags).SetValue($entry, $PendingLocal)
     $candidate = [Activator]::CreateInstance($candidateType, $true).PSObject.BaseObject
     $candidateType.GetField('Entry', $allFlags).SetValue($candidate, $entry)
     foreach ($fieldName in @('HasEntry', 'HasCurrentContext', 'HasCurrentMethodMapping', 'CurrentTargetsValid')) {
@@ -90,5 +103,30 @@ $canAutoArgs = New-Object 'object[]' 1
 $canAutoArgs[0] = $candidates
 if ([bool]$canAutoSelect.Invoke($null, $canAutoArgs)) {
     throw '跨专业同名的同权重候选不应自动勾选'
+}
+
+$sqlEntry = [Activator]::CreateInstance($entryType, $true).PSObject.BaseObject
+$entryType.GetField('BoxId', $allFlags).SetValue($sqlEntry, 'sql-box')
+$entryType.GetField('Weight', $allFlags).SetValue($sqlEntry, 90)
+$pendingArgs = New-Object 'object[]' 3
+$pendingArgs[0] = $sqlEntry
+$pendingArgs[1] = 'sql-box'
+$pendingArgs[2] = 30
+$mergedEntry = $applyPending.Invoke($null, $pendingArgs)
+if ($entryType.GetField('Weight', $allFlags).GetValue($mergedEntry) -ne 90 -or
+    -not [bool]$entryType.GetField('PendingLocal', $allFlags).GetValue($mergedEntry)) {
+    throw '本机 pending(weight 30) 覆盖了 SQL weight 90，或未设置 PendingLocal'
+}
+
+$rankInput = [Activator]::CreateInstance($candidateListType).PSObject.BaseObject
+$ordinary = New-SmartCandidate 90 $false
+$pending = New-SmartCandidate 90 $true
+[void]$rankInput.Add($ordinary)
+[void]$rankInput.Add($pending)
+$rankArgs = New-Object 'object[]' 1
+$rankArgs[0] = $rankInput
+$ranked = $orderCandidates.Invoke($null, $rankArgs)
+if (-not [Object]::ReferenceEquals($ranked[0], $pending)) {
+    throw '同权重候选中 PendingLocal 未优先排序'
 }
 Write-Host 'Test-SmartFill: PASS'

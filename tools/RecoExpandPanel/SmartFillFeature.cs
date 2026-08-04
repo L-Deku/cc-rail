@@ -24,6 +24,10 @@ namespace RecoNet
         {
             public string BoxId;
             public int Weight;
+            public int AcceptedCount;
+            public int CorrectedCount;
+            public int RejectedCount;
+            public bool PendingLocal;
             public DateTime LastUsedAt;
             public List<SmartBoxTarget> Targets = new List<SmartBoxTarget>();
             public bool CurrentMethodMapping;
@@ -528,7 +532,8 @@ namespace RecoNet
                     {
                         cmd.CommandTimeout = 15;
                         cmd.CommandText =
-                            "SELECT m.signature, m.box_id, m.method, m.weight, t.target_kind, t.target_code, t.target_name, t.target_unit, m.last_used_at " +
+                            "SELECT m.signature, m.box_id, m.method, m.weight, m.accepted_count, m.corrected_count, m.rejected_count, " +
+                            "t.target_kind, t.target_code, t.target_name, t.target_unit, m.last_used_at " +
                             "FROM dbo.SignatureBoxMap m JOIN dbo.QuotaBoxTarget t ON t.box_id = m.box_id " +
                             "WHERE m.weight > 0 AND (m.method=@map_method OR m.method='') " +
                             "ORDER BY CASE WHEN m.method=@map_method THEN 0 ELSE 1 END";
@@ -550,8 +555,11 @@ namespace RecoNet
                                     {
                                         BoxId = boxId,
                                         Weight = reader.GetInt32(3),
+                                        AcceptedCount = reader.GetInt32(4),
+                                        CorrectedCount = reader.GetInt32(5),
+                                        RejectedCount = reader.GetInt32(6),
                                         CurrentMethodMapping = currentMethodMapping,
-                                        LastUsedAt = reader.IsDBNull(8) ? DateTime.MinValue : reader.GetDateTime(8)
+                                        LastUsedAt = reader.IsDBNull(11) ? DateTime.MinValue : reader.GetDateTime(11)
                                     };
                                     byKey[key] = entry;
                                     List<SmartMapEntry> list;
@@ -571,13 +579,19 @@ namespace RecoNet
                                 }
                                 else
                                 {
-                                    if (currentMethodMapping && !entry.CurrentMethodMapping) entry.Weight = reader.GetInt32(3);
+                                    if (currentMethodMapping && !entry.CurrentMethodMapping)
+                                    {
+                                        entry.Weight = reader.GetInt32(3);
+                                        entry.AcceptedCount = reader.GetInt32(4);
+                                        entry.CorrectedCount = reader.GetInt32(5);
+                                        entry.RejectedCount = reader.GetInt32(6);
+                                    }
                                     else if (currentMethodMapping == entry.CurrentMethodMapping) entry.Weight = Math.Max(entry.Weight, reader.GetInt32(3));
                                     if (currentMethodMapping) entry.CurrentMethodMapping = true;
-                                    DateTime lastUsed = reader.IsDBNull(8) ? DateTime.MinValue : reader.GetDateTime(8);
+                                    DateTime lastUsed = reader.IsDBNull(11) ? DateTime.MinValue : reader.GetDateTime(11);
                                     if (lastUsed > entry.LastUsedAt) entry.LastUsedAt = lastUsed;
                                 }
-                                UpsertSmartBoxTarget(entry, reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7));
+                                UpsertSmartBoxTarget(entry, reader.GetString(7), reader.GetString(8), reader.GetString(9), reader.GetString(10));
                             }
                         }
                     }
@@ -842,6 +856,9 @@ namespace RecoNet
                         {
                             BoxId = boxGroup.Key,
                             Weight = sample.Max(row => ReadFlatInt(row, "weight", 0)),
+                            AcceptedCount = sample.Max(row => ReadFlatInt(row, "accepted_count", 0)),
+                            CorrectedCount = sample.Max(row => ReadFlatInt(row, "corrected_count", 0)),
+                            RejectedCount = sample.Max(row => ReadFlatInt(row, "rejected_count", 0)),
                             CurrentMethodMapping = sample.Any(row => String.Equals(GetSmartLocalMethod(row), snapshot.Method, StringComparison.OrdinalIgnoreCase) &&
                                 !String.IsNullOrWhiteSpace(snapshot.Method))
                         };
@@ -903,8 +920,14 @@ namespace RecoNet
                             snapshot.BySignature[signature] = list;
                         }
                         SmartMapEntry existing = list.FirstOrDefault(entry => String.Equals(entry.BoxId, boxGroup.Key, StringComparison.OrdinalIgnoreCase));
-                        SmartMapEntry localEntry = existing ?? new SmartMapEntry { BoxId = boxGroup.Key };
-                        localEntry.Weight = Math.Max(sample.Max(row => ReadFlatInt(row, "weight", 0)), 1000);
+                        int localWeight = sample.Max(row => ReadFlatInt(row, "weight", 0));
+                        SmartMapEntry localEntry = ApplyPendingLocalSmartMapEntry(existing, boxGroup.Key, localWeight);
+                        localEntry.AcceptedCount = Math.Max(localEntry.AcceptedCount,
+                            sample.Max(row => ReadFlatInt(row, "accepted_count", 0)));
+                        localEntry.CorrectedCount = Math.Max(localEntry.CorrectedCount,
+                            sample.Max(row => ReadFlatInt(row, "corrected_count", 0)));
+                        localEntry.RejectedCount = Math.Max(localEntry.RejectedCount,
+                            sample.Max(row => ReadFlatInt(row, "rejected_count", 0)));
                         localEntry.CurrentMethodMapping = sample.Any(row =>
                             String.Equals(GetSmartLocalMethod(row), snapshot.Method, StringComparison.OrdinalIgnoreCase) &&
                             !String.IsNullOrWhiteSpace(snapshot.Method));
@@ -934,6 +957,14 @@ namespace RecoNet
             {
                 Log("Smart fill pending local overlay failed: " + ex.Message);
             }
+        }
+
+        private static SmartMapEntry ApplyPendingLocalSmartMapEntry(SmartMapEntry existing, string boxId, int localWeight)
+        {
+            SmartMapEntry entry = existing ?? new SmartMapEntry { BoxId = boxId };
+            entry.Weight = existing == null ? localWeight : Math.Max(existing.Weight, localWeight);
+            entry.PendingLocal = true;
+            return entry;
         }
 
         // 推荐数量只使用当前 Excel 单位和当前运行版本的定额元数据；SQL target_unit 仅作历史描述。
@@ -1296,7 +1327,13 @@ namespace RecoNet
                     CurrentTargetsValid = targetsValid
                 });
             }
-            return scores.OrderByDescending(score => score.CurrentTargetsValid)
+            return OrderSmartMapCandidateScores(scores);
+        }
+
+        private static List<SmartMapCandidateScore> OrderSmartMapCandidateScores(IEnumerable<SmartMapCandidateScore> scores)
+        {
+            return (scores ?? Enumerable.Empty<SmartMapCandidateScore>()).OrderByDescending(score => score.CurrentTargetsValid)
+                .ThenByDescending(score => score.Entry != null && score.Entry.PendingLocal)
                 .ThenByDescending(score => score.HasCurrentMethodMapping)
                 .ThenByDescending(score => score.HasCurrentContext)
                 .ThenByDescending(score => score.PrefixMatch)

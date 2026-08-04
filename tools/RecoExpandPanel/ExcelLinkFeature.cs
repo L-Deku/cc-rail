@@ -2607,7 +2607,7 @@ namespace RecoNet
             int accepted = (existingRows.Count == 0 ? 0 : existingRows.Max(row => ReadFlatInt(row, "accepted_count", 0))) + acceptedDelta;
             int corrected = (existingRows.Count == 0 ? 0 : existingRows.Max(row => ReadFlatInt(row, "corrected_count", 0))) + correctedDelta;
             int rejected = (existingRows.Count == 0 ? 0 : existingRows.Max(row => ReadFlatInt(row, "rejected_count", 0))) + rejectedDelta;
-            int weight = Math.Max(0, Math.Min(100, 10 * accepted + 20 * corrected - 10 * rejected));
+            int weight = Math.Max(0, 10 * accepted + 20 * corrected - 10 * rejected);
             string now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
             foreach (MappingFeedbackTarget target in targets)

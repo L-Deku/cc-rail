@@ -248,7 +248,7 @@ foreach ($c in 'signature','box_id','method') { [void]$dtMap.Columns.Add($c, [st
 foreach ($c in 'weight','accepted_count','corrected_count','rejected_count') { [void]$dtMap.Columns.Add($c, [int]) }
 [void]$dtMap.Columns.Add('last_used_at', [datetime])
 foreach ($m in $maps.Values) {
-  $weight = [Math]::Max(0, [Math]::Min(100, 10 * $m.Acc + 20 * $m.Cor - 10 * $m.Rej))
+  $weight = [Math]::Max(0, 10 * $m.Acc + 20 * $m.Cor - 10 * $m.Rej)
   [void]$dtMap.Rows.Add($m.Sig, $m.BoxId, $m.Method, $weight, $m.Acc, $m.Cor, $m.Rej, $m.Last)
 }
 Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Table $dtMap -TargetTable 'dbo.SignatureBoxMap'

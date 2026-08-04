@@ -58,17 +58,21 @@ if ($bySignature.ContainsKey($quantityName.ToUpperInvariant() + '|KG') -or $bySi
 
 $targets = @()
 $maxWeight = 0
+$hasPendingLocal = $false
 foreach ($entry in @($bySignature[$key])) {
     $entryType = $entry.GetType()
     $weight = [int]$entryType.GetField('Weight', $flags).GetValue($entry)
     if ($weight -gt $maxWeight) { $maxWeight = $weight }
+    if ([bool]$entryType.GetField('PendingLocal', $flags).GetValue($entry)) { $hasPendingLocal = $true }
     foreach ($target in @($entryType.GetField('Targets', $flags).GetValue($entry))) {
         $targets += [string]$target.GetType().GetField('Code', $flags).GetValue($target)
     }
 }
 if (@($targets | Where-Object { $_ -eq $targetCode }).Count -ne 1) { throw "旧单位记录归并后目标应只出现一次：$($targets -join ',')" }
 if (@($targets | Where-Object { $_ -eq $wrongMethodTargetCode }).Count -ne 0) { throw "2020 本机关系泄漏到 2024 快照：$($targets -join ',')" }
-if ($maxWeight -lt 1000) { throw "本机待汇总签名没有即时优先：$maxWeight" }
+if ($maxWeight -ne 20 -or -not $hasPendingLocal) {
+    throw "本机待汇总签名未保留真实权重或没有 PendingLocal 优先标记：weight=$maxWeight pending=$hasPendingLocal"
+}
 $formulaByKey = $snapshotType.GetField('FormulaByKey', $flags).GetValue($snapshot)
 $formulaKey = $key + "`nquota:" + $targetCode.ToUpperInvariant()
 if (-not $formulaByKey.ContainsKey($formulaKey) -or $formulaByKey[$formulaKey].Count -ne 1) { throw '本机待汇总公式没有立即进入下一次推荐快照' }
