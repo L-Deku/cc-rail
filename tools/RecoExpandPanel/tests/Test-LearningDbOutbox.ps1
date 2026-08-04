@@ -57,7 +57,7 @@ try {
     $signature = $rawName + '|'
     $targetCode = 'OUT-' + $suffix.Substring(0, 20)
     $boxId = 'box-out-' + $suffix.Substring(0, 24)
-    $entryCode = 'ENTRY-' + $suffix.Substring(0, 20)
+    $entryCode = '12-01'
 
     $groupType.GetField('QuantityName', $allFlags).SetValue($group, $rawName)
     $groupType.GetField('QuantityUnit', $allFlags).SetValue($group, 'm2')
