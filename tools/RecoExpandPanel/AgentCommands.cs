@@ -176,6 +176,25 @@ namespace RecoNet
             return values;
         }
 
+        // 精确定额名称列表只把逗号/顿号当作分隔符，不套用“当前/选中”等编号列表别名。
+        private static List<string> SplitAgentExactNameList(string text)
+        {
+            List<string> values = new List<string>();
+            string normalized = (text ?? "")
+                .Replace('，', ',')
+                .Replace('、', ',');
+            foreach (string part in normalized.Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string trimmed = part.Trim();
+                if (trimmed.Length > 0 && !values.Contains(trimmed))
+                {
+                    values.Add(trimmed);
+                }
+            }
+
+            return values;
+        }
+
         // 从 token 流里摘出 单元=xxx 过滤段，返回剩余 token。
         private static List<string> ExtractAgentUnitFilter(List<string> tokens, AgentCommand command)
         {
@@ -324,7 +343,8 @@ namespace RecoNet
             return hasLetterOrDigit;
         }
 
-        // 单价/工程数量统一定位：可选条目 + 定额编号，或可选条目 + 精确定额名称。
+        // 单价/工程数量统一定位：可选条目 + 定额编号，或可选条目 + 精确定额名称列表。
+        // 多个精确定额名称用顿号/逗号分隔，每个名称仍按完整名称匹配。
         // 不写条目时，编号仍落到当前条目；名称则在当前单元内全表精确匹配。
         private static void ApplyAgentValueTargetLead(AgentCommand command, List<string> lead)
         {
@@ -366,7 +386,8 @@ namespace RecoNet
             }
             else
             {
-                command.QuotaName = String.Join(" ", targetTokens.ToArray()).Trim();
+                List<string> quotaNames = SplitAgentExactNameList(String.Join(" ", targetTokens.ToArray()));
+                command.QuotaName = String.Join("、", quotaNames.ToArray());
             }
         }
 
@@ -559,7 +580,7 @@ namespace RecoNet
                     tokens.RemoveAt(tokens.Count - 1);
                 }
 
-                if (isRemove || target == "quota_code")
+                if (target == "quota_code")
                 {
                     ApplyAgentItemQuotaLead(command, tokens);
                 }

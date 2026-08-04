@@ -1197,7 +1197,9 @@ namespace RecoNet
         private static void BuildRemoveTextPlan(SqlConnection conn, AgentSelectionSnapshot selection, AgentCommand command, List<long> unitIds, AgentPlan plan)
         {
             string fragment = command.RemoveText;
-            List<AgentTargetRow> targets = ResolveAgentTargetRows(conn, selection, command.Items, command.IncludeChildren, command.QuotaFilter, unitIds);
+            List<AgentTargetRow> targets = command.Target == "quantity"
+                ? ResolveAgentValueTargetRows(conn, selection, command, unitIds)
+                : ResolveAgentTargetRows(conn, selection, command.Items, command.IncludeChildren, command.QuotaFilter, unitIds);
             int skipped = 0;
             int emptyCode = 0;
             foreach (AgentTargetRow row in targets)
@@ -1307,15 +1309,19 @@ namespace RecoNet
                 return ResolveAgentTargetRows(conn, selection, command.Items, command.IncludeChildren, command.QuotaFilter, unitIds);
             }
 
-            string quotaName = command.QuotaName.Trim();
+            List<string> quotaNames = SplitAgentExactNameList(command.QuotaName);
+            HashSet<string> quotaNameSet = new HashSet<string>(quotaNames, StringComparer.Ordinal);
             if (command.Items != null && command.Items.Count > 0)
             {
                 List<AgentTargetRow> itemMatched = ResolveAgentTargetRows(conn, selection, command.Items, command.IncludeChildren, new List<string>(), unitIds)
-                    .Where(row => String.Equals((row.ItemName ?? "").Trim(), quotaName, StringComparison.Ordinal))
+                    .Where(row => quotaNameSet.Contains((row.ItemName ?? "").Trim()))
                     .ToList();
-                if (itemMatched.Count == 0)
+                HashSet<string> itemMatchedNames = new HashSet<string>(
+                    itemMatched.Select(row => (row.ItemName ?? "").Trim()), StringComparer.Ordinal);
+                List<string> itemMissingNames = quotaNames.Where(name => !itemMatchedNames.Contains(name)).ToList();
+                if (itemMissingNames.Count > 0)
                 {
-                    throw new AgentPlanException("没有找到名称精确等于\"" + quotaName + "\"的定额。请核对定额名称、条目和单元。");
+                    throw new AgentPlanException("没有找到以下精确定额名称：" + String.Join("、", itemMissingNames.ToArray()) + "。请核对定额名称、条目和单元。");
                 }
 
                 return itemMatched;
@@ -1324,11 +1330,18 @@ namespace RecoNet
             List<AgentTargetRow> matched = new List<AgentTargetRow>();
             using (SqlCommand cmd = conn.CreateCommand())
             {
+                List<string> nameParameters = new List<string>();
+                for (int i = 0; i < quotaNames.Count; i++)
+                {
+                    string parameterName = "@name" + i.ToString(CultureInfo.InvariantCulture);
+                    nameParameters.Add(parameterName);
+                    cmd.Parameters.AddWithValue(parameterName, quotaNames[i]);
+                }
+
                 cmd.CommandText = AgentTargetRowSelect +
-                    "where ltrim(rtrim(DE.工程或费用项目名称))=@name" +
+                    "where ltrim(rtrim(DE.工程或费用项目名称)) in (" + String.Join(",", nameParameters.ToArray()) + ")" +
                     BuildAgentUnitCondition(unitIds) +
                     " order by DE.总概算序号, ZJ.条目编号, DE.顺号";
-                cmd.Parameters.AddWithValue("@name", quotaName);
                 using (SqlDataReader reader = cmd.ExecuteReader())
                 {
                     while (reader.Read())
@@ -1338,9 +1351,12 @@ namespace RecoNet
                 }
             }
 
-            if (matched.Count == 0)
+            HashSet<string> matchedNames = new HashSet<string>(
+                matched.Select(row => (row.ItemName ?? "").Trim()), StringComparer.Ordinal);
+            List<string> missingNames = quotaNames.Where(name => !matchedNames.Contains(name)).ToList();
+            if (missingNames.Count > 0)
             {
-                throw new AgentPlanException("没有找到名称精确等于\"" + quotaName + "\"的定额。请核对定额名称和单元。");
+                throw new AgentPlanException("没有找到以下精确定额名称：" + String.Join("、", missingNames.ToArray()) + "。请核对定额名称和单元。");
             }
 
             return matched;

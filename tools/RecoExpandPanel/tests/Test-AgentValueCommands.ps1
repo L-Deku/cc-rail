@@ -118,6 +118,23 @@ Assert-Field $quantityNameMultiply 'Target' 'quantity'
 Assert-Field $quantityNameMultiply 'QuotaName' '≤25t自卸汽车运土 增运1km'
 Assert-Field $quantityNameMultiply 'Factor' '10'
 
+$quantityNameRemove = Parse-AgentCommand '工程数量 0821-01-04-09-02 FAS 联动接入、门禁系统一键释放联动接入 删除*0 单元=所有'
+Assert-Field $quantityNameRemove 'Type' 'remove_text'
+Assert-Field $quantityNameRemove 'Target' 'quantity'
+Assert-Field $quantityNameRemove 'QuotaName' 'FAS 联动接入、门禁系统一键释放联动接入'
+Assert-Field $quantityNameRemove 'RemoveText' '*0'
+Assert-List $quantityNameRemove 'Items' @('0821-01-04-09-02')
+Assert-List $quantityNameRemove 'QuotaFilter' @()
+Assert-List $quantityNameRemove 'Units' @('所有')
+
+$quantityCodeListMultiply = Parse-AgentCommand '工程数量 0821-01-04-09-02 DY-873、DY-1169 *0 单元=所有'
+Assert-Field $quantityCodeListMultiply 'Type' 'multiply_quantity'
+Assert-Field $quantityCodeListMultiply 'Target' 'quantity'
+Assert-Field $quantityCodeListMultiply 'Factor' '0'
+Assert-List $quantityCodeListMultiply 'Items' @('0821-01-04-09-02')
+Assert-List $quantityCodeListMultiply 'QuotaFilter' @('DY-873', 'DY-1169')
+Assert-List $quantityCodeListMultiply 'Units' @('所有')
+
 $quantityItemSet = Parse-AgentCommand '工程数量 0305 0'
 Assert-Field $quantityItemSet 'Type' 'set_quantity'
 Assert-Field $quantityItemSet 'Value' '0'
