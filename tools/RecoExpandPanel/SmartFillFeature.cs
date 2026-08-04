@@ -1347,15 +1347,33 @@ namespace RecoNet
         {
             if (scores == null || scores.Count == 0) return false;
             SmartMapCandidateScore top = scores[0];
-            if (!top.CurrentTargetsValid || !top.HasCurrentMethodMapping || !top.HasEntry || !top.HasCurrentContext) return false;
+            if (!top.CurrentTargetsValid || !top.HasEntry || !top.HasCurrentContext) return false;
+            if (!top.HasCurrentMethodMapping && !IsSingleQuotaTargetBox(top.Entry)) return false;
             if (scores.Count == 1) return true;
 
             SmartMapCandidateScore second = scores[1];
             if (!second.CurrentTargetsValid) return true;
+            if (top.HasCurrentMethodMapping && !second.HasCurrentMethodMapping &&
+                HasMinimumPositiveEvidence(top)) return true;
+            if (top.HasCurrentContext && !second.HasCurrentContext &&
+                HasMinimumPositiveEvidence(top)) return true;
             int topWeight = top.Entry == null ? 0 : top.Entry.Weight;
             int secondWeight = second.Entry == null ? 0 : second.Entry.Weight;
-            // 多个当前版本均有效的组件，权重差不足两个接受样本时不静默决定。
-            return topWeight - secondWeight >= 20;
+            if (topWeight - secondWeight >= 20) return true;
+            // 小样本时也只比较净证据权重，不把不同分值的反馈简单按次数等同。
+            return topWeight >= 2 * secondWeight && topWeight - secondWeight >= 10;
+        }
+
+        private static bool HasMinimumPositiveEvidence(SmartMapCandidateScore score)
+        {
+            return score != null && score.Entry != null &&
+                (score.Entry.AcceptedCount >= 2 || score.Entry.CorrectedCount >= 1);
+        }
+
+        private static bool IsSingleQuotaTargetBox(SmartMapEntry entry)
+        {
+            return entry != null && entry.Targets != null && entry.Targets.Count == 1 &&
+                String.Equals(entry.Targets[0].Kind ?? "", "quota", StringComparison.OrdinalIgnoreCase);
         }
 
         private static IEnumerable<SmartBoxTarget> OrderSmartTargets(IEnumerable<SmartBoxTarget> targets)

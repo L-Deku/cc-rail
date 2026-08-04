@@ -74,10 +74,11 @@ if ($globalExactPosition -lt 0 -or $fuzzyPosition -lt 0 -or $globalExactPosition
 $allFlags = [System.Reflection.BindingFlags]'Public,NonPublic,Static,Instance'
 $candidateType = $panelType.GetNestedType('SmartMapCandidateScore', [System.Reflection.BindingFlags]'Public,NonPublic')
 $entryType = $panelType.GetNestedType('SmartMapEntry', [System.Reflection.BindingFlags]'Public,NonPublic')
+$targetType = $panelType.GetNestedType('SmartBoxTarget', [System.Reflection.BindingFlags]'Public,NonPublic')
 $canAutoSelect = $panelType.GetMethod('CanAutoSelectSmartMapEntry', $allFlags)
 $applyPending = $panelType.GetMethod('ApplyPendingLocalSmartMapEntry', $allFlags)
 $orderCandidates = $panelType.GetMethod('OrderSmartMapCandidateScores', $allFlags)
-if ($null -eq $candidateType -or $null -eq $entryType -or $null -eq $canAutoSelect -or
+if ($null -eq $candidateType -or $null -eq $entryType -or $null -eq $targetType -or $null -eq $canAutoSelect -or
     $null -eq $applyPending -or $null -eq $orderCandidates) {
     throw '缺少跨专业同名冲突判定入口'
 }
@@ -95,6 +96,29 @@ function New-SmartCandidate([int]$Weight, [bool]$PendingLocal = $false) {
     }
     return $candidate
 }
+function Set-SmartEvidence($Candidate, [int]$Accepted, [int]$Corrected, [int]$Rejected) {
+    $entry = $candidateType.GetField('Entry', $allFlags).GetValue($Candidate)
+    $entryType.GetField('AcceptedCount', $allFlags).SetValue($entry, $Accepted)
+    $entryType.GetField('CorrectedCount', $allFlags).SetValue($entry, $Corrected)
+    $entryType.GetField('RejectedCount', $allFlags).SetValue($entry, $Rejected)
+}
+function Set-SmartCandidateFlag($Candidate, [string]$FieldName, [bool]$Value) {
+    $candidateType.GetField($FieldName, $allFlags).SetValue($Candidate, $Value)
+}
+function Add-SmartTarget($Candidate, [string]$Kind, [string]$Code) {
+    $entry = $candidateType.GetField('Entry', $allFlags).GetValue($Candidate)
+    $target = [Activator]::CreateInstance($targetType, $true).PSObject.BaseObject
+    $targetType.GetField('Kind', $allFlags).SetValue($target, $Kind)
+    $targetType.GetField('Code', $allFlags).SetValue($target, $Code)
+    [void]$entryType.GetField('Targets', $allFlags).GetValue($entry).Add($target)
+}
+function Test-CanAutoSelect([object[]]$Items) {
+    $list = [Activator]::CreateInstance($candidateListType).PSObject.BaseObject
+    foreach ($item in $Items) { [void]$list.Add($item) }
+    $args = New-Object 'object[]' 1
+    $args[0] = $list
+    return [bool]$canAutoSelect.Invoke($null, $args)
+}
 $candidateListType = [System.Collections.Generic.List``1].MakeGenericType($candidateType)
 $candidates = [Activator]::CreateInstance($candidateListType).PSObject.BaseObject
 [void]$candidates.Add((New-SmartCandidate 20))
@@ -103,6 +127,51 @@ $canAutoArgs = New-Object 'object[]' 1
 $canAutoArgs[0] = $candidates
 if ([bool]$canAutoSelect.Invoke($null, $canAutoArgs)) {
     throw '跨专业同名的同权重候选不应自动勾选'
+}
+
+$topOneAccepted = New-SmartCandidate 10
+Set-SmartEvidence $topOneAccepted 1 0 0
+$emptyMethodHigh = New-SmartCandidate 100
+Set-SmartCandidateFlag $emptyMethodHigh 'HasCurrentMethodMapping' $false
+if (Test-CanAutoSelect @($topOneAccepted, $emptyMethodHigh)) {
+    throw '当前办法候选只有 1 次 accepted 时不应压过空办法高权重候选'
+}
+$topTwoAccepted = New-SmartCandidate 20
+Set-SmartEvidence $topTwoAccepted 2 0 0
+if (-not (Test-CanAutoSelect @($topTwoAccepted, $emptyMethodHigh))) {
+    throw '当前办法候选累计 2 次 accepted 后未自动采纳'
+}
+$topCorrected = New-SmartCandidate 20
+Set-SmartEvidence $topCorrected 0 1 0
+if (-not (Test-CanAutoSelect @($topCorrected, $emptyMethodHigh))) {
+    throw '当前办法候选 1 次 corrected 后未自动采纳'
+}
+$sameMethodA = New-SmartCandidate 20
+$sameMethodB = New-SmartCandidate 20
+Set-SmartEvidence $sameMethodA 2 0 0
+Set-SmartEvidence $sameMethodB 2 0 0
+if (Test-CanAutoSelect @($sameMethodA, $sameMethodB)) {
+    throw '同权重且都有当前办法证据时不应自动采纳'
+}
+$rejectedTop = New-SmartCandidate 0
+Set-SmartEvidence $rejectedTop 2 0 3
+$strongerSecond = New-SmartCandidate 10
+Set-SmartEvidence $strongerSecond 1 0 0
+if (Test-CanAutoSelect @($rejectedTop, $strongerSecond)) {
+    throw 'top 被 rejected 压到低于 second 后仍自动采纳'
+}
+$singleEmptyMethod = New-SmartCandidate 10
+Set-SmartCandidateFlag $singleEmptyMethod 'HasCurrentMethodMapping' $false
+Add-SmartTarget $singleEmptyMethod 'quota' 'Q-ONLY'
+if (-not (Test-CanAutoSelect @($singleEmptyMethod))) {
+    throw '单 quota 目标的唯一空办法候选未使用当前办法唯一条目证据自动采纳'
+}
+$multiEmptyMethod = New-SmartCandidate 20
+Set-SmartCandidateFlag $multiEmptyMethod 'HasCurrentMethodMapping' $false
+Add-SmartTarget $multiEmptyMethod 'quota' 'Q-1'
+Add-SmartTarget $multiEmptyMethod 'quota' 'Q-2'
+if (Test-CanAutoSelect @($multiEmptyMethod)) {
+    throw '多目标空办法组件框不应自动采纳'
 }
 
 $sqlEntry = [Activator]::CreateInstance($entryType, $true).PSObject.BaseObject
