@@ -254,7 +254,9 @@ namespace RecoNet
                     else if (String.Equals(grid.Columns[e.ColumnIndex].Name, "qty", StringComparison.Ordinal))
                     {
                         FillPreviewItem item = grid.Rows[e.RowIndex].Tag as FillPreviewItem;
-                        if (item != null) item.QuantityText = Convert.ToString(grid.Rows[e.RowIndex].Cells["qty"].Value).Trim();
+                        if (item != null && ApplyEditedNameQuotaQuantity(item,
+                            Convert.ToString(grid.Rows[e.RowIndex].Cells["qty"].Value).Trim()))
+                            RefreshNameQuotaRiskStateInGrid(item.TargetRow);
                     }
                 };
                 grid.DataError += delegate(object sender, DataGridViewDataErrorEventArgs e)
@@ -274,26 +276,24 @@ namespace RecoNet
                     while (end < grid.Rows.Count - 1 && IsSameQuantityGroup(grid.Rows[end + 1].Tag as FillPreviewItem, cur)) end++;
                     if (start == end) return; // 非一对多,走默认绘制
 
-                    int above = 0, total = 0;
-                    for (int i = start; i <= end; i++)
-                    {
-                        if (i < e.RowIndex) above += grid.Rows[i].Height;
-                        total += grid.Rows[i].Height;
-                    }
-                    Rectangle union = new Rectangle(e.CellBounds.Left, e.CellBounds.Top - above, e.CellBounds.Width, total);
-
                     // 组内横线全部压掉:非首行不画上边线,非末行不画下边线。
                     if (e.RowIndex > start) e.AdvancedBorderStyle.Top = DataGridViewAdvancedCellBorderStyle.None;
                     if (e.RowIndex < end) e.AdvancedBorderStyle.Bottom = DataGridViewAdvancedCellBorderStyle.None;
                     e.PaintBackground(e.ClipBounds, true);
-                    string text = Convert.ToString(grid.Rows[start].Cells[e.ColumnIndex].Value);
-                    if (!String.IsNullOrEmpty(text))
+                    int paintRow = end;
+                    while (paintRow >= start && !grid.Rows[paintRow].Displayed) paintRow--;
+                    if (e.RowIndex == paintRow)
                     {
-                        bool selected = (e.State & DataGridViewElementStates.Selected) != 0;
-                        Color foreColor = selected ? e.CellStyle.SelectionForeColor : e.CellStyle.ForeColor;
-                        // 靠左 + 垂直居中,与普通行的左对齐保持一致。
-                        TextRenderer.DrawText(e.Graphics, text, e.CellStyle.Font, union, foreColor,
-                            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
+                        Rectangle union = GetVisibleMergedTargetNameBounds(grid, e.ColumnIndex, start, end);
+                        string text = Convert.ToString(grid.Rows[start].Cells[e.ColumnIndex].Value);
+                        if (!union.IsEmpty && !String.IsNullOrEmpty(text))
+                        {
+                            bool selected = (e.State & DataGridViewElementStates.Selected) != 0;
+                            Color foreColor = selected ? e.CellStyle.SelectionForeColor : e.CellStyle.ForeColor;
+                            // 靠左 + 垂直居中,与普通行的左对齐保持一致。
+                            TextRenderer.DrawText(e.Graphics, text, e.CellStyle.Font, union, foreColor,
+                                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
+                        }
                     }
                     e.Handled = true;
                 };
@@ -924,8 +924,13 @@ namespace RecoNet
                     item.NameQuotaCandidates.Count > 1;
                 bool requiresChoice = leader != null && leader.NeedExactNameConfirmation &&
                     leader.NameQuotaCandidates != null && leader.NameQuotaCandidates.Count > 1;
+                string blockingReason = item.IsNameDriven
+                    ? GetUnsafeNameQuotaCandidateReason(preview.Where(candidate => candidate != null &&
+                        candidate.IsNameDriven && candidate.TargetRow == item.TargetRow))
+                    : "";
                 row.Cells["code"].ReadOnly = true;
                 row.Cells["sname"].ReadOnly = !hasCandidates;
+                row.Cells["sel"].ReadOnly = isGroupMember || item.GroupOrder == 0 && !String.IsNullOrWhiteSpace(blockingReason);
                 if (hasCandidates)
                 {
                     row.Cells["sname"].ToolTipText = "点击选择该工程量名称绑定的源行定额或组件组";
@@ -940,6 +945,10 @@ namespace RecoNet
                     {
                         row.Cells["sel"].ToolTipText = "勾选接受当前候选；点击源行定额可切换绑定组";
                     }
+                }
+                if (!String.IsNullOrWhiteSpace(blockingReason))
+                {
+                    row.Cells["sel"].ToolTipText = "该组件存在风险：" + blockingReason + "。请先修改数量或处理单位、条目问题。";
                 }
                 if (item.NeedExactNameConfirmation || !String.IsNullOrEmpty(item.Status))
                     row.DefaultCellStyle.BackColor = Color.MistyRose;
@@ -1164,6 +1173,78 @@ namespace RecoNet
                 return items == null || items.Any(item => item == null || !String.IsNullOrWhiteSpace(item.Status));
             }
 
+            private static string GetUnsafeNameQuotaCandidateReason(IEnumerable<FillPreviewItem> items)
+            {
+                if (items == null) return "未找到组件数据";
+                return String.Join("；", items.Where(item => item != null && !String.IsNullOrWhiteSpace(item.Status))
+                    .Select(item => item.Status.Trim()).Distinct(StringComparer.Ordinal).ToArray());
+            }
+
+            private static bool ApplyEditedNameQuotaQuantity(FillPreviewItem item, string quantityText)
+            {
+                if (item == null) return false;
+                item.QuantityText = (quantityText ?? "").Trim();
+                if (String.IsNullOrWhiteSpace(item.Status)) return false;
+
+                List<string> statusParts = item.Status.Split(new[] { '；' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(part => part.Trim()).Where(part => part.Length > 0).ToList();
+                if (!statusParts.Any(part => String.Equals(part, "待确认换算", StringComparison.Ordinal))) return false;
+                decimal quantity;
+                string error;
+                if (!TryEvaluateDecimal(item.QuantityText, out quantity, out error) || quantity <= 0m) return false;
+
+                item.Status = String.Join("；", statusParts.Where(part =>
+                    !String.Equals(part, "待确认换算", StringComparison.Ordinal)).ToArray());
+                item.AlignNote = AppendPreviewNote(item.AlignNote, "数量已人工确认");
+                return true;
+            }
+
+            private void RefreshNameQuotaRiskStateInGrid(int targetRow)
+            {
+                List<FillPreviewItem> group = preview.Where(item => item != null && item.IsNameDriven &&
+                    item.TargetRow == targetRow).ToList();
+                string blockingReason = GetUnsafeNameQuotaCandidateReason(group);
+                foreach (DataGridViewRow row in grid.Rows)
+                {
+                    FillPreviewItem item = row.Tag as FillPreviewItem;
+                    if (item == null || !item.IsNameDriven || item.TargetRow != targetRow) continue;
+                    bool isGroupMember = item.GroupOrder > 0;
+                    row.Cells["sel"].ReadOnly = isGroupMember || !String.IsNullOrWhiteSpace(blockingReason);
+                    row.Cells["sel"].ToolTipText = String.IsNullOrWhiteSpace(blockingReason)
+                        ? (item.NeedExactNameConfirmation ? "勾选接受当前候选" : "")
+                        : "该组件存在风险：" + blockingReason + "。请先修改数量或处理单位、条目问题。";
+                    row.Cells["st"].Value = String.IsNullOrEmpty(item.Status) ? (item.AlignNote ?? "") : item.Status;
+                    row.DefaultCellStyle.BackColor = item.NeedExactNameConfirmation || !String.IsNullOrEmpty(item.Status)
+                        ? Color.MistyRose
+                        : (item.NeedManualQuota ? Color.FromArgb(255, 246, 196) : Color.Empty);
+                }
+            }
+
+            private static Rectangle GetVisibleMergedTargetNameBounds(DataGridView ownerGrid, int columnIndex,
+                int startRow, int endRow)
+            {
+                if (ownerGrid == null || columnIndex < 0 || columnIndex >= ownerGrid.Columns.Count ||
+                    startRow < 0 || endRow < startRow || endRow >= ownerGrid.Rows.Count) return Rectangle.Empty;
+                Rectangle result = Rectangle.Empty;
+                for (int i = startRow; i <= endRow; i++)
+                {
+                    if (!ownerGrid.Rows[i].Displayed) continue;
+                    Rectangle cellBounds = ownerGrid.GetCellDisplayRectangle(columnIndex, i, true);
+                    if (cellBounds.Width <= 0 || cellBounds.Height <= 0) continue;
+                    result = result.IsEmpty ? cellBounds : Rectangle.Union(result, cellBounds);
+                }
+                if (result.IsEmpty) return result;
+
+                Rectangle dataBounds = ownerGrid.ClientRectangle;
+                if (ownerGrid.ColumnHeadersVisible)
+                {
+                    dataBounds.Y += ownerGrid.ColumnHeadersHeight;
+                    dataBounds.Height = Math.Max(0, ownerGrid.ClientRectangle.Bottom - dataBounds.Y);
+                }
+                result.Intersect(dataBounds);
+                return result;
+            }
+
             // —— 条目树 ——
             // 用章节表的 条目编号+名称 构建层级：只显示编号为两位数字（01、02…）这级及以下，
             // “第一部分”这类更高层级不进树。节点 Tag 为条目编号，根节点 Tag 为空串表示全部。
@@ -1266,7 +1347,7 @@ namespace RecoNet
                 {
                     FillPreviewItem it = row.Tag as FillPreviewItem;
                     if (it == null) continue;
-                    it.QuantityText = Convert.ToString(row.Cells["qty"].Value).Trim();
+                    ApplyEditedNameQuotaQuantity(it, Convert.ToString(row.Cells["qty"].Value).Trim());
                     if (row.Cells["sel"] is DataGridViewCheckBoxCell)
                     {
                         bool selected = Convert.ToBoolean(row.Cells["sel"].Value ?? false);

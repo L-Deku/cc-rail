@@ -57,18 +57,21 @@ try {
     $signature = $rawName + '|'
     $targetCode = 'OUT-' + $suffix.Substring(0, 20)
     $boxId = 'box-out-' + $suffix.Substring(0, 24)
-    $entryCode = '12-01'
+    $entryCode = '13-02'
+    $legacyGroupEntryCode = '12-01'
 
     $groupType.GetField('QuantityName', $allFlags).SetValue($group, $rawName)
     $groupType.GetField('QuantityUnit', $allFlags).SetValue($group, 'm2')
-    $groupType.GetField('EntryCode', $allFlags).SetValue($group, $entryCode)
-    $groupType.GetField('EntryName', $allFlags).SetValue($group, 'outbox entry')
+    $groupType.GetField('EntryCode', $allFlags).SetValue($group, $legacyGroupEntryCode)
+    $groupType.GetField('EntryName', $allFlags).SetValue($group, 'legacy group entry')
     $groupType.GetField('Method', $allFlags).SetValue($group, '2024')
     $groupType.GetField('BoxId', $allFlags).SetValue($group, $boxId)
     $targetType.GetField('Kind', $allFlags).SetValue($target, 'quota')
     $targetType.GetField('Code', $allFlags).SetValue($target, $targetCode)
     $targetType.GetField('Name', $allFlags).SetValue($target, 'outbox target')
     $targetType.GetField('Unit', $allFlags).SetValue($target, 'm3')
+    $targetType.GetField('EntryCode', $allFlags).SetValue($target, $entryCode)
+    $targetType.GetField('EntryName', $allFlags).SetValue($target, 'target-level outbox entry')
     $targetType.GetField('FormulaTemplate', $allFlags).SetValue($target, 'V0*0.2')
     [void]$groupType.GetField('Targets', $allFlags).GetValue($group).PSObject.BaseObject.Add($target)
     $operandType.GetField('Name', $allFlags).SetValue($operand, $rawName)
@@ -163,7 +166,7 @@ try {
     if ($outboxLines.Count -ne 1) { throw "Expected one outbox batch, got $($outboxLines.Count)" }
     $savedLine = $outboxLines[0]
     if ($savedLine -match 'Password=|Server=|User ID=') { throw 'Outbox leaked a database connection string' }
-    foreach ($marker in $rawName, $targetCode, 'V0*0.2', $signature, $boxId) {
+    foreach ($marker in $rawName, $targetCode, $entryCode, 'target-level outbox entry', 'V0*0.2', $signature, $boxId) {
         if ($savedLine -notlike ('*' + $marker + '*')) { throw "Outbox lost required replay metadata: $marker" }
     }
     $pendingKeys = $pendingKeysMethod.Invoke($null, $null).PSObject.BaseObject

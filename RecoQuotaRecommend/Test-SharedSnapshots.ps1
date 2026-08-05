@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 if ([String]::IsNullOrWhiteSpace($env:RECO_QUOTA_DLL)) {

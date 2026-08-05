@@ -186,6 +186,20 @@ if ($matches.Count -ne 1 -or $matches[0].Targets.Count -ne 1 -or $matches[0].Tar
 }
 Write-Host 'PASS local learning applies correction and rejection deltas'
 
+$targetEntryRows = [Activator]::CreateInstance($upsert.GetParameters()[0].ParameterType)
+$targetEntryGroup = New-FeedbackGroup 'Q-TARGET' 1 0 0
+$groupType.GetField('EntryCode', $flags).SetValue($targetEntryGroup, '0101-LEGACY')
+$groupType.GetField('EntryName', $flags).SetValue($targetEntryGroup, 'legacy group entry')
+$targetEntryTarget = $groupType.GetField('Targets', $flags).GetValue($targetEntryGroup)[0]
+$targetType.GetField('EntryCode', $flags).SetValue($targetEntryTarget, '0202-TARGET')
+$targetType.GetField('EntryName', $flags).SetValue($targetEntryTarget, 'target entry')
+$upsert.Invoke($null, [object[]]@($targetEntryRows.PSObject.BaseObject, $targetEntryGroup.PSObject.BaseObject))
+$targetEntryRow = @($targetEntryRows)[0]
+if ($targetEntryRow['entry_code'] -ne '0202-TARGET' -or $targetEntryRow['entry_name'] -ne 'target entry') {
+    throw 'mapping-boxes persistence used legacy group entry instead of target-level entry.'
+}
+Write-Host 'PASS mapping-boxes persists each target entry before the legacy group fallback'
+
 $collectAccepted = $type.GetMethod('CollectFullyWrittenNameDrivenGroups', $flags)
 $shouldRecordLocal = $type.GetMethod('ShouldRecordAcceptedFillGroupLocally', $flags)
 $shouldRetryRemote = $type.GetMethod('ShouldRetryAcceptedFillGroupRemotely', $flags)
@@ -196,7 +210,13 @@ if ($null -eq $collectAccepted -or $null -eq $shouldRecordLocal -or
 }
 $acceptedItems = [Activator]::CreateInstance($itemListType)
 foreach ($code in @('Q-1', 'Q-2', 'Q-3')) {
-    $acceptedItems.Add((New-PreviewItem 'Mud transport accepted' $code '0101' 'm3' 20))
+    $acceptedItem = New-PreviewItem 'Mud transport accepted' $code '0101' 'm3' 20
+    $acceptedItem.Selected = $true
+    $acceptedItems.Add($acceptedItem)
+}
+for ($acceptedIndex = 0; $acceptedIndex -lt $acceptedItems.Count; $acceptedIndex++) {
+    $acceptedItems[$acceptedIndex].ChosenItemNo = '02-0' + ($acceptedIndex + 1)
+    $acceptedItems[$acceptedIndex].ChosenItemName = 'target entry ' + ($acceptedIndex + 1)
 }
 $writtenSetType = [Collections.Generic.HashSet``1].MakeGenericType($itemType)
 $writtenItems = [Activator]::CreateInstance($writtenSetType)
@@ -212,6 +232,12 @@ $fullGroups = $collectAccepted.Invoke($null, $collectArgs)
 if ($fullGroups.Count -ne 1 -or $fullGroups[0].Count -ne 3) {
     throw 'A fully written three-target group did not produce exactly one accepted group.'
 }
+$acceptedItems[1].Selected = $false
+if ($collectAccepted.Invoke($null, $collectArgs).Count -ne 0) {
+    throw 'An unselected target inside a fully written group produced accepted feedback.'
+}
+$acceptedItems[1].Selected = $true
+$fullGroups = $collectAccepted.Invoke($null, $collectArgs)
 $buildArgs = [object[]]::new(8)
 $buildArgs[0] = $fullGroups[0]
 $buildArgs[1] = 'accepted.xlsx'
@@ -225,6 +251,12 @@ $acceptedFeedback = $buildAccepted.Invoke($null, $buildArgs)
 if ($null -eq $acceptedFeedback -or $acceptedFeedback.AcceptedCount -ne 1 -or
     $acceptedFeedback.Targets.Count -ne 3 -or $acceptedFeedback.Workbook -ne 'accepted.xlsx') {
     throw 'A fully written group did not build one complete accepted mapping group.'
+}
+for ($acceptedIndex = 0; $acceptedIndex -lt $acceptedFeedback.Targets.Count; $acceptedIndex++) {
+    if ($acceptedFeedback.Targets[$acceptedIndex].EntryCode -ne ('02-0' + ($acceptedIndex + 1)) -or
+        $acceptedFeedback.Targets[$acceptedIndex].EntryName -ne ('target entry ' + ($acceptedIndex + 1))) {
+        throw 'Accepted feedback collapsed target-level entries back to the group entry.'
+    }
 }
 $anchorItem = New-PreviewItem 'Column anchor' 'Q-A' '0101' 'm3' 21
 $anchorItem.IsNameDriven = $false
@@ -246,6 +278,28 @@ if (-not [bool]$shouldRetryRemote.Invoke($null, $gateArgs)) { throw 'Remote-only
 foreach ($item in $acceptedItems) { $item.RemoteFeedbackDurable = $true }
 if ([bool]$shouldRetryRemote.Invoke($null, $gateArgs)) { throw 'Durable accepted feedback was scheduled for another remote retry.' }
 Write-Host 'PASS accepted apply learns only complete name-driven groups and keeps local/remote idempotence separate'
+
+$batchType = $type.GetNestedType('LearningDbOutboxBatch', $flags)
+$batch = [Activator]::CreateInstance($batchType, $true).PSObject.BaseObject
+$batchType.GetField('BatchId', $flags).SetValue($batch, ('a' * 32))
+$batchType.GetField('Source', $flags).SetValue($batch, 'apply-accept')
+[void]$batchType.GetField('Groups', $flags).GetValue($batch).Add($acceptedFeedback)
+$serializeBatch = $type.GetMethod('SerializeLearningDbOutboxBatch', $flags)
+$toFlatJson = $type.GetMethod('ToFlatJson', $flags)
+$parseBatch = $type.GetMethod('ParseLearningDbOutboxBatch', $flags)
+$serializeArgs = New-Object 'object[]' 1; $serializeArgs[0] = $batch
+$flatBatch = $serializeBatch.Invoke($null, $serializeArgs)
+$jsonArgs = New-Object 'object[]' 1; $jsonArgs[0] = $flatBatch.PSObject.BaseObject
+$outboxLine = [string]$toFlatJson.Invoke($null, $jsonArgs)
+$parseArgs = New-Object 'object[]' 1; $parseArgs[0] = $outboxLine
+$parsedBatch = $parseBatch.Invoke($null, $parseArgs)
+$parsedGroup = $batchType.GetField('Groups', $flags).GetValue($parsedBatch)[0]
+$parsedTargets = $groupType.GetField('Targets', $flags).GetValue($parsedGroup)
+if ($parsedTargets.Count -ne 3 -or $parsedTargets[0].EntryCode -ne '02-01' -or
+    $parsedTargets[2].EntryCode -ne '02-03' -or $parsedTargets[2].EntryName -ne 'target entry 3') {
+    throw 'Outbox serialize/parse roundtrip lost target-level entries.'
+}
+Write-Host 'PASS Outbox roundtrip preserves target-level entries without database access'
 
 $applySource = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\TemplateFillFeature.cs') -Raw
 if ($applySource -notmatch 'apply-accept' -or $applySource -notmatch 'CollectFullyWrittenNameDrivenGroups') {

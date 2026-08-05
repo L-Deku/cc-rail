@@ -105,6 +105,7 @@ namespace RecoNet
             public long SourceDbQuotaSeq;  // 来源库中的定额序号(跨库整行复制用)
             public long ChosenItemSeq;     // 用户显式选择的放入条目(条目序号)；0=未选(沿用邻居锚点)
             public string ChosenItemNo;    // 对应条目编号(显示/粘贴导航用)
+            public string ChosenItemName;  // 对应条目名称(目标级学习回流用)
             public bool NeedExactNameConfirmation; // 精确同名已带出定额，但仍需用户确认
             public bool LocalFeedbackRecorded;     // 当前预览已给本机学习关系加票
             public bool RemoteFeedbackDurable;     // SQL 已提交或已持久化进 outbox
@@ -1200,7 +1201,7 @@ namespace RecoNet
                     GetAgentRedoStack(mainForm).Clear();
                 }
 
-                List<List<FillPreviewItem>> acceptedGroups = CollectFullyWrittenNameDrivenGroups(selected, writtenNameDrivenItems);
+                List<List<FillPreviewItem>> acceptedGroups = CollectFullyWrittenNameDrivenGroups(items, writtenNameDrivenItems);
                 if (acceptedGroups.Count > 0)
                 {
                     try
@@ -1269,14 +1270,14 @@ namespace RecoNet
         }
 
         private static List<List<FillPreviewItem>> CollectFullyWrittenNameDrivenGroups(
-            IEnumerable<FillPreviewItem> selected, HashSet<FillPreviewItem> writtenItems)
+            IEnumerable<FillPreviewItem> allItems, HashSet<FillPreviewItem> writtenItems)
         {
             HashSet<FillPreviewItem> written = writtenItems ?? new HashSet<FillPreviewItem>();
-            return (selected ?? Enumerable.Empty<FillPreviewItem>())
+            return (allItems ?? Enumerable.Empty<FillPreviewItem>())
                 .Where(item => item != null && item.IsNameDriven)
                 .GroupBy(item => item.TargetRow)
                 .Select(group => group.ToList())
-                .Where(group => group.Count > 0 && group.All(written.Contains))
+                .Where(group => group.Count > 0 && group.All(item => item.Selected) && group.All(written.Contains))
                 .ToList();
         }
 

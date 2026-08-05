@@ -32,7 +32,14 @@ $contextTargetCode = 'CTX-' + $suffix.Substring(0, 18)
 $conflictTargetCode = 'CTX-CONFLICT-' + $suffix.Substring(0, 9)
 $contextNameA = $rawName + '-A'
 $contextNameB = $rawName + '-B'
+$pureContextName = $rawName + '-PURE'
 $conflictName = $rawName + '-CONFLICT'
+$pureSfName = $rawName + '-PURE-SF'
+$mixedEntryName = $rawName + '-MIXED-ENTRY'
+$invalidSfName = $rawName + '-INVALID-SF'
+$pureSfBoxId = 'box-sf-' + $suffix.Substring(0, 24)
+$mixedEntryBoxId = 'box-mixed-' + $suffix.Substring(0, 21)
+$invalidSfBoxId = 'box-invalid-' + $suffix.Substring(0, 19)
 
 $groupType.GetField('QuantityName', $allFlags).SetValue($group, $rawName)
 $groupType.GetField('QuantityUnit', $allFlags).SetValue($group, 'm2')
@@ -62,11 +69,13 @@ function New-ContextAggregateGroup([string]$quantityName, [string]$ordinaryCode,
         $groupType.GetField($pair.Key, $allFlags).SetValue($testGroup, $pair.Value)
     }
     $testTargets = $groupType.GetField('Targets', $allFlags).GetValue($testGroup).PSObject.BaseObject
-    $ordinaryTarget = [Activator]::CreateInstance($targetType, $true).PSObject.BaseObject
-    foreach ($definition in @(@('Kind','quota'),@('Code',$ordinaryCode),@('Name','ordinary target'),@('Unit','100m3'))) {
-        $targetType.GetField($definition[0], $allFlags).SetValue($ordinaryTarget, $definition[1])
+    if (-not [String]::IsNullOrWhiteSpace($ordinaryCode)) {
+        $ordinaryTarget = [Activator]::CreateInstance($targetType, $true).PSObject.BaseObject
+        foreach ($definition in @(@('Kind','quota'),@('Code',$ordinaryCode),@('Name','ordinary target'),@('Unit','100m3'))) {
+            $targetType.GetField($definition[0], $allFlags).SetValue($ordinaryTarget, $definition[1])
+        }
+        [void]$testTargets.Add($ordinaryTarget)
     }
-    [void]$testTargets.Add($ordinaryTarget)
     $auxiliaryDefinitions = New-Object System.Collections.ArrayList
     [void]$auxiliaryDefinitions.Add([object[]]@($auxiliaryName,$auxiliaryUnit))
     if (-not [String]::IsNullOrWhiteSpace($secondAuxiliaryName)) {
@@ -78,6 +87,24 @@ function New-ContextAggregateGroup([string]$quantityName, [string]$ordinaryCode,
             $targetType.GetField($definition[0], $allFlags).SetValue($auxiliaryTarget, $definition[1])
         }
         [void]$testTargets.Add($auxiliaryTarget)
+    }
+    Write-Output -NoEnumerate $testGroup
+}
+function New-TargetEntryAggregateGroup([string]$quantityName, [string]$testBoxId, $definitions) {
+    $testGroup = [Activator]::CreateInstance($groupType, $true).PSObject.BaseObject
+    foreach ($pair in @{ QuantityName=$quantityName; QuantityUnit='元'; Method='2024'; BoxId=$testBoxId; AcceptedCount=1 }.GetEnumerator()) {
+        $groupType.GetField($pair.Key, $allFlags).SetValue($testGroup, $pair.Value)
+    }
+    $testTargets = $groupType.GetField('Targets', $allFlags).GetValue($testGroup).PSObject.BaseObject
+    foreach ($definition in $definitions) {
+        $testTarget = [Activator]::CreateInstance($targetType, $true).PSObject.BaseObject
+        foreach ($field in @(
+            @('Kind',$definition[0]), @('Code',$definition[1]), @('Name',$definition[2]),
+            @('Unit',$definition[3]), @('EntryCode',$definition[4]), @('EntryName',$definition[5])
+        )) {
+            $targetType.GetField($field[0], $allFlags).SetValue($testTarget, $field[1])
+        }
+        [void]$testTargets.Add($testTarget)
     }
     Write-Output -NoEnumerate $testGroup
 }
@@ -279,7 +306,8 @@ WHERE r.anchor_signature=@signature AND r.target_code=@code
 
     $contextGroupA = New-ContextAggregateGroup $contextNameA $contextTargetCode '消纳费' 'm3'
     $contextGroupB = New-ContextAggregateGroup $contextNameB $contextTargetCode 'PE' 'm'
-    foreach ($contextGroup in @($contextGroupA,$contextGroupB)) {
+    $pureContextGroup = New-ContextAggregateGroup $pureContextName '' 'FAS 联动接入' '项'
+    foreach ($contextGroup in @($contextGroupA,$contextGroupB,$pureContextGroup)) {
         $contextArgs = New-Object 'object[]' 3
         $contextArgs[0] = $connection.PSObject.BaseObject
         $contextArgs[1] = $transaction.PSObject.BaseObject
@@ -303,6 +331,65 @@ ORDER BY sh.target_name,sh.target_unit
         ($contextRows[0].Split('|')[-1] -eq $contextRows[1].Split('|')[-1])) {
         throw "Context-sensitive SH identities were not split into stable boxes: $($contextRows -join '; ')"
     }
+    $pureContextQuery = $connection.CreateCommand()
+    $pureContextQuery.Transaction = $transaction
+    $pureContextQuery.CommandText = @'
+SELECT COUNT(*)
+FROM dbo.QuantityAlias a
+JOIN dbo.SignatureBoxMap m ON m.signature=a.signature AND m.method=@method
+JOIN dbo.QuotaBoxTarget t ON t.box_id=m.box_id
+WHERE a.raw_name=@name AND t.target_code='SH' AND t.target_name=@target_name AND t.target_unit=@target_unit
+'@
+    [void]$pureContextQuery.Parameters.AddWithValue('@method', $method)
+    [void]$pureContextQuery.Parameters.AddWithValue('@name', $pureContextName)
+    [void]$pureContextQuery.Parameters.AddWithValue('@target_name', 'FAS 联动接入')
+    [void]$pureContextQuery.Parameters.AddWithValue('@target_unit', '项')
+    if ([int]$pureContextQuery.ExecuteScalar() -ne 1) {
+        throw '名称和单位完整的纯 SH 组件未进入增量聚合'
+    }
+
+    $pureSfDefinitions = New-Object System.Collections.ArrayList
+    [void]$pureSfDefinitions.Add([object[]]@('quota','SF','设备购置费','元','0802-01','设备购置费'))
+    $pureSfGroup = New-TargetEntryAggregateGroup $pureSfName $pureSfBoxId $pureSfDefinitions
+    $mixedDefinitions = New-Object System.Collections.ArrayList
+    [void]$mixedDefinitions.Add([object[]]@('quota','EY-299','安装设备','台','0801-01','安装工程费'))
+    [void]$mixedDefinitions.Add([object[]]@('quota','SF','设备购置费','元','0802-01','设备购置费'))
+    [void]$mixedDefinitions.Add([object[]]@('quota','ZLF','装料费','m3','0801-01','安装工程费'))
+    [void]$mixedDefinitions.Add([object[]]@('quota','SH','配合费','项','0803-01','其他工程费'))
+    $mixedEntryGroup = New-TargetEntryAggregateGroup $mixedEntryName $mixedEntryBoxId $mixedDefinitions
+    $invalidDefinitions = New-Object System.Collections.ArrayList
+    [void]$invalidDefinitions.Add([object[]]@('quota','EY-299','安装设备','台','0802-01','设备购置费'))
+    [void]$invalidDefinitions.Add([object[]]@('quota','SF','设备购置费','元','0801-01','安装工程费'))
+    $invalidSfGroup = New-TargetEntryAggregateGroup $invalidSfName $invalidSfBoxId $invalidDefinitions
+    foreach ($targetEntryGroup in @($pureSfGroup,$mixedEntryGroup,$invalidSfGroup)) {
+        $targetEntryArgs = New-Object 'object[]' 3
+        $targetEntryArgs[0] = $connection.PSObject.BaseObject
+        $targetEntryArgs[1] = $transaction.PSObject.BaseObject
+        $targetEntryArgs[2] = $targetEntryGroup.PSObject.BaseObject
+        [void]$upsert.Invoke($null, $targetEntryArgs)
+    }
+    $targetEntryQuery = $connection.CreateCommand()
+    $targetEntryQuery.Transaction = $transaction
+    $targetEntryQuery.CommandText = @'
+SELECT
+  (SELECT COUNT(*) FROM dbo.EngineeringTemplate WHERE box_id=@pure_box AND entry_code='0802-01'),
+  (SELECT COUNT(*) FROM dbo.SignatureEntryMap WHERE signature=@pure_sig AND target_code='SF' AND entry_code='0802-01'),
+  (SELECT COUNT(*) FROM dbo.EngineeringTemplate WHERE box_id=@mixed_box),
+  (SELECT COUNT(*) FROM dbo.QuantityAlias WHERE raw_name=@invalid_name)
+'@
+    [void]$targetEntryQuery.Parameters.AddWithValue('@pure_box', $pureSfBoxId)
+    [void]$targetEntryQuery.Parameters.AddWithValue('@pure_sig', $pureSfName + '|')
+    [void]$targetEntryQuery.Parameters.AddWithValue('@mixed_box', $mixedEntryBoxId)
+    [void]$targetEntryQuery.Parameters.AddWithValue('@invalid_name', $invalidSfName)
+    $targetEntryReader = $targetEntryQuery.ExecuteReader()
+    try {
+        if (-not $targetEntryReader.Read() -or $targetEntryReader.GetInt32(0) -ne 1 -or
+            $targetEntryReader.GetInt32(1) -ne 1 -or $targetEntryReader.GetInt32(2) -ne 2 -or
+            $targetEntryReader.GetInt32(3) -ne 0) {
+            throw '纯 SF 未归入设备购置费范围、混合框未按普通/SF 两条目归集，或 SF 违规组进入了聚合'
+        }
+    }
+    finally { $targetEntryReader.Dispose() }
 
     $conflictGroup = New-ContextAggregateGroup $conflictName $conflictTargetCode '消纳费' 'm3' 'PE' 'm'
     $conflictArgs = New-Object 'object[]' 3
@@ -340,14 +427,15 @@ if ($formulaTablesExisted) {
 [void]$verify.Parameters.AddWithValue('@box', $boxId)
 $afterCount = [int]$verify.ExecuteScalar()
 $contextVerify = $connection.CreateCommand()
-$contextVerify.CommandText = 'SELECT (SELECT COUNT(*) FROM dbo.QuotaBoxTarget WHERE target_code IN (@context,@conflict)) + (SELECT COUNT(*) FROM dbo.QuantityAlias WHERE raw_name IN (@nameA,@nameB,@conflictName))'
+$contextVerify.CommandText = 'SELECT (SELECT COUNT(*) FROM dbo.QuotaBoxTarget WHERE target_code IN (@context,@conflict)) + (SELECT COUNT(*) FROM dbo.QuantityAlias WHERE raw_name IN (@nameA,@nameB,@pureName,@conflictName))'
 [void]$contextVerify.Parameters.AddWithValue('@context', $contextTargetCode)
 [void]$contextVerify.Parameters.AddWithValue('@conflict', $conflictTargetCode)
 [void]$contextVerify.Parameters.AddWithValue('@nameA', $contextNameA)
 [void]$contextVerify.Parameters.AddWithValue('@nameB', $contextNameB)
+[void]$contextVerify.Parameters.AddWithValue('@pureName', $pureContextName)
 [void]$contextVerify.Parameters.AddWithValue('@conflictName', $conflictName)
 $contextAfterCount = [int]$contextVerify.ExecuteScalar()
 $connection.Dispose()
 if ($afterCount -ne 0 -or $contextAfterCount -ne 0) { throw "Rollback left $afterCount ordinary and $contextAfterCount context test rows" }
 
-Write-Host 'Test-LearningDbIncrementalAggregate: PASS (ordinary idempotence, SH identity split/conflict guard, no residue after rollback)'
+Write-Host 'Test-LearningDbIncrementalAggregate: PASS (ordinary idempotence, exact pure SH aggregation, SH identity split/conflict guard, no residue after rollback)'

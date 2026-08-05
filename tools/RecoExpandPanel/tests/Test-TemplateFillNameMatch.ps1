@@ -622,6 +622,22 @@ try {
         @($riskRows | Where-Object { $_.Tag.Status -ne '待确认换算' }).Count -ne 0) {
         throw '风险候选应刷新完整组件但保持未勾选和风险状态'
     }
+    if (-not $riskRows[0].Cells['sel'].ReadOnly -or
+        $riskRows[0].Cells['sel'].ToolTipText -notmatch '待确认换算') {
+        throw '存在换算风险时应明确禁用组首勾选并显示原因'
+    }
+    foreach ($riskRow in $riskRows) { $riskRow.Cells['qty'].Value = '50*0.1' }
+    [System.Windows.Forms.Application]::DoEvents()
+    if (@($riskRows | Where-Object { -not [String]::IsNullOrWhiteSpace([string]$_.Tag.Status) }).Count -ne 0 -or
+        $riskRows[0].Cells['sel'].ReadOnly) {
+        throw '人工输入有效正数表达式后应解除待确认换算阻断'
+    }
+    $riskRows[0].Cells['sel'].Value = $true
+    $panelType.GetMethod('ApplyNameGroupSelectionFromCheck', $flags).Invoke(
+        $panel, @($riskRows[0].PSObject.BaseObject))
+    if (@($riskRows | Where-Object { -not $_.Tag.Selected -or $_.Tag.NeedExactNameConfirmation }).Count -ne 0) {
+        throw '换算风险解除后应允许组首勾选并确认整组'
+    }
     $panelType.GetMethod('FillGrid', $flags).Invoke($panel, $null)
     if (@($uiGrid.Rows | Where-Object { $_.Tag.TargetRow -eq 60 }).Count -ne 2) {
         throw '组件组成员条目不同时，按左树范围刷新不得拆散组件'
@@ -731,6 +747,17 @@ try {
             $scrollTargetRows[1].Cells['code'].Value -ne 'M-B' -or $topTargetAfterChoice -ne $topTargetBefore -or
             -not [Object]::ReferenceEquals($unaffectedRow, $scrollGrid.Rows[5])) {
             throw '候选切换必须只增删当前组并保持滚动视口'
+        }
+        $scrollGrid.FirstDisplayedScrollingRowIndex = $scrollTargetRows[1].Index
+        [System.Windows.Forms.Application]::DoEvents()
+        $mergedBoundsMethod = $panelType.GetMethod('GetVisibleMergedTargetNameBounds', $flags)
+        if ($null -eq $mergedBoundsMethod) { throw '缺少合并工程量名可见区域计算入口' }
+        $mergedBounds = $mergedBoundsMethod.Invoke($null, @(
+            $scrollGrid.PSObject.BaseObject, $scrollGrid.Columns['tname'].Index,
+            $scrollTargetRows[0].Index, $scrollTargetRows[1].Index))
+        if ($mergedBounds.IsEmpty -or $mergedBounds.Top -lt $scrollGrid.ColumnHeadersHeight -or
+            $mergedBounds.Bottom -gt $scrollGrid.ClientSize.Height) {
+            throw '合并工程量名绘制区域越过表头或可见数据区'
         }
         Write-Host 'PASS 勾选和候选切换仅局部刷新并保持滚动视口'
     }

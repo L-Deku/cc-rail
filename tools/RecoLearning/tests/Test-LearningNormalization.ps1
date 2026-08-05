@@ -82,6 +82,43 @@ if ($rebuild -notmatch '\$methodSignature = \(Get-LearningMethodPartition \(\[st
 if ($rebuild -notmatch 'Get-LearningTargetIdentityKey' -or
     $rebuild -notmatch 'UnsafeContextTargets' -or
     $rebuild -notmatch '跳过同码多义组件') { throw '聚合重建没有隔离通用辅助代码或报告不安全组件' }
+if ($rebuild -match '跳过纯辅助组件' -or $rebuild -notmatch '跳过身份不完整辅助组件') {
+  throw '聚合重建仍在笼统排除纯辅助组件，或未报告名称单位不完整的身份'
+}
+$sfConstraintBlock = [regex]::Match($rebuild, '(?ms)^function Test-SfEntryConstraint\s*\{.*?^\}')
+$scopeTargetBlock = [regex]::Match($rebuild, '(?ms)^function Test-EngineeringScopeTarget\s*\{.*?^\}')
+if (-not $sfConstraintBlock.Success -or -not $scopeTargetBlock.Success) { throw '重建缺少 SF 双向约束或目标级工程范围分类' }
+. ([ScriptBlock]::Create($sfConstraintBlock.Value))
+. ([ScriptBlock]::Create($scopeTargetBlock.Value))
+
+$validMixed = @{ Targets = @{
+  ordinary = @{ Kind='quota'; Code='EY-299'; EntryCode='0801'; EntryName='安装工程费' }
+  sf = @{ Kind='quota'; Code='SF'; EntryCode='0802'; EntryName='设备购置费' }
+} }
+$invalidOrdinary = @{ Targets = @{ ordinary = @{ Kind='quota'; Code='EY-299'; EntryCode='0802'; EntryName='设备购置费' } } }
+$invalidSf = @{ Targets = @{ sf = @{ Kind='quota'; Code='SF'; EntryCode='0801'; EntryName='安装工程费' } } }
+if (-not (Test-SfEntryConstraint $validMixed) -or
+    (Test-SfEntryConstraint $invalidOrdinary) -or (Test-SfEntryConstraint $invalidSf)) {
+  throw '全量重建未正确执行 SF 双向条目约束'
+}
+foreach ($case in @(
+  @(@{ Kind='quota'; Code='EY-299' }, $true),
+  @(@{ Kind='quota'; Code='SF' }, $true),
+  @(@{ Kind='quota'; Code='SH' }, $false),
+  @(@{ Kind='quota'; Code='ZLF' }, $false),
+  @(@{ Kind='quota'; Code='LF' }, $false),
+  @(@{ Kind='material'; Code='1009001' }, $false)
+)) {
+  if ([bool](Test-EngineeringScopeTarget $case[0]) -ne [bool]$case[1]) {
+    throw "全量重建工程范围目标分类错误: $($case[0].Kind)/$($case[0].Code)"
+  }
+}
+if ([regex]::Matches($rebuild, '\$aggregateGroupKeys\.Contains\(\[string\]\$row\.group_key\)').Count -ne 2 -or
+    $rebuild -match '\$g\.EntryCode' -or
+    ([regex]::Matches($rebuild, 'Group-Object -Property EntryCode')).Count -lt 2 -or
+    $rebuild -notmatch '跳过违反 SF 双向条目约束组件') {
+  throw '公式/SignatureEntryMap 未排除违规组，或 EngineeringTemplate/SheetTemplateRow 仍使用组级条目'
+}
 
 $import = Get-Content -LiteralPath (Join-Path $learningRoot 'Import-JsonlLibraries.ps1') -Raw -Encoding UTF8
 if ($import -notmatch '\[switch\]\$ImportBindingHistory' -or $import -notmatch '\[string\]\$SourceId') { throw '历史 JSONL 导入未改成显式一次性操作' }

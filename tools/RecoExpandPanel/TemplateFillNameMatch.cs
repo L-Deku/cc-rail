@@ -1422,6 +1422,8 @@ namespace RecoNet
                     Code = item.QuotaCode,
                     Name = item.SourceName,
                     Unit = item.Unit,
+                    EntryCode = !String.IsNullOrWhiteSpace(item.ChosenItemNo) ? item.ChosenItemNo : item.ItemNo,
+                    EntryName = !String.IsNullOrWhiteSpace(item.ChosenItemName) ? item.ChosenItemName : mappingGroup.EntryName,
                     FormulaTemplate = acceptedCount + correctedCount > 0 ? item.FormulaTemplate : ""
                 });
             }

@@ -17,8 +17,9 @@ function Assert-Contains([string]$Text, [string]$Expected, [string]$Message) {
 
 Assert-Contains $excelLink 'ExtractPositiveAdditiveCellAddresses' '缺少正向相加单元格拆分入口。'
 Assert-Contains $excelLink 'BuildBindingFeedbackGroups' '缺少按原始表达式构建独立学习组的入口。'
-Assert-Contains $excelLink 'string entryScope = String.IsNullOrWhiteSpace(link.EntryCode) ? link.ChapterSeq : link.EntryCode;' '绑定组件分组没有使用稳定条目边界。'
-Assert-Contains $excelLink 'existing["entry_code"] = group.EntryCode ?? "";' '本机待同步组件没有保存条目上下文。'
+if ($excelLink.Contains('(entryScope ?? "").Trim()')) { throw '绑定组件仍按组级条目拆分，跨条目目标无法组成完整组件。' }
+Assert-Contains $excelLink 'string targetEntryCode = GetMappingFeedbackTargetEntryCode(group, target);' '本机待同步组件没有按目标保存条目上下文。'
+Assert-Contains $excelLink 'EntryCode = !String.IsNullOrWhiteSpace(target.EntryCode) ? target.EntryCode : group.EntryCode ?? ""' '绑定学习组没有优先传递 ExcelQuotaLink 的目标条目或兼容空值旧字段。'
 Assert-Contains $excelLink 'group.Targets.Add' '表达式学习组没有保留完整组件框目标。'
 Assert-Contains $excelLink 'public string QuotaUnit { get; set; }' 'ExcelQuotaLink 没有持久化定额单位。'
 Assert-Contains $excelLink 'public string EntryName { get; set; }' 'ExcelQuotaLink 没有持久化条目名称。'
@@ -148,7 +149,7 @@ try {
     $linkType.GetProperty('Method', $flags).SetValue($secondLink, '2024', $null)
     $links.Add($secondLink, 'HRB400钢筋 kg')
 
-    # 同一个来源表达式若属于不同稳定条目，必须拆成不同组件框，不能因地址相同而串组。
+    # 同一个原始绑定表达式就是一个组件；跨条目目标靠各自 EntryCode/EntryName 保持身份，不能再按组级条目拆散。
     $otherEntryLink = [Activator]::CreateInstance($linkType)
     $linkType.GetProperty('ExcelPath', $flags).SetValue($otherEntryLink, $fixturePath, $null)
     $linkType.GetProperty('WorksheetName', $flags).SetValue($otherEntryLink, 'Sheet1', $null)
@@ -165,7 +166,7 @@ try {
     $buildGroups = $type.GetMethod('BuildBindingFeedbackGroups', $flags)
     if ($null -eq $buildGroups) { throw '编译结果缺少 BuildBindingFeedbackGroups。' }
     $groups = @($buildGroups.Invoke($null, @($links.PSObject.BaseObject)))
-    if ($groups.Count -ne 6) { throw "表达式相同但条目不同也应拆组，预期六个正向来源别名，实际 $($groups.Count) 套。" }
+    if ($groups.Count -ne 4) { throw "跨条目目标应按同一原始表达式组成完整组件，预期四个正向来源别名，实际 $($groups.Count) 套。" }
     $actual = @()
     foreach ($group in $groups) {
         $groupType = $group.GetType()
@@ -179,18 +180,18 @@ try {
         $targets = @($groupType.GetField('Targets', $flags).GetValue($group))
         $targetFacts = @($targets | ForEach-Object {
             $targetType = $_.GetType()
-            ([string]$targetType.GetField('Code', $flags).GetValue($_)) + ':' + ([string]$targetType.GetField('Unit', $flags).GetValue($_))
+            ([string]$targetType.GetField('Code', $flags).GetValue($_)) + ':' +
+                ([string]$targetType.GetField('Unit', $flags).GetValue($_)) + ':' +
+                ([string]$targetType.GetField('EntryCode', $flags).GetValue($_))
         } | Sort-Object)
         $actual += "$sourceCell|$name|$unit|$rowNo|$method|$entryCode|$entryName|$($targetFacts -join ',')"
     }
     $actual = @($actual | Sort-Object)
     $expected = @(
-        'F1|HRB400钢筋|kg|1|2024|0101-01|沉井工程|QY-317:t,QY-318:10m3',
-        'F2|HPB300钢筋|kg|2|2024|0101-01|沉井工程|QY-317:t,QY-318:10m3',
-        'F1|HRB400钢筋|kg|1|2024|0301-01|独立条目|QY-999:t',
-        'F2|HPB300钢筋|kg|2|2024|0301-01|独立条目|QY-999:t',
-        'F3|HRB400钢筋|kg|3|2024|0201-01|另一处钢筋|QY-317:t',
-        'F4|HPB300钢筋|kg|4|2024|0201-01|另一处钢筋|QY-317:t'
+        'F1|HRB400钢筋|kg|1|2024|0101-01|沉井工程|QY-317:t:0101-01,QY-318:10m3:0101-01,QY-999:t:0301-01',
+        'F2|HPB300钢筋|kg|2|2024|0101-01|沉井工程|QY-317:t:0101-01,QY-318:10m3:0101-01,QY-999:t:0301-01',
+        'F3|HRB400钢筋|kg|3|2024|0201-01|另一处钢筋|QY-317:t:0201-01',
+        'F4|HPB300钢筋|kg|4|2024|0201-01|另一处钢筋|QY-317:t:0201-01'
     ) | Sort-Object
     if (($actual -join ';') -ne ($expected -join ';')) {
         throw "独立别名/单位/行号不正确：'$($actual -join ';')'"

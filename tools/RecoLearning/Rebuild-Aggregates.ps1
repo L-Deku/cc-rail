@@ -41,13 +41,11 @@ $groups = @{}
 foreach ($row in $log.Rows) {
   $gk = [string]$row.group_key
   if (-not $groups.ContainsKey($gk)) {
-    $groups[$gk] = @{ Name = [string]$row.quantity_name; Unit = [string]$row.quantity_unit; At = $row.occurred_at; Extra = [string]$row.extra; Targets = @{}; Method = ''; EntryCode = ''; EntryName = ''; UnsafeContextTargets = $false }
+    $groups[$gk] = @{ Name = [string]$row.quantity_name; Unit = [string]$row.quantity_unit; At = $row.occurred_at; Extra = [string]$row.extra; Targets = @{}; Method = ''; UnsafeContextTargets = $false }
   }
   $g = $groups[$gk]
   if ($row.occurred_at -gt $g.At) { $g.At = $row.occurred_at }
   if ($g.Method -eq '' -and [string]$row.method -ne '') { $g.Method = Get-LearningMethodPartition ([string]$row.method) }
-  if ($g.EntryCode -eq '' -and [string]$row.entry_code -ne '') { $g.EntryCode = [string]$row.entry_code }
-  if ($g.EntryName -eq '' -and [string]$row.entry_name -ne '') { $g.EntryName = [string]$row.entry_name }
   $targetKind = ([string]$row.target_kind).Trim()
   $targetCode = ([string]$row.target_code).Trim()
   if ($targetKind -eq '') { $targetKind = if ($targetCode -match '^\d+$') { 'material' } else { 'quota' } }
@@ -59,7 +57,14 @@ foreach ($row in $log.Rows) {
       $g.UnsafeContextTargets = $true
     }
   } else {
-    $g.Targets[$baseKey] = @{ Kind = $targetKind; Code = $targetCode; Name = [string]$row.target_name; Unit = [string]$row.target_unit; Identity = $identityKey }
+    $g.Targets[$baseKey] = @{ Kind = $targetKind; Code = $targetCode; Name = [string]$row.target_name; Unit = [string]$row.target_unit; Identity = $identityKey; EntryCode = [string]$row.entry_code; EntryName = [string]$row.entry_name }
+  }
+  if ($g.Targets.ContainsKey($baseKey)) {
+    $storedTarget = $g.Targets[$baseKey]
+    if ([string]::IsNullOrWhiteSpace([string]$storedTarget.EntryCode) -and -not [string]::IsNullOrWhiteSpace([string]$row.entry_code)) {
+      $storedTarget.EntryCode = [string]$row.entry_code
+      $storedTarget.EntryName = [string]$row.entry_name
+    }
   }
 }
 
@@ -80,17 +85,44 @@ function Test-PositiveLearningEvidence { param([string]$Extra)
 function Test-AggregateLearningGroupRecommendable { param($Group)
   $targets = @($Group.Targets.Values)
   if ($targets.Count -eq 0 -or $Group.UnsafeContextTargets) { return $false }
-  $ordinaryTargets = @($targets | Where-Object { -not (Test-ContextSensitiveLearningCode ([string]$_.Code)) })
-  if ($ordinaryTargets.Count -gt 0) { return $true }
-  return $targets.Count -eq 1 -and (Get-LearningBaseTargetCode ([string]$targets[0].Code)) -eq 'SF' -and
-    ([string]$Group.EntryName).IndexOf('设备购置费', [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+  $incompleteContextTargets = @($targets | Where-Object {
+    (Test-ContextSensitiveLearningCode ([string]$_.Code)) -and
+      ([string]::IsNullOrWhiteSpace([string]$_.Name) -or [string]::IsNullOrWhiteSpace([string]$_.Unit))
+  })
+  return $incompleteContextTargets.Count -eq 0
+}
+
+function Test-SfEntryConstraint { param($Group)
+  foreach ($target in @($Group.Targets.Values)) {
+    $isSf = (Get-LearningBaseTargetCode ([string]$target.Code)) -eq 'SF'
+    $isEquipmentEntry = ([string]$target.EntryName).IndexOf('设备购置费', [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    if ($isSf -ne $isEquipmentEntry) { return $false }
+  }
+  return $true
+}
+
+function Test-EngineeringScopeTarget { param($Target)
+  $kind = [string]$Target.Kind; if ($kind -eq '') { $kind = 'quota' }
+  if (-not [string]::Equals($kind, 'quota', [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
+  $baseCode = Get-LearningBaseTargetCode ([string]$Target.Code)
+  if ($baseCode -eq 'SF') { return $true }
+  return @('SH','SQ','ZLF','LF','YF','TLF','GF','JF','XGT1') -notcontains $baseCode
 }
 
 $unsafeContextGroupCount = @($groups.Values | Where-Object { $_.UnsafeContextTargets }).Count
-$skippedPureContextGroupCount = @($groups.Values | Where-Object {
+$skippedIncompleteContextGroupCount = @($groups.Values | Where-Object {
   -not $_.UnsafeContextTargets -and -not (Test-AggregateLearningGroupRecommendable $_)
 }).Count
-$aggregateGroups = @($groups.Values | Where-Object { Test-AggregateLearningGroupRecommendable $_ })
+$skippedSfConstraintGroupCount = @($groups.Values | Where-Object {
+  -not $_.UnsafeContextTargets -and (Test-AggregateLearningGroupRecommendable $_) -and -not (Test-SfEntryConstraint $_)
+}).Count
+$aggregateGroupKeys = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($pair in $groups.GetEnumerator()) {
+  if ((Test-AggregateLearningGroupRecommendable $pair.Value) -and (Test-SfEntryConstraint $pair.Value)) {
+    [void]$aggregateGroupKeys.Add([string]$pair.Key)
+  }
+}
+$aggregateGroups = @($aggregateGroupKeys | ForEach-Object { $groups[$_] })
 
 # 2a) 第一遍:先为每个目标集合定死 box 编号(mapping-boxes 原始编号优先,取字典序最小者保证确定性)
 $preferredHashes = @{}
@@ -190,6 +222,7 @@ foreach ($audit in $inferenceBySignature.Values) {
 # 2c) 已确认跨单位数量公式：单系数和多参数公式统一用 V0/V1... 模板表示。
 $formulas = @{}
 foreach ($row in $log.Rows) {
+  if (-not $aggregateGroupKeys.Contains([string]$row.group_key)) { continue }
   $extra = [string]$row.extra
   if (-not (Test-PositiveLearningEvidence $extra)) { continue }
   $template = Get-ExtraText $extra 'formula_template'
@@ -276,6 +309,7 @@ Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $re
 # 4) 签名级条目证据:某工程量(签名)+某定额 历史上实际放过的条目,按办法分组计数。
 $sigEntry = @{}
 foreach ($row in $log.Rows) {
+  if (-not $aggregateGroupKeys.Contains([string]$row.group_key)) { continue }
   if (-not (Test-PositiveLearningEvidence ([string]$row.extra))) { continue }
   if ([string]$row.entry_code -eq '' -or [string]$row.target_kind -ne 'quota' -or [string]$row.target_code -eq '') { continue }
   $sig = Get-QuantitySignature ([string]$row.quantity_name) ([string]$row.quantity_unit) $knownUnits
@@ -299,15 +333,20 @@ Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $re
 $tmpl = @{}
 foreach ($g in $aggregateGroups) {
   if (-not (Test-PositiveLearningEvidence ([string]$g.Extra))) { continue }
-  if (-not (Test-ClassifiedEntryCode $g.EntryCode)) { continue }
-  $prefix = $g.EntryCode.Substring(0, 2)
   $boxId = $boxes[$g.SetHash].Id
-  $key = $g.Method + "`n" + $prefix + "`n" + $g.EntryCode + "`n" + $boxId
-  if (-not $tmpl.ContainsKey($key)) {
-    $tmpl[$key] = @{ Method = $g.Method; Prefix = $prefix; Entry = $g.EntryCode; BoxId = $boxId; Count = 0; Last = $g.At }
+  $scopeTargets = @($g.Targets.Values | Where-Object { Test-EngineeringScopeTarget $_ } |
+    Group-Object -Property EntryCode | ForEach-Object { $_.Group[0] })
+  foreach ($scopeTarget in $scopeTargets) {
+    $entryCode = [string]$scopeTarget.EntryCode
+    if (-not (Test-ClassifiedEntryCode $entryCode)) { continue }
+    $prefix = $entryCode.Substring(0, 2)
+    $key = $g.Method + "`n" + $prefix + "`n" + $entryCode + "`n" + $boxId
+    if (-not $tmpl.ContainsKey($key)) {
+      $tmpl[$key] = @{ Method = $g.Method; Prefix = $prefix; Entry = $entryCode; BoxId = $boxId; Count = 0; Last = $g.At }
+    }
+    $t = $tmpl[$key]; $t.Count++
+    if ($g.At -gt $t.Last) { $t.Last = $g.At }
   }
-  $t = $tmpl[$key]; $t.Count++
-  if ($g.At -gt $t.Last) { $t.Last = $g.At }
 }
 $dtTmpl = New-Object System.Data.DataTable
 foreach ($c in 'method','engineering_type','entry_code','box_id') { [void]$dtTmpl.Columns.Add($c, [string]) }
@@ -330,14 +369,19 @@ foreach ($g in $aggregateGroups) {
   }
   $boxId = $boxes[$g.SetHash].Id
   $sig = Get-QuantitySignature $g.Name $g.Unit $knownUnits
-  $prefix = if ($g.EntryCode.Length -ge 2) { $g.EntryCode.Substring(0, 2) } else { '' }
-  $key = $g.Method + "`n" + $wb + "`n" + $ws + "`n" + $rowNo + "`n" + $sig + "`n" + $boxId
-  if (-not $sheetRows.ContainsKey($key)) {
-    $sheetRows[$key] = @{ Method = $g.Method; Wb = $wb; Ws = $ws; RowNo = $rowNo; Sig = $sig; BoxId = $boxId; Entry = $g.EntryCode; Prefix = $prefix; Count = 0; Last = $g.At }
+  $scopeTargets = @($g.Targets.Values | Where-Object { Test-EngineeringScopeTarget $_ } |
+    Group-Object -Property EntryCode | ForEach-Object { $_.Group[0] })
+  foreach ($scopeTarget in $scopeTargets) {
+    $entryCode = [string]$scopeTarget.EntryCode
+    if (-not (Test-ClassifiedEntryCode $entryCode)) { continue }
+    $prefix = if ($entryCode.Length -ge 2) { $entryCode.Substring(0, 2) } else { '' }
+    $key = $g.Method + "`n" + $wb + "`n" + $ws + "`n" + $rowNo + "`n" + $sig + "`n" + $boxId + "`n" + $entryCode
+    if (-not $sheetRows.ContainsKey($key)) {
+      $sheetRows[$key] = @{ Method = $g.Method; Wb = $wb; Ws = $ws; RowNo = $rowNo; Sig = $sig; BoxId = $boxId; Entry = $entryCode; Prefix = $prefix; Count = 0; Last = $g.At }
+    }
+    $sr = $sheetRows[$key]; $sr.Count++
+    if ($g.At -gt $sr.Last) { $sr.Last = $g.At }
   }
-  $sr = $sheetRows[$key]; $sr.Count++
-  if ($g.At -gt $sr.Last) { $sr.Last = $g.At }
-  if ($sr.Entry -eq '' -and $g.EntryCode -ne '') { $sr.Entry = $g.EntryCode; $sr.Prefix = $prefix }
 }
 $dtSheet = New-Object System.Data.DataTable
 foreach ($c in 'method','workbook','worksheet') { [void]$dtSheet.Columns.Add($c, [string]) }
@@ -349,7 +393,7 @@ foreach ($sr in $sheetRows.Values) { [void]$dtSheet.Rows.Add($sr.Method, $sr.Wb,
 Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Table $dtSheet -TargetTable 'dbo.SheetTemplateRow'
 
 $completionPrefix = "聚合完成"
-Write-Host ("跳过同码多义组件: " + $unsafeContextGroupCount + " 组；跳过纯辅助组件: " + $skippedPureContextGroupCount + " 组；保留原始 BindingLog")
+Write-Host ("跳过同码多义组件: " + $unsafeContextGroupCount + " 组；跳过身份不完整辅助组件: " + $skippedIncompleteContextGroupCount + " 组；跳过违反 SF 双向条目约束组件: " + $skippedSfConstraintGroupCount + " 组；保留原始 BindingLog")
 if ($DryRun) {
   Write-Host ("存量尾部单位推断: " + $inferredRows + " 行 / " + $inferredGroups.Count + " 组 / " + $inferredNames.Count + " 个原始名称 / " + $inferredSignatureCount + " 个名称级签名 / " + $inferredUnits.Count + " 种单位")
   Write-Host ("潜在归并冲突(按办法隔离): 与显式单位样本合流 " + $inferredMergeCount + " 个签名/办法 / 同名多推断单位 " + $multiUnitInferenceCount + " 个签名/办法 / 归并后多组件框 " + $potentialMappingConflictCount + " 个签名/办法")

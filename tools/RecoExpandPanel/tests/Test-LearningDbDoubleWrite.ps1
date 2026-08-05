@@ -3,10 +3,10 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 $learningPath = Join-Path $repoRoot 'tools\RecoExpandPanel\LearningDbFeature.cs'
 if (-not (Test-Path -LiteralPath $learningPath)) { throw '缺少 LearningDbFeature.cs' }
-$learning = Get-Content -LiteralPath $learningPath -Raw
-$excelLink = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\ExcelLinkFeature.cs') -Raw
-$templateMatch = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\TemplateFillNameMatch.cs') -Raw
-$schema = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoLearning\schema.sql') -Raw
+$learning = Get-Content -LiteralPath $learningPath -Raw -Encoding UTF8
+$excelLink = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\ExcelLinkFeature.cs') -Raw -Encoding UTF8
+$templateMatch = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\TemplateFillNameMatch.cs') -Raw -Encoding UTF8
+$schema = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoLearning\schema.sql') -Raw -Encoding UTF8
 
 if ($learning -notmatch 'RecordBindingEventsToLearningDb') { throw '缺少双写入口 RecordBindingEventsToLearningDb' }
 if ($learning -notmatch '192\.168\.2\.213') { throw '学习库必须固定连中央服务器,不得跟随 ServerSetting.xml' }
@@ -51,10 +51,11 @@ if ($learning -notmatch 'NormalizeLearningDbMethod' -or
 if ($learning -notmatch 'missing or unsupported' -or
     $learning -notmatch 'String\.IsNullOrEmpty\(NormalizeLearningDbMethod\(group\.Method\)\)') { throw '新写入仍可能落入空 method 历史兼容分区' }
 if (([regex]::Matches($learning, 'string method = NormalizeLearningDbMethod\(group\.Method\);')).Count -lt 3) { throw '组件、公式和条目增量表未全部使用同一规范办法' }
-if ($learning -notmatch 'NormalizeLearningDbMethod\(group\.Method\)\) \+ "\|" \+ \(group == null \? "" : group\.EntryCode') { throw '公式规则键没有同时保留规范办法和稳定条目上下文' }
+if ($learning -notmatch 'GetMappingFeedbackTargetEntryCode\(group, target\)' -or
+    $learning -notmatch 'targetPrefix \+ "entry_code"') { throw '公式规则键或 Outbox 没有使用目标级稳定条目上下文' }
 if ($learning -notmatch 'dbo\.QuotaBoxTarget') { throw '增量学习没有更新 QuotaBoxTarget' }
 if ($learning -notmatch 'BuildLearningTargetIdentityKey' -or
-    $learning -notmatch 'HasConflictingContextSensitiveTargets') { throw '增量聚合没有隔离同码异义的通用辅助代码' }
+    $learning -notmatch 'IsLearningFeedbackGroupRecommendable') { throw '增量聚合没有隔离同码异义或 SF 条目违规组件' }
 if ($excelLink -notmatch 'BuildLearningTargetIdentityKey' -or
     $excelLink -notmatch 'HasConflictingContextSensitiveTargets') { throw '本地组件框仍可能把同码异义辅助行合并' }
 if ($learning -notmatch 'method, project_id, entry_code, entry_name') { throw 'BindingLog 没有写入真实办法/项目/条目信息' }

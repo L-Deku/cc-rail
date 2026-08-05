@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
 $softwareDir = Join-Path $root "铁路基本建设工程投资控制系统2020网络版V0503021201"

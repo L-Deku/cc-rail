@@ -53,7 +53,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - `missing-resources.xlsx` 的人工审核规则每次重建都必须强制应用，不能因补充资源已存在而跳过：L=`0` 使用 C 列 `new_supplement_code`，L=`1` 使用 G 列 `best_candidate_code`，L 为其他数字时直接使用 L 列电算代号。
 - 排查迁移定额消耗时，先用迁移工具的 `InspectQuotaRows --book <书号> --code <定额编号>` 查明细行数、重复代号和缺失资源，再结合软件界面验证。
 - 清理已迁移的 2020 概算/估算定额时，优先运行 `tools/Migrate2020EstimateTo2024/CleanupMigratedEstimate2024.ps1 -WhatIfOnly` 生成只读报告，再正式执行脚本；补充材料/机械必须按 `applied-manual-decisions.csv` 的真实写入代码删除，并加 `not exists(select 1 from 定额库消耗 where 电算代号=@code)` 保护，不能直接使用旧 `rollback.sql`。
-- Windows PowerShell 5 执行含中文表名/字段名的脚本时，脚本文件必须保存为带 BOM 的 UTF-8，否则可能把中文解析成乱码并导致语法错误。
+- Windows PowerShell 5 执行含中文表名/字段名、中文路径或中文测试文本的入口脚本和回归脚本时，脚本文件必须保存为带 BOM 的 UTF-8，否则可能把中文解析成乱码并导致语法错误；补 BOM 时只能改变编码标记，正文与换行必须保持不变。`pwsh` 的 PASS 可作辅助证据，但不能替代要求 Windows PowerShell 5 的验收。
 - PowerShell 反射验证脚本如果包含中文路径或中文测试文本，优先在当前 shell 直接执行，或保存为 UTF-8 脚本文件后用 `-File` 执行；不要把 here-string 管道给子 `powershell.exe -`，否则中文路径可能被管道编码破坏。
 - 反射加载 `RecoExpandPanel.dll` 并实际调用 `JavaScriptSerializer`/`System.Web.Extensions` 解析 JSONL 时使用 Windows PowerShell 5；`pwsh` 可能因 .NET Framework `System.Web` 类型不兼容把解析异常吞成空结果。纯源码检查或不触发该依赖的反射用例仍可使用 `pwsh`。
 - 在 PowerShell 中再调用 `powershell.exe -Command` 且子命令包含 `$变量` 时，优先把子命令保存为脚本后用 `-File`，或用单引号整体隔离子命令；不要让父级 PowerShell 提前展开子命令变量。
@@ -77,7 +77,9 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 修改 `NormalizeForSignature` 或 `Get-NormalizedPart` 时必须同步另一端并执行一次 `Rebuild-Aggregates.ps1`；包括 `-DryRun` 在内都会持有 `BindingLog` 独占锁，只能在冻结绑定写入的维护窗口执行。
 - 推荐快照 `SmartLearningSnapshot` 视为只读；范围过滤和排序只能操作副本，不得就地修改快照中的集合。
 - `SH`、`SQ`、`ZLF`、`LF`、`SF`、`TLF`、`YF`、`GF`、`JF`、`XGT1` 等通用辅助代码不得只按编号聚合或解析；本地组件、SQL 增量/全量聚合和推荐读取必须统一使用“类型+完整编号+规范化名称+规范化单位”身份。同一绑定事件内同码多义时只保留原始 `BindingLog`、不得晋升聚合；当前项目名称或单位不一致时整组过滤，纯辅助组件不进入普通推荐，`SF` 设备购置费例外。
-- 绑定学习的聚合签名只使用归一化工程量名称（兼容 `名称|`），Excel 工程量单位仅作流水审计；推荐数量必须用当前 Excel 单位和当前运行版本定额单位现场换算，不得学习或复用原绑定表达式中的 `/1000`、`*1.05` 等运算。多单元格正向加项只拆工程量别名，各别名指向原表达式的完整组件框，组件内目标共用同一套编制办法和稳定条目信息。
+- `SF` 只能写入名称含“设备购置费”的条目，名称含“设备购置费”的条目也只接受 `SF`；任一方向违反时必须阻断整组，禁止自动写入和手工确认，不产生 accepted。条目名判定顺序固定为“当前项目真实条目名 > 精确 `(LibraryMethod, MethodNo)` 分区的 `ChapterEntry` > 目标级历史名称”，不得跨办法回退。
+- 组件框中的条目证据必须保存到每个目标；普通定额和 `SF` 可各自形成 `EngineeringTemplate` 专业范围，纯 `SF` 框也必须归入设备购置费范围。`ZLF`、`LF` 和材料可跟随普通主定额条目，但不得独立扩展专业范围；`SH` 保留自身目标级条目证据，但不参与工程前缀投票。推荐学习库“未归类”只由持久化 `EngineeringTemplate` 是否存在决定，本机临时上下文不得把框移出“未归类”。
+- 绑定学习的聚合签名只使用归一化工程量名称（兼容 `名称|`），Excel 工程量单位仅作流水审计；推荐数量必须用当前 Excel 单位和当前运行版本定额单位现场换算，不得学习或复用原绑定表达式中的 `/1000`、`*1.05` 等运算。多单元格正向加项只拆工程量别名，各别名指向原表达式的完整组件框；组件内目标共用同一套编制办法，但稳定条目必须按目标分别保存，同一原始表达式不得因目标条目不同而拆散组件。
 - 跨量纲业务换算不得简化成历史单元格地址或一次性结果；应保存 `V0/V1...` 参数公式及每个参数的名称、单位和名称级签名。推荐时只用当前表同章节、邻近行内精确且唯一的参数重新计算；缺参数、同名歧义或单位不兼容时必须取消自动勾选。`F10/1000+F11/1000` 仍按独立正向别名学习，不得因此生成共享公式或跨行合计。
 - C# 5 代码中不要在 `||`/`&&` 短路条件里依赖 `out` 参数一定赋值；用于错误文案的 `out` 变量先给默认值，避免 `CS0165`。
 - 用 Windows PowerShell 5 反射调用 WinForms 私有构造器做冒烟测试时，先设 `$ErrorActionPreference = 'Stop'`，并把 `New-Object` 返回控件的 `.PSObject.BaseObject` 传给反射 API；泛型 `List<T>`、`HashSet<T>` 等参数也要拆包，否则类型包装错误可能只产生非终止错误并让命令假通过。反射方法只接收一个泛型集合参数时，不要直接用 `[object[]]@($list)`，应先创建长度为 1 的 `object[]` 再将 `.PSObject.BaseObject` 赋给第 0 项，避免 PowerShell 把集合展开成多个参数。反射读取 `List<T>` 后若经辅助函数返回并继续使用 `.Count`/索引，辅助函数应使用 `Write-Output -NoEnumerate`，避免单元素集合被自动展开成标量。

@@ -13,8 +13,8 @@
 - 条目与模板参考：`SignatureEntryMap`、`EntryQuota`、`ChapterEntry`、`EngineeringTemplate`、`SheetTemplateRow`
 
 推荐预览直接读取推荐核心、数量公式和条目映射；`BindingLog` 是审计及全量重建来源。
-`SheetTemplateRow` 是三期“一表一模板”的预留原料，目前只由全量重算脚本写入，插件尚未读取，保留不删。
-`EngineeringTemplate` 仅归集前两位为数字且其余字符只含数字或横杠的分类条目码；这是预防性过滤，当前只读核对未发现既有非法行，不能据此推断曾发生推荐错误。
+`SheetTemplateRow` 是三期“一表一模板”的预留原料，目前只由全量重算脚本写入，插件尚未读取，保留不删；同一组件跨条目时按目标条目生成多行，不能再用组件组的首个条目代表整组。
+`EngineeringTemplate` 仅归集前两位为数字且其余字符只含数字或横杠的分类条目码。普通定额和 `SF` 分别按自身目标条目归集，纯 `SF` 框也会生成设备购置费条目行；`ZLF`、`LF`、材料和 `SH` 不独立扩展专业范围。一个 `box_id` 因此可以同时出现在同专业的安装工程费和设备购置费范围中。
 
 ## 脚本
 

@@ -2289,6 +2289,8 @@ namespace RecoNet
             public string Code;
             public string Name;
             public string Unit;
+            public string EntryCode;
+            public string EntryName;
             public string FormulaTemplate; // V0/V1... 占位的已确认跨单位数量公式
         }
 
@@ -2473,6 +2475,8 @@ namespace RecoNet
                             Code = target.QuotaCode,
                             Name = target.QuotaName,
                             Unit = target.QuotaUnit ?? "",
+                            EntryCode = !String.IsNullOrWhiteSpace(target.EntryCode) ? target.EntryCode : group.EntryCode ?? "",
+                            EntryName = !String.IsNullOrWhiteSpace(target.EntryName) ? target.EntryName : group.EntryName ?? "",
                             FormulaTemplate = formulaTemplate
                         });
                     }
@@ -2486,10 +2490,9 @@ namespace RecoNet
         {
             if (link == null) return "";
             string expression = String.IsNullOrWhiteSpace(link.Expression) ? link.CellAddress : link.Expression;
-            string entryScope = String.IsNullOrWhiteSpace(link.EntryCode) ? link.ChapterSeq : link.EntryCode;
             return NormalizeExcelLinkCachePath(link.ExcelPath) + "|" + (link.WorksheetName ?? "").Trim() + "|" +
                 NormalizeExpressionOperators(expression) + "|" + (link.Method ?? "").Trim() + "|" +
-                (link.ProjectId ?? "").Trim() + "|" + (entryScope ?? "").Trim();
+                (link.ProjectId ?? "").Trim();
         }
 
         private static string StripTrailingQuantityUnit(string fullName, string unit)
@@ -2632,15 +2635,17 @@ namespace RecoNet
                 existing["quantity_unit"] = group.QuantityUnit ?? "";
                 if (!String.IsNullOrWhiteSpace(group.Method) || !existing.ContainsKey("method")) existing["method"] = group.Method ?? "";
                 if (!String.IsNullOrWhiteSpace(group.ProjectId) || !existing.ContainsKey("project_id")) existing["project_id"] = group.ProjectId ?? "";
-                if (!String.IsNullOrWhiteSpace(group.EntryCode) || !existing.ContainsKey("entry_code")) existing["entry_code"] = group.EntryCode ?? "";
-                if (!String.IsNullOrWhiteSpace(group.EntryName) || !existing.ContainsKey("entry_name")) existing["entry_name"] = group.EntryName ?? "";
+                string targetEntryCode = GetMappingFeedbackTargetEntryCode(group, target);
+                string targetEntryName = GetMappingFeedbackTargetEntryName(group, target);
+                if (!String.IsNullOrWhiteSpace(targetEntryCode) || !existing.ContainsKey("entry_code")) existing["entry_code"] = targetEntryCode;
+                if (!String.IsNullOrWhiteSpace(targetEntryName) || !existing.ContainsKey("entry_name")) existing["entry_name"] = targetEntryName;
                 if (!String.IsNullOrWhiteSpace(target.FormulaTemplate) && group.FormulaOperands.Count > 0)
                 {
                     existing["formula_rule_hash"] = BuildLearningFormulaRuleHash(group, target);
                     existing["formula_template"] = target.FormulaTemplate;
                     existing["formula_target_unit"] = target.Unit ?? "";
                     existing["formula_method"] = group.Method ?? "";
-                    existing["formula_entry_code"] = group.EntryCode ?? "";
+                    existing["formula_entry_code"] = targetEntryCode;
                     existing["formula_operand_count"] = group.FormulaOperands.Count.ToString(CultureInfo.InvariantCulture);
                     for (int operandIndex = 0; operandIndex < group.FormulaOperands.Count; operandIndex++)
                     {
@@ -2705,9 +2710,53 @@ namespace RecoNet
             List<MappingFeedbackTarget> list = (targets ?? Enumerable.Empty<MappingFeedbackTarget>())
                 .Where(target => target != null && !String.IsNullOrWhiteSpace(target.Code)).ToList();
             if (list.Count == 0) return false;
-            if (list.Any(target => !IsContextSensitiveLearningCode(target.Code))) return true;
-            return list.Count == 1 && GetLearningBaseTargetCode(list[0].Code) == "SF" &&
-                (entryName ?? "").IndexOf("\u8bbe\u5907\u8d2d\u7f6e\u8d39", StringComparison.OrdinalIgnoreCase) >= 0;
+            foreach (MappingFeedbackTarget target in list)
+            {
+                if (IsContextSensitiveLearningCode(target.Code) &&
+                    (String.IsNullOrWhiteSpace(target.Name) || String.IsNullOrWhiteSpace(target.Unit))) return false;
+                string targetEntryName = !String.IsNullOrWhiteSpace(target.EntryName) ? target.EntryName : entryName ?? "";
+                bool equipmentEntry = targetEntryName.IndexOf("设备购置费", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool sf = GetLearningBaseTargetCode(target.Code) == "SF";
+                if (sf != equipmentEntry) return false;
+            }
+            return true;
+        }
+
+        private static bool IsLearningFeedbackGroupRecommendable(MappingFeedbackGroup group)
+        {
+            if (group == null) return false;
+            List<MappingFeedbackTarget> targets = (group.Targets ?? new List<MappingFeedbackTarget>())
+                .Where(target => target != null && !String.IsNullOrWhiteSpace(target.Code)).ToList();
+            return !HasConflictingContextSensitiveTargets(targets) &&
+                IsLearningGroupRecommendable(targets, group.EntryName);
+        }
+
+        private static string GetMappingFeedbackTargetEntryCode(MappingFeedbackGroup group, MappingFeedbackTarget target)
+        {
+            if (target != null && !String.IsNullOrWhiteSpace(target.EntryCode)) return target.EntryCode.Trim();
+            return group == null ? "" : (group.EntryCode ?? "").Trim();
+        }
+
+        private static string GetMappingFeedbackTargetEntryName(MappingFeedbackGroup group, MappingFeedbackTarget target)
+        {
+            if (target != null && !String.IsNullOrWhiteSpace(target.EntryName)) return target.EntryName.Trim();
+            return group == null ? "" : (group.EntryName ?? "").Trim();
+        }
+
+        private static bool IsPrimaryLearningTarget(string kind, string code)
+        {
+            if (!String.Equals(String.IsNullOrWhiteSpace(kind) ? "quota" : kind.Trim(), "quota", StringComparison.OrdinalIgnoreCase)) return false;
+            string baseCode = GetLearningBaseTargetCode(code);
+            return baseCode != "SF" && baseCode != "SH" && baseCode != "SQ" && baseCode != "ZLF" &&
+                baseCode != "LF" && baseCode != "YF" && baseCode != "TLF" && baseCode != "GF" &&
+                baseCode != "JF" && baseCode != "XGT1";
+        }
+
+        private static bool IsEngineeringScopeLearningTarget(string kind, string code)
+        {
+            return IsPrimaryLearningTarget(kind, code) ||
+                String.Equals(String.IsNullOrWhiteSpace(kind) ? "quota" : kind.Trim(), "quota", StringComparison.OrdinalIgnoreCase) &&
+                GetLearningBaseTargetCode(code) == "SF";
         }
 
         private static string FindRecoQuotaDataDir()

@@ -1,15 +1,15 @@
-# 推荐定额(学习库智能铺量)标记测试:引擎、UI 挂接、菜单入口、老窗口删除。
+﻿# 推荐定额(学习库智能铺量)标记测试:引擎、UI 挂接、菜单入口、老窗口删除。
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 $smartPath = Join-Path $repoRoot 'tools\RecoExpandPanel\SmartFillFeature.cs'
 if (-not (Test-Path -LiteralPath $smartPath)) { throw '缺少 SmartFillFeature.cs' }
-$smart = Get-Content -LiteralPath $smartPath -Raw
-$panel = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\TemplateFillPanel.cs') -Raw
-$excelLink = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\ExcelLinkFeature.cs') -Raw
-$learningDb = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\LearningDbFeature.cs') -Raw
-$rebuildAggregates = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoLearning\Rebuild-Aggregates.ps1') -Raw
-$quotaPanel = Get-Content -LiteralPath (Join-Path $repoRoot 'RecoQuotaRecommend\QuotaRecommendPanel.cs') -Raw
-$oldDialog = Get-Content -LiteralPath (Join-Path $repoRoot 'RecoQuotaRecommend\RecommendDialog.cs') -Raw
+$smart = Get-Content -LiteralPath $smartPath -Raw -Encoding UTF8
+$panel = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\TemplateFillPanel.cs') -Raw -Encoding UTF8
+$excelLink = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\ExcelLinkFeature.cs') -Raw -Encoding UTF8
+$learningDb = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\LearningDbFeature.cs') -Raw -Encoding UTF8
+$rebuildAggregates = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoLearning\Rebuild-Aggregates.ps1') -Raw -Encoding UTF8
+$quotaPanel = Get-Content -LiteralPath (Join-Path $repoRoot 'RecoQuotaRecommend\QuotaRecommendPanel.cs') -Raw -Encoding UTF8
+$oldDialog = Get-Content -LiteralPath (Join-Path $repoRoot 'RecoQuotaRecommend\RecommendDialog.cs') -Raw -Encoding UTF8
 $dll = if (-not [String]::IsNullOrWhiteSpace($env:RECO_EXPAND_DLL)) {
     $env:RECO_EXPAND_DLL
 } else {
@@ -75,6 +75,9 @@ $allFlags = [System.Reflection.BindingFlags]'Public,NonPublic,Static,Instance'
 $candidateType = $panelType.GetNestedType('SmartMapCandidateScore', [System.Reflection.BindingFlags]'Public,NonPublic')
 $entryType = $panelType.GetNestedType('SmartMapEntry', [System.Reflection.BindingFlags]'Public,NonPublic')
 $targetType = $panelType.GetNestedType('SmartBoxTarget', [System.Reflection.BindingFlags]'Public,NonPublic')
+$entryStatType = $panelType.GetNestedType('SmartEntryStat', [System.Reflection.BindingFlags]'Public,NonPublic')
+$targetResolutionType = $panelType.GetNestedType('SmartTargetEntryResolution', [System.Reflection.BindingFlags]'Public,NonPublic')
+$mappingFeedbackTargetType = $panelType.GetNestedType('MappingFeedbackTarget', [System.Reflection.BindingFlags]'Public,NonPublic')
 $routeType = $panelType.GetNestedType('SmartMethodRoute', [System.Reflection.BindingFlags]'Public,NonPublic')
 $snapshotType = $panelType.GetNestedType('SmartLearningSnapshot', [System.Reflection.BindingFlags]'Public,NonPublic')
 $canAutoSelect = $panelType.GetMethod('CanAutoSelectSmartMapEntry', $allFlags)
@@ -84,11 +87,17 @@ $resolveEntryName = $panelType.GetMethod('ResolveSmartEntryName', $allFlags)
 $shouldWarnPartition = $panelType.GetMethod('ShouldWarnSmartLibraryPartitionMissing', $allFlags)
 $applyPending = $panelType.GetMethod('ApplyPendingLocalSmartMapEntry', $allFlags)
 $orderCandidates = $panelType.GetMethod('OrderSmartMapCandidateScores', $allFlags)
+$resolveTargetEntries = $panelType.GetMethod('ResolveSmartTargetEntries', $allFlags)
+$isPrimaryTarget = $panelType.GetMethod('IsPrimaryLearningTarget', $allFlags)
+$isEngineeringScopeTarget = $panelType.GetMethod('IsEngineeringScopeLearningTarget', $allFlags)
+$isLearningGroupRecommendable = $panelType.GetMethod('IsLearningGroupRecommendable', $allFlags)
 if ($null -eq $candidateType -or $null -eq $entryType -or $null -eq $targetType -or $null -eq $routeType -or
+    $null -eq $entryStatType -or $null -eq $targetResolutionType -or $null -eq $mappingFeedbackTargetType -or
     $null -eq $snapshotType -or $null -eq $canAutoSelect -or $null -eq $resolveRoute -or
     $null -eq $resolveEntryName -or $null -eq $shouldWarnPartition -or
     $null -eq $isClassifiedEntryCode -or
-    $null -eq $applyPending -or $null -eq $orderCandidates) {
+    $null -eq $applyPending -or $null -eq $orderCandidates -or $null -eq $resolveTargetEntries -or
+    $null -eq $isPrimaryTarget -or $null -eq $isEngineeringScopeTarget -or $null -eq $isLearningGroupRecommendable) {
     throw '缺少跨专业同名冲突判定入口'
 }
 if ($null -ne $candidateType.GetField('PendingLocal', $allFlags)) {
@@ -140,6 +149,136 @@ $nameArgs[2] = '30号文学习侧条目名'
 if ($resolveEntryName.Invoke($null, $nameArgs) -ne '当前项目条目名') {
     throw '101 号文缺少 ChapterEntry 分区时未优先使用当前项目条目名'
 }
+[void]$projectNames.Remove('0101')
+$learningNames = $snapshotType.GetField('LearningEntryNameByCode', $allFlags).GetValue($nameSnapshot)
+$learningNames['0101'] = '精确分区 ChapterEntry 条目名'
+if ($resolveEntryName.Invoke($null, $nameArgs) -ne '精确分区 ChapterEntry 条目名') {
+    throw '当前项目无条目名时未优先使用精确分区 ChapterEntry'
+}
+
+function New-SmartTarget([string]$Code, [string]$Name, [string]$Unit, [string]$Kind = 'quota') {
+    $target = [Activator]::CreateInstance($targetType, $true).PSObject.BaseObject
+    $targetType.GetField('Kind', $allFlags).SetValue($target, $Kind)
+    $targetType.GetField('Code', $allFlags).SetValue($target, $Code)
+    $targetType.GetField('Name', $allFlags).SetValue($target, $Name)
+    $targetType.GetField('Unit', $allFlags).SetValue($target, $Unit)
+    return $target
+}
+function Add-SmartEntryStat($Dictionary, [string]$Key, [string]$EntryCode, [string]$EntryName, [bool]$CurrentMethod) {
+    if (-not $Dictionary.ContainsKey($Key)) {
+        $Dictionary.Add($Key, [Activator]::CreateInstance($smartEntryStatListType).PSObject.BaseObject)
+    }
+    $stat = [Activator]::CreateInstance($entryStatType, $true).PSObject.BaseObject
+    $entryStatType.GetField('EntryCode', $allFlags).SetValue($stat, $EntryCode)
+    $entryStatType.GetField('EntryName', $allFlags).SetValue($stat, $EntryName)
+    $entryStatType.GetField('ProjectCount', $allFlags).SetValue($stat, 3)
+    $entryStatType.GetField('CurrentMethodEvidence', $allFlags).SetValue($stat, $CurrentMethod)
+    [void]$Dictionary[$Key].Add($stat)
+}
+function Invoke-ResolveTargetEntries($Snapshot, $ProjectEntries, $Entry, [string]$Signature) {
+    $invokeArgs = New-Object 'object[]' 5
+    $invokeArgs[0] = $Snapshot
+    $invokeArgs[1] = $ProjectEntries
+    $invokeArgs[2] = $Entry
+    $invokeArgs[3] = $Signature
+    $invokeArgs[4] = $null
+    return $resolveTargetEntries.Invoke($null, $invokeArgs)
+}
+
+$targetSnapshot = [Activator]::CreateInstance($snapshotType, $true).PSObject.BaseObject
+$snapshotType.GetField('Method', $allFlags).SetValue($targetSnapshot, '2024')
+$targetProjectNames = $snapshotType.GetField('ProjectEntryNameByCode', $allFlags).GetValue($targetSnapshot)
+$targetProjectNames['0801'] = '安装工程费'
+$targetProjectNames['0802'] = '设备购置费'
+$projectEntryType = $resolveTargetEntries.GetParameters()[1].ParameterType
+$targetProjectEntries = [Activator]::CreateInstance($projectEntryType).PSObject.BaseObject
+$targetProjectEntries['0801'] = [long]801
+$targetProjectEntries['0802'] = [long]802
+$statsByTarget = $snapshotType.GetField('EntryBySignatureQuota', $allFlags).GetValue($targetSnapshot)
+$smartEntryStatListType = $statsByTarget.GetType().GetGenericArguments()[1]
+$targetSignature = 'target-entry|'
+$targetEntry = [Activator]::CreateInstance($entryType, $true).PSObject.BaseObject
+$ordinaryTarget = New-SmartTarget 'EY-299' '安装定额' '台'
+$sfTarget = New-SmartTarget 'SF' '设备购置费' '元'
+[void]$entryType.GetField('Targets', $allFlags).GetValue($targetEntry).Add($ordinaryTarget)
+[void]$entryType.GetField('Targets', $allFlags).GetValue($targetEntry).Add($sfTarget)
+Add-SmartEntryStat $statsByTarget ($targetSignature + "`nEY-299") '0801' '历史安装条目' $true
+Add-SmartEntryStat $statsByTarget ($targetSignature + "`nSF") '0802' '历史设备条目' $true
+$resolvedTargets = @(Invoke-ResolveTargetEntries $targetSnapshot $targetProjectEntries $targetEntry $targetSignature)
+$ordinaryResolved = @($resolvedTargets | Where-Object { $_.Target.Code -eq 'EY-299' })[0]
+$sfResolved = @($resolvedTargets | Where-Object { $_.Target.Code -eq 'SF' })[0]
+if ($ordinaryResolved.EntryCode -ne '0801' -or $ordinaryResolved.EntryName -ne '安装工程费' -or
+    $sfResolved.EntryCode -ne '0802' -or $sfResolved.EntryName -ne '设备购置费' -or
+    -not $ordinaryResolved.FromCurrentContext -or -not $sfResolved.FromCurrentContext) {
+    throw '普通定额与 SF 未按目标分别解析到安装工程费/设备购置费条目'
+}
+
+$statsByTarget.Clear()
+Add-SmartEntryStat $statsByTarget ($targetSignature + "`nEY-299") '0802' '设备购置费' $true
+Add-SmartEntryStat $statsByTarget ($targetSignature + "`nSF") '0801' '安装工程费' $true
+$blockedTargets = @(Invoke-ResolveTargetEntries $targetSnapshot $targetProjectEntries $targetEntry $targetSignature)
+$blockedOrdinary = @($blockedTargets | Where-Object { $_.Target.Code -eq 'EY-299' })[0]
+$blockedSf = @($blockedTargets | Where-Object { $_.Target.Code -eq 'SF' })[0]
+if (-not [String]::IsNullOrWhiteSpace($blockedOrdinary.EntryCode) -or
+    $blockedOrdinary.Issue -notlike '*设备购置费条目只能写入 SF*' -or
+    -not [String]::IsNullOrWhiteSpace($blockedSf.EntryCode) -or
+    $blockedSf.Issue -notlike '*SF 必须写入设备购置费条目*') {
+    throw 'SF 双向条目约束未同时阻断普通定额落设备购置费及 SF 落普通条目'
+}
+
+$statsByTarget.Clear()
+$followerEntry = [Activator]::CreateInstance($entryType, $true).PSObject.BaseObject
+$followerOrdinary = New-SmartTarget 'EY-299' '安装定额' '台'
+$zlfTarget = New-SmartTarget 'ZLF' '装料费' 'm3'
+[void]$entryType.GetField('Targets', $allFlags).GetValue($followerEntry).Add($followerOrdinary)
+[void]$entryType.GetField('Targets', $allFlags).GetValue($followerEntry).Add($zlfTarget)
+Add-SmartEntryStat $statsByTarget ($targetSignature + "`nEY-299") '0801' '安装工程费' $true
+$followerTargets = @(Invoke-ResolveTargetEntries $targetSnapshot $targetProjectEntries $followerEntry $targetSignature)
+$resolvedFollower = @($followerTargets | Where-Object { $_.Target.Code -eq 'ZLF' })[0]
+if ($resolvedFollower.EntryCode -ne '0801' -or $resolvedFollower.FromCurrentContext) {
+    throw 'ZLF/LF 跟随普通定额时应继承条目，但不得伪装成目标级当前办法证据'
+}
+
+foreach ($case in @(
+    @('quota','EY-299',$true,$true),
+    @('quota','SF',$false,$true),
+    @('quota','SH',$false,$false),
+    @('quota','ZLF',$false,$false),
+    @('quota','LF',$false,$false),
+    @('material','1009001',$false,$false)
+)) {
+    $primaryArgs = New-Object 'object[]' 2; $primaryArgs[0] = $case[0]; $primaryArgs[1] = $case[1]
+    if ([bool]$isPrimaryTarget.Invoke($null, $primaryArgs) -ne [bool]$case[2] -or
+        [bool]$isEngineeringScopeTarget.Invoke($null, $primaryArgs) -ne [bool]$case[3]) {
+        throw "普通主目标或工程范围归集分类错误：$($case[0])/$($case[1])"
+    }
+}
+
+function New-FeedbackTarget([string]$Code, [string]$EntryName) {
+    $target = [Activator]::CreateInstance($mappingFeedbackTargetType, $true).PSObject.BaseObject
+    $mappingFeedbackTargetType.GetField('Kind', $allFlags).SetValue($target, 'quota')
+    $mappingFeedbackTargetType.GetField('Code', $allFlags).SetValue($target, $Code)
+    $mappingFeedbackTargetType.GetField('Name', $allFlags).SetValue($target, $Code)
+    $mappingFeedbackTargetType.GetField('Unit', $allFlags).SetValue($target, '元')
+    $mappingFeedbackTargetType.GetField('EntryName', $allFlags).SetValue($target, $EntryName)
+    return $target
+}
+$feedbackListType = [System.Collections.Generic.List``1].MakeGenericType($mappingFeedbackTargetType)
+function Test-LearningTargets([object[]]$Targets) {
+    $list = [Activator]::CreateInstance($feedbackListType).PSObject.BaseObject
+    foreach ($target in $Targets) { [void]$list.Add($target) }
+    $args = New-Object 'object[]' 2; $args[0] = $list; $args[1] = ''
+    return [bool]$isLearningGroupRecommendable.Invoke($null, $args)
+}
+if (-not (Test-LearningTargets @((New-FeedbackTarget 'EY-299' '安装工程费'), (New-FeedbackTarget 'SF' '设备购置费'))) -or
+    (Test-LearningTargets @((New-FeedbackTarget 'EY-299' '设备购置费'))) -or
+    (Test-LearningTargets @((New-FeedbackTarget 'SF' '安装工程费')))) {
+    throw '持久化入口没有对 SF 双向条目约束做防御性校验'
+}
+if ($smart -notmatch 'targetEntries\.All\(item => item\.FromCurrentContext\)' -or
+    $smart -notmatch 'targetEntries\.All\(item => item != null && !String\.IsNullOrWhiteSpace\(item\.EntryCode\)\)') {
+    throw 'HasEntry/HasCurrentContext 未按组内全部目标判定'
+}
 $classifiedCases = @{
     '12-01' = $true
     'SF' = $false
@@ -154,7 +293,7 @@ foreach ($case in $classifiedCases.GetEnumerator()) {
     }
 }
 $rebuildFilter = [regex]::Match($rebuildAggregates, '(?ms)^function Test-ClassifiedEntryCode\s*\{.*?^\}')
-if (-not $rebuildFilter.Success -or $learningDb -notmatch 'if \(IsSmartClassifiedEntryCode\(entryCode\)\)') {
+if (-not $rebuildFilter.Success -or $learningDb -notmatch 'if \(!IsSmartClassifiedEntryCode\(entryCode\)\) continue;') {
     throw '增量写入与全量重算未同时接入条目分类过滤'
 }
 . ([ScriptBlock]::Create($rebuildFilter.Value))
@@ -275,5 +414,19 @@ $rankArgs[0] = $rankInput
 $ranked = $orderCandidates.Invoke($null, $rankArgs)
 if (-not [Object]::ReferenceEquals($ranked[0], $pending)) {
     throw '同权重候选中 PendingLocal 未优先排序'
+}
+$singleTarget = New-SmartCandidate 20
+Add-SmartTarget $singleTarget 'quota' 'DY-1250'
+$completeComponent = New-SmartCandidate 20
+Add-SmartTarget $completeComponent 'quota' 'DY-1250'
+Add-SmartTarget $completeComponent 'quota' 'SF'
+$componentRankInput = [Activator]::CreateInstance($candidateListType).PSObject.BaseObject
+[void]$componentRankInput.Add($singleTarget)
+[void]$componentRankInput.Add($completeComponent)
+$componentRankArgs = New-Object 'object[]' 1
+$componentRankArgs[0] = $componentRankInput
+$componentRanked = $orderCandidates.Invoke($null, $componentRankArgs)
+if (-not [Object]::ReferenceEquals($componentRanked[0], $completeComponent)) {
+    throw '证据权重相同时，完整组件框应优先于其单条候选'
 }
 Write-Host 'Test-SmartFill: PASS'

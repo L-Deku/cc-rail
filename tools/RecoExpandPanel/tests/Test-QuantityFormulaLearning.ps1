@@ -78,12 +78,24 @@ try {
     $compositeTargets = $groupType.GetField('Targets', $flags).GetValue($composite)
     $scalarOperands = $groupType.GetField('FormulaOperands', $flags).GetValue($scalar)
     $scalarTargets = $groupType.GetField('Targets', $flags).GetValue($scalar)
-    if ($compositeOperands.Count -ne 3 -or [string]$targetType.GetField('FormulaTemplate', $flags).GetValue($compositeTargets[0]) -ne 'V0*V1*V2*V2*3.14') {
+    if ($compositeOperands.Count -ne 3 -or
+        [string]$targetType.GetField('FormulaTemplate', $flags).GetValue($compositeTargets[0]) -ne 'V0*V1*V2*V2*3.14' -or
+        [string]$targetType.GetField('EntryCode', $flags).GetValue($compositeTargets[0]) -ne '0101-01') {
         throw 'Composite formula template/operands were not learned correctly'
     }
     if ($scalarOperands.Count -ne 1 -or [string]$targetType.GetField('FormulaTemplate', $flags).GetValue($scalarTargets[0]) -ne 'V0*0.2') {
         throw 'Single-operand cross-unit factor was not stored as a formula'
     }
+    $formulaHash = $type.GetMethod('BuildLearningFormulaRuleHash', $flags)
+    $targetType.GetField('EntryCode', $flags).SetValue($compositeTargets[0], '0101-ENTRY-A')
+    $hashArgs = New-Object 'object[]' 2
+    $hashArgs[0] = $composite.PSObject.BaseObject
+    $hashArgs[1] = $compositeTargets[0].PSObject.BaseObject
+    $hashA = [string]$formulaHash.Invoke($null, $hashArgs)
+    $targetType.GetField('EntryCode', $flags).SetValue($compositeTargets[0], '0101-ENTRY-B')
+    $hashB = [string]$formulaHash.Invoke($null, $hashArgs)
+    $targetType.GetField('EntryCode', $flags).SetValue($compositeTargets[0], '0101-01')
+    if ($hashA -eq $hashB) { throw 'Formula rule hash still uses the legacy group entry instead of the target entry' }
     Write-Host 'PASS 单系数和根数×长度×半径²×3.14统一保存为变量公式'
 
     $readRows = $type.GetMethod('ReadTargetQtyRowsWithChapters', $flags)
@@ -105,6 +117,24 @@ try {
         [void]$ruleOperands.Add($operand)
     }
     $evaluateFormula = $type.GetMethod('TryEvaluateSmartFormula', $flags)
+    $formatOperand = $type.GetMethod('FormatSmartFormulaOperandForInsertion', $flags)
+    if ($null -eq $formatOperand) { throw '缺少公式数量的最小括号格式化入口' }
+    foreach ($formatCase in @(
+        @('V0*0.1', 0, 2, '13', '13'),
+        @('V0+V1', 0, 2, '10-2', '10-2'),
+        @('V0*2', 0, 2, '10/2', '10/2'),
+        @('100/V0', 4, 2, '10/2', '(10/2)'),
+        @('2-V0', 2, 2, '10-2', '(10-2)'),
+        @('V0*2', 0, 2, '10+2', '(10+2)'),
+        @('V0/100', 0, 2, '10+2', '(10+2)')
+    )) {
+        $formatted = [string]$formatOperand.Invoke($null, @(
+            [string]$formatCase[0], [int]$formatCase[1], [int]$formatCase[2], [string]$formatCase[3]))
+        if ($formatted -ne [string]$formatCase[4]) {
+            throw "公式括号简化错误：$($formatCase[0]) / $($formatCase[3]) => $formatted"
+        }
+    }
+    Write-Host 'PASS 纯加减和纯乘除去掉冗余括号，混合优先级保留必要括号'
     $evalArgs = [object[]]::new(5); $evalArgs[0] = $rule; $evalArgs[1] = $targetRows; $evalArgs[2] = $targetRows[0]; $evalArgs[3] = 'm3'; $evalArgs[4] = $null
     if (-not [bool]$evaluateFormula.Invoke($null, $evalArgs)) { throw 'Composite formula could not be evaluated from current sheet operands' }
     $tryDecimal = $type.GetMethod('TryEvaluateDecimal', $flags, $null, [Type[]]@([string], [decimal].MakeByRefType(), [string].MakeByRefType()), $null)
@@ -238,7 +268,7 @@ try {
     $appendSmartItems = $type.GetMethod('AppendSmartItems', $flags)
     function Invoke-DerivedPreview($Rows) {
         $previewItems = [Activator]::CreateInstance($previewListType)
-        $appendArgs = [object[]]::new(12)
+        $appendArgs = [object[]]::new(13)
         $appendArgs[0] = $previewItems.PSObject.BaseObject
         $appendArgs[1] = $Rows[0]
         $appendArgs[2] = $Rows.PSObject.BaseObject
@@ -246,11 +276,12 @@ try {
         $appendArgs[4] = $sameUnitSnapshot
         $appendArgs[5] = $projectEntries.PSObject.BaseObject
         $appendArgs[6] = $currentQuotaByCode.PSObject.BaseObject
-        $appendArgs[7] = $false
-        $appendArgs[8] = 'test'
-        $appendArgs[9] = $sameUnitSignature
-        $appendArgs[10] = $null
+        $appendArgs[7] = $null
+        $appendArgs[8] = $false
+        $appendArgs[9] = 'test'
+        $appendArgs[10] = $sameUnitSignature
         $appendArgs[11] = $null
+        $appendArgs[12] = $null
         [void]$appendSmartItems.Invoke($null, $appendArgs)
         return ,$previewItems
     }
@@ -330,8 +361,18 @@ try {
     $usableArgs[0] = $safetyEntry
     $usableArgs[1] = '弃渣外运'
     $usableArgs[2] = $currentMetadata.PSObject.BaseObject
-    if ($usableEntry.Invoke($null, $usableArgs)) { throw '纯 SH 组件不得进入普通推荐' }
+    if (-not $usableEntry.Invoke($null, $usableArgs)) { throw '名称和单位精确一致的纯 SH 组件应允许推荐' }
 
+    $missingIdentityEntry = [Activator]::CreateInstance($mapEntryType, $true).PSObject.BaseObject
+    $missingIdentityTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
+    foreach ($definition in @(@('Kind', 'quota'), @('Code', 'SH'), @('Name', ''), @('Unit', 'm3'))) {
+        $smartTargetType.GetField($definition[0], $flags).SetValue($missingIdentityTarget, $definition[1])
+    }
+    [void]$mapEntryType.GetField('Targets', $flags).GetValue($missingIdentityEntry).Add($missingIdentityTarget)
+    $usableArgs[0] = $missingIdentityEntry
+    if ($usableEntry.Invoke($null, $usableArgs)) { throw '缺少名称或单位的辅助定额不得进入推荐' }
+
+    $usableArgs[0] = $safetyEntry
     $lyTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
     foreach ($definition in @(@('Kind', 'quota'), @('Code', 'LY-89'), @('Name', '历史名称可变化'), @('Unit', '100m3'))) {
         $smartTargetType.GetField($definition[0], $flags).SetValue($lyTarget, $definition[1])
@@ -357,25 +398,34 @@ try {
     $usableArgs[1] = '设备购置费'
     $usableArgs[2] = $sfMetadata.PSObject.BaseObject
     if (-not $usableEntry.Invoke($null, $usableArgs)) { throw 'SF 设备购置费的既有业务例外被误过滤' }
-    Write-Host 'PASS 通用辅助代码按名称单位隔离，混合组件原子过滤并保留 SF 设备购置费例外'
+    Write-Host 'PASS 通用辅助代码按名称单位隔离，纯辅助与混合组件都做原子过滤'
 
     $firstMapEntry = $candidateScoreType.GetField('Entry', $flags).GetValue($scoreList[0])
-    foreach ($targetCode in @('SH', '1009001002*1.224', 'LY-89')) {
+    $targetResolutionType = $type.GetNestedType('SmartTargetEntryResolution', $nestedFlags)
+    $targetResolutions = $candidateScoreType.GetField('TargetEntries', $flags).GetValue($scoreList[0])
+    foreach ($definition in @(
+        @('SH', '0401-01', '弃渣工程'),
+        @('1009001002*1.224', '0309-01-03-03', '桥涵工程'),
+        @('LY-89', '0309-01-03-03', '桥涵工程')
+    )) {
+        $targetCode = $definition[0]
         $smartTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
         $smartTargetType.GetField('Code', $flags).SetValue($smartTarget, $targetCode)
         [void]$mapEntryType.GetField('Targets', $flags).GetValue($firstMapEntry).Add($smartTarget)
+        $targetResolution = [Activator]::CreateInstance($targetResolutionType, $true).PSObject.BaseObject
+        $targetResolutionType.GetField('Target', $flags).SetValue($targetResolution, $smartTarget)
+        $targetResolutionType.GetField('EntryCode', $flags).SetValue($targetResolution, $definition[1])
+        $targetResolutionType.GetField('EntryName', $flags).SetValue($targetResolution, $definition[2])
+        [void]$targetResolutions.Add($targetResolution)
     }
     $candidateScoreType.GetField('EntryCode', $flags).SetValue($scoreList[0], '0309-01-03-03')
     $entryNameField.SetValue($scoreList[0], '弃渣外运')
     $snapshotType = $type.GetNestedType('SmartLearningSnapshot', $nestedFlags)
     $snapshot = [Activator]::CreateInstance($snapshotType, $true).PSObject.BaseObject
-    $projectNames = $snapshotType.GetField('ProjectEntryNameByCode', $flags).GetValue($snapshot)
-    $projectNames['03'] = '桥涵'
     $candidateLabel = $type.GetMethod('BuildSmartCandidateLabel', $flags).Invoke($null, @($snapshot, $scoreList[0]))
-    if ($candidateLabel -ne 'LY-89 + 1009001002*1.224 + SH（桥涵 0309-01-03-03）' -or
-        $candidateLabel -match '条目|弃渣外运' -or
+    if ($candidateLabel -ne 'LY-89（桥涵工程 0309-01-03-03） + 1009001002*1.224（桥涵工程 0309-01-03-03） + SH（弃渣工程 0401-01）' -or
         $candidateLabel -match '权重|当前办法') {
-        throw "候选下拉应按定额/材料/辅助排序并只显示专业与完整条目编号，实际：$candidateLabel"
+        throw "候选下拉应按定额/材料/辅助排序并逐目标显示条目，实际：$candidateLabel"
     }
     $scopeType = $type.GetNestedType('SmartLearningScope', $nestedFlags)
     $classifiedEntryCode = $type.GetMethod('IsSmartClassifiedEntryCode', $flags)

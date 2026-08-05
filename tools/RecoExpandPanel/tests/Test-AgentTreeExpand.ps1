@@ -1,4 +1,4 @@
-# 懒加载树祖先前缀链单元测试:反射调用编译产物中的 BuildAgentItemAncestorPrefixes。
+﻿# 懒加载树祖先前缀链单元测试:反射调用编译产物中的 BuildAgentItemAncestorPrefixes。
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 $dll = Join-Path $repoRoot 'RecoQuotaRecommend\bin\RecoExpandPanel.dll'

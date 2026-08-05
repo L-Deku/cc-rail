@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $dll = if (-not [String]::IsNullOrWhiteSpace($env:RECO_EXPAND_DLL)) {

@@ -94,14 +94,18 @@ namespace RecoNet
             PrepareLearningGroupsForOutbox(groups);
             List<MappingFeedbackGroup> validGroups = groups
                 .Where(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
-                    !String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)))
+                    !String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)) &&
+                    IsLearningFeedbackGroupRecommendable(group))
                 .ToList();
-            int unsupportedCount = groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
+            int unsupportedMethodCount = groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
                 String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)));
+            int invalidLearningCount = groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
+                !String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)) && !IsLearningFeedbackGroupRecommendable(group));
+            int unsupportedCount = unsupportedMethodCount + invalidLearningCount;
             if (unsupportedCount > 0)
             {
                 Log("Learning DB binding was not queued because " + unsupportedCount.ToString(CultureInfo.InvariantCulture) +
-                    " learning group(s) have a missing or unsupported project method; local mapping remains available.");
+                    " learning group(s) have an unsupported method, incomplete target identity, or violate the SF entry constraint; local mapping remains available.");
             }
             if (validGroups.Count == 0)
             {
@@ -188,8 +192,8 @@ namespace RecoNet
                                     cmd.Parameters.AddWithValue("@source", "plugin:" + (source ?? ""));
                                     cmd.Parameters.AddWithValue("@method", NormalizeLearningDbMethod(group.Method));
                                     cmd.Parameters.AddWithValue("@project", group.ProjectId ?? "");
-                                    cmd.Parameters.AddWithValue("@ec", group.EntryCode ?? "");
-                                    cmd.Parameters.AddWithValue("@en", group.EntryName ?? "");
+                                    cmd.Parameters.AddWithValue("@ec", GetMappingFeedbackTargetEntryCode(group, target));
+                                    cmd.Parameters.AddWithValue("@en", GetMappingFeedbackTargetEntryName(group, target));
                                     cmd.Parameters.AddWithValue("@qn", group.QuantityName ?? "");
                                     cmd.Parameters.AddWithValue("@qu", group.QuantityUnit ?? "");
                                     cmd.Parameters.AddWithValue("@tk", String.IsNullOrEmpty(target.Kind) ? "quota" : target.Kind);
@@ -412,10 +416,13 @@ namespace RecoNet
         {
             reason = "";
             if (batch == null || batch.Groups == null) return false;
-            int invalidCount = batch.Groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
+            int invalidMethodCount = batch.Groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
                 String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)));
-            if (invalidCount == 0) return false;
-            reason = "missing_or_unsupported_project_method_for_" + invalidCount.ToString(CultureInfo.InvariantCulture) + "_group(s)";
+            int invalidEvidenceCount = batch.Groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
+                !String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)) && !IsLearningFeedbackGroupRecommendable(group));
+            if (invalidMethodCount == 0 && invalidEvidenceCount == 0) return false;
+            reason = "unsupported_learning_group_method_" + invalidMethodCount.ToString(CultureInfo.InvariantCulture) +
+                "_evidence_" + invalidEvidenceCount.ToString(CultureInfo.InvariantCulture);
             return true;
         }
 
@@ -599,6 +606,8 @@ namespace RecoNet
                     row[targetPrefix + "code"] = target.Code ?? "";
                     row[targetPrefix + "name"] = target.Name ?? "";
                     row[targetPrefix + "unit"] = target.Unit ?? "";
+                    row[targetPrefix + "entry_code"] = target.EntryCode ?? "";
+                    row[targetPrefix + "entry_name"] = target.EntryName ?? "";
                     row[targetPrefix + "formula"] = target.FormulaTemplate ?? "";
                 }
                 row[prefix + "operand_count"] = (group.FormulaOperands == null ? 0 : group.FormulaOperands.Count).ToString(CultureInfo.InvariantCulture);
@@ -655,6 +664,8 @@ namespace RecoNet
                         Code = GetFlat(row, targetPrefix + "code"),
                         Name = GetFlat(row, targetPrefix + "name"),
                         Unit = GetFlat(row, targetPrefix + "unit"),
+                        EntryCode = GetFlat(row, targetPrefix + "entry_code"),
+                        EntryName = GetFlat(row, targetPrefix + "entry_name"),
                         FormulaTemplate = GetFlat(row, targetPrefix + "formula")
                     });
                 }
@@ -841,8 +852,7 @@ namespace RecoNet
             List<MappingFeedbackTarget> eligibleTargets = (group.Targets ?? new List<MappingFeedbackTarget>())
                 .Where(target => target != null && !String.IsNullOrWhiteSpace(target.Code))
                 .ToList();
-            if (HasConflictingContextSensitiveTargets(eligibleTargets) ||
-                !IsLearningGroupRecommendable(eligibleTargets, group.EntryName)) return;
+            if (!IsLearningFeedbackGroupRecommendable(group)) return;
 
             List<MappingFeedbackTarget> targets = eligibleTargets
                 .GroupBy(target => BuildMappingTargetKey(target.Kind, target.Code), StringComparer.OrdinalIgnoreCase)
@@ -987,7 +997,7 @@ namespace RecoNet
                     string targetCode = TrimLearningText(target.Code, 100);
                     string targetUnit = TrimLearningText(NormalizeExcelLinkUnit(target.Unit), 50);
                     string method = NormalizeLearningDbMethod(group.Method);
-                    string formulaEntry = TrimLearningText(group.EntryCode, 100);
+                    string formulaEntry = TrimLearningText(GetMappingFeedbackTargetEntryCode(group, target), 100);
                     string ruleHash = BuildLearningFormulaRuleHash(group, target);
                     using (SqlCommand cmd = conn.CreateCommand())
                     {
@@ -1030,13 +1040,16 @@ namespace RecoNet
                 }
             }
 
-            string entryCode = TrimLearningText(group.EntryCode, 100);
-            if (positiveEvidence && entryCode.Length > 0)
+            if (positiveEvidence)
             {
                 string method = NormalizeLearningDbMethod(group.Method);
-                string entryName = TrimLearningText(group.EntryName, 500);
-                if (IsSmartClassifiedEntryCode(entryCode))
+                foreach (MappingFeedbackTarget scopeTarget in targets.Where(target =>
+                    IsEngineeringScopeLearningTarget(target.Kind, target.Code))
+                    .GroupBy(target => GetMappingFeedbackTargetEntryCode(group, target), StringComparer.OrdinalIgnoreCase)
+                    .Select(items => items.First()))
                 {
+                    string entryCode = TrimLearningText(GetMappingFeedbackTargetEntryCode(group, scopeTarget), 100);
+                    if (!IsSmartClassifiedEntryCode(entryCode)) continue;
                     using (SqlCommand cmd = conn.CreateCommand())
                     {
                         cmd.Transaction = transaction;
@@ -1055,6 +1068,9 @@ namespace RecoNet
                 }
                 foreach (MappingFeedbackTarget target in targets.Where(item => String.Equals(item.Kind ?? "quota", "quota", StringComparison.OrdinalIgnoreCase)))
                 {
+                    string entryCode = TrimLearningText(GetMappingFeedbackTargetEntryCode(group, target), 100);
+                    if (entryCode.Length == 0) continue;
+                    string entryName = TrimLearningText(GetMappingFeedbackTargetEntryName(group, target), 500);
                     using (SqlCommand cmd = conn.CreateCommand())
                     {
                         cmd.Transaction = transaction;
@@ -1097,7 +1113,8 @@ namespace RecoNet
             string kind = target == null || String.IsNullOrWhiteSpace(target.Kind) ? "quota" : target.Kind.Trim().ToLowerInvariant();
             string raw = signature + "|" + kind + ":" + (target == null ? "" : target.Code ?? "").Trim().ToUpperInvariant() + "|" +
                 NormalizeExcelLinkUnit(target == null ? "" : target.Unit) + "|" + (target == null ? "" : target.FormulaTemplate ?? "") + "|" +
-                (group == null ? "" : NormalizeLearningDbMethod(group.Method)) + "|" + (group == null ? "" : group.EntryCode ?? "");
+                (group == null ? "" : NormalizeLearningDbMethod(group.Method)) + "|" +
+                GetMappingFeedbackTargetEntryCode(group, target);
             if (group != null)
             {
                 foreach (QuantityFormulaOperandInfo operand in group.FormulaOperands)
