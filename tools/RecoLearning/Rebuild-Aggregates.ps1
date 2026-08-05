@@ -109,6 +109,46 @@ function Test-EngineeringScopeTarget { param($Target)
   return @('SH','SQ','ZLF','LF','YF','TLF','GF','JF','XGT1') -notcontains $baseCode
 }
 
+function Get-DistinctEngineeringScopeTargets {
+  param([System.Collections.IEnumerable]$Targets)
+  $seenEntries = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($target in @($Targets)) {
+    if (-not (Test-EngineeringScopeTarget $target)) { continue }
+    if ($seenEntries.Add([string]$target.EntryCode)) { Write-Output $target }
+  }
+}
+
+function Get-AvailableAutoBoxId {
+  param([string]$SetHash, [System.Collections.Generic.HashSet[string]]$UsedIds)
+  for ($length = 16; $length -le $SetHash.Length; $length += 4) {
+    $candidate = 'auto-' + $SetHash.Substring(0, $length)
+    if (-not $UsedIds.Contains($candidate)) { return $candidate }
+  }
+  $suffix = 2
+  do {
+    $candidate = 'auto-' + $SetHash + '-' + $suffix
+    $suffix++
+  } while ($UsedIds.Contains($candidate))
+  return $candidate
+}
+
+function Resolve-RebuildBoxIdCollisions {
+  param([hashtable]$Boxes)
+  $usedIds = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+  $ordered = @($Boxes.GetEnumerator() | Sort-Object `
+    @{ Expression = { if ([bool]$_.Value.IsPreferred) { 0 } else { 1 } } },
+    @{ Expression = { [string]$_.Key } })
+  $resolved = 0
+  foreach ($pair in $ordered) {
+    $currentId = [string]$pair.Value.Id
+    if ($usedIds.Add($currentId)) { continue }
+    $pair.Value.Id = Get-AvailableAutoBoxId ([string]$pair.Key) $usedIds
+    [void]$usedIds.Add([string]$pair.Value.Id)
+    $resolved++
+  }
+  return $resolved
+}
+
 $unsafeContextGroupCount = @($groups.Values | Where-Object { $_.UnsafeContextTargets }).Count
 $skippedIncompleteContextGroupCount = @($groups.Values | Where-Object {
   -not $_.UnsafeContextTargets -and -not (Test-AggregateLearningGroupRecommendable $_)
@@ -149,15 +189,17 @@ foreach ($g in $aggregateGroups) {
   $g['CanonicalName'] = Get-CanonicalQuantityName $g.Name $g.Unit $knownUnits
   $preferredId = Get-ExtraText $g.Extra 'box_id'
   if (-not $boxes.ContainsKey($setHash)) {
-    $boxes[$setHash] = @{ Id = ('auto-' + $setHash.Substring(0, 16)); Targets = $g.Targets }
+    $boxes[$setHash] = @{ Id = ('auto-' + $setHash.Substring(0, 16)); Targets = $g.Targets; IsPreferred = $false }
   }
   if ($preferredId -and -not $g.ContainsContextSensitiveTarget -and $preferredHashes[$preferredId].Count -eq 1) {
     $current = $boxes[$setHash].Id
     if ($current.StartsWith('auto-') -or [string]::CompareOrdinal($preferredId, $current) -lt 0) {
       $boxes[$setHash].Id = $preferredId
+      $boxes[$setHash].IsPreferred = $true
     }
   }
 }
+$resolvedBoxIdCollisionCount = Resolve-RebuildBoxIdCollisions $boxes
 
 # 2b) 第二遍:用定稿的 box 编号归并别名与签名映射
 $aliases = @{}  # alias_hash → @{ Raw; Unit; Sig; Count; First; Last }
@@ -334,8 +376,7 @@ $tmpl = @{}
 foreach ($g in $aggregateGroups) {
   if (-not (Test-PositiveLearningEvidence ([string]$g.Extra))) { continue }
   $boxId = $boxes[$g.SetHash].Id
-  $scopeTargets = @($g.Targets.Values | Where-Object { Test-EngineeringScopeTarget $_ } |
-    Group-Object -Property EntryCode | ForEach-Object { $_.Group[0] })
+  $scopeTargets = @(Get-DistinctEngineeringScopeTargets $g.Targets.Values)
   foreach ($scopeTarget in $scopeTargets) {
     $entryCode = [string]$scopeTarget.EntryCode
     if (-not (Test-ClassifiedEntryCode $entryCode)) { continue }
@@ -369,8 +410,7 @@ foreach ($g in $aggregateGroups) {
   }
   $boxId = $boxes[$g.SetHash].Id
   $sig = Get-QuantitySignature $g.Name $g.Unit $knownUnits
-  $scopeTargets = @($g.Targets.Values | Where-Object { Test-EngineeringScopeTarget $_ } |
-    Group-Object -Property EntryCode | ForEach-Object { $_.Group[0] })
+  $scopeTargets = @(Get-DistinctEngineeringScopeTargets $g.Targets.Values)
   foreach ($scopeTarget in $scopeTargets) {
     $entryCode = [string]$scopeTarget.EntryCode
     if (-not (Test-ClassifiedEntryCode $entryCode)) { continue }
@@ -393,7 +433,7 @@ foreach ($sr in $sheetRows.Values) { [void]$dtSheet.Rows.Add($sr.Method, $sr.Wb,
 Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Table $dtSheet -TargetTable 'dbo.SheetTemplateRow'
 
 $completionPrefix = "聚合完成"
-Write-Host ("跳过同码多义组件: " + $unsafeContextGroupCount + " 组；跳过身份不完整辅助组件: " + $skippedIncompleteContextGroupCount + " 组；跳过违反 SF 双向条目约束组件: " + $skippedSfConstraintGroupCount + " 组；保留原始 BindingLog")
+Write-Host ("跳过同码多义组件: " + $unsafeContextGroupCount + " 组；跳过身份不完整辅助组件: " + $skippedIncompleteContextGroupCount + " 组；跳过违反 SF 双向条目约束组件: " + $skippedSfConstraintGroupCount + " 组；解决 box_id 冲突: " + $resolvedBoxIdCollisionCount + " 个；保留原始 BindingLog")
 if ($DryRun) {
   Write-Host ("存量尾部单位推断: " + $inferredRows + " 行 / " + $inferredGroups.Count + " 组 / " + $inferredNames.Count + " 个原始名称 / " + $inferredSignatureCount + " 个名称级签名 / " + $inferredUnits.Count + " 种单位")
   Write-Host ("潜在归并冲突(按办法隔离): 与显式单位样本合流 " + $inferredMergeCount + " 个签名/办法 / 同名多推断单位 " + $multiUnitInferenceCount + " 个签名/办法 / 归并后多组件框 " + $potentialMappingConflictCount + " 个签名/办法")

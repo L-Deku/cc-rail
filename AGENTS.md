@@ -58,6 +58,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 反射加载 `RecoExpandPanel.dll` 并实际调用 `JavaScriptSerializer`/`System.Web.Extensions` 解析 JSONL 时使用 Windows PowerShell 5；`pwsh` 可能因 .NET Framework `System.Web` 类型不兼容把解析异常吞成空结果。纯源码检查或不触发该依赖的反射用例仍可使用 `pwsh`。
 - 在 PowerShell 中再调用 `powershell.exe -Command` 且子命令包含 `$变量` 时，优先把子命令保存为脚本后用 `-File`，或用单引号整体隔离子命令；不要让父级 PowerShell 提前展开子命令变量。
 - PowerShell 直接调用 `csc.exe` 时，先把输出和引用文件路径赋给变量，再传 `/out:$变量`、`/reference:$变量`；不要写 `/out:(Join-Path ...)` 或 `/reference:(Join-Path ...)`，否则 `csc` 会收到空路径参数。
+- Windows PowerShell 5 中不得用 `Group-Object -Property <键名>` 对哈希表键值去重；其属性适配可能把不同键值并入空组。重建目标集合时应显式用索引取值和 `HashSet` 去重，并在 Windows PowerShell 5 下做多目标行为测试。
 - SQL Server 结构迁移需要动态删除约束时，不要在 `EXEC(...)` 参数中直接拼接 `REPLACE`/`QUOTENAME` 等函数；先组装到 `NVARCHAR(MAX)` 变量，再用 `sys.sp_executesql` 执行，并重跑幂等 schema 脚本验证。
 - `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 默认加载 `RecoQuotaRecommend/bin/RecoExpandPanel.dll`，不会自动编译当前源码；做源码级红绿回归时，应先把 `tools/RecoExpandPanel/` 当前全部 C# 源文件编译到工作区验证目录并设置 `RECO_EXPAND_DLL`，避免把旧 DLL 的结果误判为新代码结果。
 - `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 在非交互 WinForms 环境可能卡在“定额候选下拉与组件组界面确认”之后的滚动视口用例；连续停在该位置时应按“综合回归未完成”报告，终止并核对本次测试启动的精确进程，不得把前半段 PASS 当作全部通过，也不要反复无上限重跑。
@@ -74,6 +75,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 新增或修复绑定学习字段时，必须按“数据源 -> 预览对象 -> `ExcelQuotaLink` XML -> `mapping-boxes.jsonl` -> `BindingLog`/聚合表 -> 推荐读取”逐段核对；Excel 工程量单位与定额目标单位要分别做回归，不能因预览对象已有字段就认定持久化链已传递。
 - 推荐定额/模板铺量的名字驱动组件“确认写入”即为接受推荐，必须回流 `source='plugin:apply-accept'`；只有整个 `TargetRow` 组件组全部写入成功才学习，残缺组不得产生 accepted，学习库写入失败不得阻断实际写入结果。
 - `SignatureBoxMap.weight` 不设上限，只保留下限 0；调整公式时必须同步修改 SQL 增量写入、本机 `mapping-boxes.jsonl` 和 `Rebuild-Aggregates.ps1` 三端，并执行一次全量重算使历史聚合收敛。
+- `Rebuild-Aggregates.ps1` 分配 `QuotaBox.box_id` 时，历史显式 `box_id` 可能以 `auto-` 开头并与其他目标集合的自动 MD5 前缀冲突。必须先确定性保留唯一的历史显式 ID，再延长自动哈希前缀直到唯一；不得合并不同 `target_set_hash` 或依赖遍历顺序。
 - 修改 `NormalizeForSignature` 或 `Get-NormalizedPart` 时必须同步另一端并执行一次 `Rebuild-Aggregates.ps1`；包括 `-DryRun` 在内都会持有 `BindingLog` 独占锁，只能在冻结绑定写入的维护窗口执行。
 - 推荐快照 `SmartLearningSnapshot` 视为只读；范围过滤和排序只能操作副本，不得就地修改快照中的集合。
 - `SH`、`SQ`、`ZLF`、`LF`、`SF`、`TLF`、`YF`、`GF`、`JF`、`XGT1` 等通用辅助代码不得只按编号聚合或解析；本地组件、SQL 增量/全量聚合和推荐读取必须统一使用“类型+完整编号+规范化名称+规范化单位”身份。同一绑定事件内同码多义时只保留原始 `BindingLog`、不得晋升聚合；当前项目名称或单位不一致时整组过滤，纯辅助组件不进入普通推荐，`SF` 设备购置费例外。

@@ -87,9 +87,19 @@ if ($rebuild -match '跳过纯辅助组件' -or $rebuild -notmatch '跳过身份
 }
 $sfConstraintBlock = [regex]::Match($rebuild, '(?ms)^function Test-SfEntryConstraint\s*\{.*?^\}')
 $scopeTargetBlock = [regex]::Match($rebuild, '(?ms)^function Test-EngineeringScopeTarget\s*\{.*?^\}')
-if (-not $sfConstraintBlock.Success -or -not $scopeTargetBlock.Success) { throw '重建缺少 SF 双向约束或目标级工程范围分类' }
+$distinctScopeTargetsBlock = [regex]::Match($rebuild, '(?ms)^function Get-DistinctEngineeringScopeTargets\s*\{.*?^\}')
+$availableBoxIdBlock = [regex]::Match($rebuild, '(?ms)^function Get-AvailableAutoBoxId\s*\{.*?^\}')
+$resolveBoxIdBlock = [regex]::Match($rebuild, '(?ms)^function Resolve-RebuildBoxIdCollisions\s*\{.*?^\}')
+if (-not $sfConstraintBlock.Success -or -not $scopeTargetBlock.Success -or
+    -not $distinctScopeTargetsBlock.Success -or
+    -not $availableBoxIdBlock.Success -or -not $resolveBoxIdBlock.Success) {
+  throw '重建缺少 SF 双向约束、目标级工程范围分类或 box_id 冲突解析'
+}
 . ([ScriptBlock]::Create($sfConstraintBlock.Value))
 . ([ScriptBlock]::Create($scopeTargetBlock.Value))
+. ([ScriptBlock]::Create($distinctScopeTargetsBlock.Value))
+. ([ScriptBlock]::Create($availableBoxIdBlock.Value))
+. ([ScriptBlock]::Create($resolveBoxIdBlock.Value))
 
 $validMixed = @{ Targets = @{
   ordinary = @{ Kind='quota'; Code='EY-299'; EntryCode='0801'; EntryName='安装工程费' }
@@ -113,9 +123,26 @@ foreach ($case in @(
     throw "全量重建工程范围目标分类错误: $($case[0].Kind)/$($case[0].Code)"
   }
 }
+$mixedScopeTargets = @(Get-DistinctEngineeringScopeTargets @($validMixed.Targets.Values))
+if ($mixedScopeTargets.Count -ne 2 -or
+    @($mixedScopeTargets | ForEach-Object { [string]$_.EntryCode } | Sort-Object) -join ',' -ne '0801,0802') {
+  throw 'Windows PowerShell 5 下目标级工程范围去重丢失了普通定额或 SF 条目'
+}
+$naturalHash = '0050b43a6c81fc1c38fc578db3ffa001'
+$preferredHash = '07e4710e5ec773475de958b2bbbe4e61'
+$collisionBoxes = @{
+  $naturalHash = @{ Id = 'auto-0050b43a6c81fc1c'; IsPreferred = $false }
+  $preferredHash = @{ Id = 'auto-0050b43a6c81fc1c'; IsPreferred = $true }
+}
+if ((Resolve-RebuildBoxIdCollisions $collisionBoxes) -ne 1 -or
+    $collisionBoxes[$preferredHash].Id -ne 'auto-0050b43a6c81fc1c' -or
+    $collisionBoxes[$naturalHash].Id -ne 'auto-0050b43a6c81fc1c38fc' -or
+    (Resolve-RebuildBoxIdCollisions $collisionBoxes) -ne 0) {
+  throw '历史首选 box_id 与新目标集合自动 ID 冲突时未确定性保留首选 ID 并扩展自动 ID'
+}
 if ([regex]::Matches($rebuild, '\$aggregateGroupKeys\.Contains\(\[string\]\$row\.group_key\)').Count -ne 2 -or
     $rebuild -match '\$g\.EntryCode' -or
-    ([regex]::Matches($rebuild, 'Group-Object -Property EntryCode')).Count -lt 2 -or
+    ([regex]::Matches($rebuild, 'Get-DistinctEngineeringScopeTargets \$g\.Targets\.Values')).Count -ne 2 -or
     $rebuild -notmatch '跳过违反 SF 双向条目约束组件') {
   throw '公式/SignatureEntryMap 未排除违规组，或 EngineeringTemplate/SheetTemplateRow 仍使用组级条目'
 }
