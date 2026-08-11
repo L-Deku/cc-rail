@@ -64,3 +64,9 @@ Desktop.ini
 # Local ad-hoc external helper data
 /外部工具/*.bak_*
 /外部工具/~$*
+
+# Build/deploy evidence and rollback backups (DLL source of truth stays RecoQuotaRecommend/bin)
+/artifacts/
+
+# Codex scratch directories
+/.codex-temp-*/
