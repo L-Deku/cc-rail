@@ -344,8 +344,8 @@ WHERE a.raw_name=@name AND t.target_code='SH' AND t.target_name=@target_name AND
     [void]$pureContextQuery.Parameters.AddWithValue('@name', $pureContextName)
     [void]$pureContextQuery.Parameters.AddWithValue('@target_name', 'FAS 联动接入')
     [void]$pureContextQuery.Parameters.AddWithValue('@target_unit', '项')
-    if ([int]$pureContextQuery.ExecuteScalar() -ne 1) {
-        throw '名称和单位完整的纯 SH 组件未进入增量聚合'
+    if ([int]$pureContextQuery.ExecuteScalar() -ne 0) {
+        throw '纯 SH 组件不得进入增量聚合'
     }
 
     $pureSfDefinitions = New-Object System.Collections.ArrayList
@@ -438,4 +438,4 @@ $contextAfterCount = [int]$contextVerify.ExecuteScalar()
 $connection.Dispose()
 if ($afterCount -ne 0 -or $contextAfterCount -ne 0) { throw "Rollback left $afterCount ordinary and $contextAfterCount context test rows" }
 
-Write-Host 'Test-LearningDbIncrementalAggregate: PASS (ordinary idempotence, exact pure SH aggregation, SH identity split/conflict guard, no residue after rollback)'
+Write-Host 'Test-LearningDbIncrementalAggregate: PASS (ordinary idempotence, pure SH exclusion, SH identity split/conflict guard, no residue after rollback)'

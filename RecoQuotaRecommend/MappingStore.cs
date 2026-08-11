@@ -23,20 +23,30 @@ namespace RecoQuotaRecommend
     {
         private const int MaxSamplesPerBox = 30;
         private readonly string path;
+        private readonly string softwarePartition;
         private readonly List<MappingBox> boxes = new List<MappingBox>();
+        private readonly List<Dictionary<string, string>> pendingContexts = new List<Dictionary<string, string>>();
 
-        private MappingStore(string filePath)
+        private MappingStore(string filePath, string partition)
         {
             path = filePath;
+            softwarePartition = (partition ?? "").Trim();
         }
 
         public static MappingStore Load(List<LearningRecord> records)
         {
             string filePath = Path.Combine(LearningStore.FindDataDir(), "mapping-boxes.jsonl");
-            MappingStore store = new MappingStore(filePath);
+            MappingStore store = new MappingStore(filePath, ResolveCurrentSoftwarePartition());
             store.LoadFile();
             // 扶正训练器已停写库：不再从旧 learning 纠错记录自动播种 mapping-boxes，
             // 定额对应框只由“推荐窗口扶正”和“绑定Excel工程量”两条高信号路径写入。
+            return store;
+        }
+
+        internal static MappingStore LoadForTesting(string filePath, string partition)
+        {
+            MappingStore store = new MappingStore(filePath, partition);
+            store.LoadFile();
             return store;
         }
 
@@ -45,7 +55,7 @@ namespace RecoQuotaRecommend
             ScoredBox best = null;
             foreach (MappingBox box in boxes)
             {
-                if (!BoxAllowedByScope(box, scope))
+                if (!BoxAllowedByScope(box, item, scope))
                 {
                     continue;
                 }
@@ -102,14 +112,14 @@ namespace RecoQuotaRecommend
         }
 
         // 严格条目模式下框可用的条件：已带当前条目标签，或全部 quota 类目标都在条目定额池内
-        private static bool BoxAllowedByScope(MappingBox box, EntryScope scope)
+        private static bool BoxAllowedByScope(MappingBox box, ExcelQuantityItem item, EntryScope scope)
         {
             if (scope == null || !scope.Strict)
             {
                 return true;
             }
 
-            if (box.EntryCodes.Contains(scope.Tag))
+            if (HasCompleteEntryContext(box, item, scope))
             {
                 return true;
             }
@@ -139,6 +149,30 @@ namespace RecoQuotaRecommend
             return box.Targets.Count > 0 && box.Targets.All(t => scope.Allows(String.IsNullOrWhiteSpace(t.TargetKind) ? QuotaEntry.GuessKind(t.Code) : t.TargetKind, t.Code));
         }
 
+        private static bool HasCompleteEntryContext(MappingBox box, ExcelQuantityItem item, EntryScope scope)
+        {
+            if (box == null || item == null || scope == null || String.IsNullOrEmpty(scope.Tag)) return false;
+            string partition = (scope.SoftwarePartition ?? "").Trim();
+            string methodNo = LearningPartitionIdentity.NormalizeLearningMethodNo(scope.MethodNo);
+            string entryCode = LearningPartitionIdentity.NormalizeLearningEntryCode(scope.MatchedEntryCode);
+            string quantitySignature = LocalMappingFileStore.BuildQuantitySignature(item.Name);
+            List<MappingTarget> quotaTargets = box.Targets.Where(target =>
+                String.Equals(String.IsNullOrWhiteSpace(target.TargetKind) ? QuotaEntry.GuessKind(target.Code) : target.TargetKind,
+                    "quota", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (quotaTargets.Count == 0) return false;
+            foreach (MappingTarget target in quotaTargets)
+            {
+                string targetIdentity = BuildTargetIdentity(target);
+                if (!box.Contexts.Any(context =>
+                    String.Equals(context.SoftwarePartition, partition, StringComparison.OrdinalIgnoreCase) &&
+                    String.Equals(context.MethodNo, methodNo, StringComparison.OrdinalIgnoreCase) &&
+                    String.Equals(context.EntryCode, entryCode, StringComparison.OrdinalIgnoreCase) &&
+                    String.Equals(context.QuantitySignature, quantitySignature, StringComparison.OrdinalIgnoreCase) &&
+                    String.Equals(context.TargetIdentity, targetIdentity, StringComparison.OrdinalIgnoreCase))) return false;
+            }
+            return true;
+        }
+
         public List<AiMappingCandidate> BuildDeepSeekCandidates(ExcelQuantityItem item, string categoryFilter, SearchIndexStore searchIndex, int limit, EntryScope scope)
         {
             if (item == null)
@@ -147,7 +181,7 @@ namespace RecoQuotaRecommend
             }
 
             return boxes
-                .Where(box => BoxAllowedByScope(box, scope))
+                .Where(box => BoxAllowedByScope(box, item, scope))
                 .Select(box => new
                 {
                     Box = box,
@@ -197,17 +231,14 @@ namespace RecoQuotaRecommend
                 sample.Weight += 5;
                 sample.AcceptedCount += 1;
                 sample.LastUsedAt = Now();
-                if (scope != null && scope.Strict)
-                {
-                    box.EntryCodes.Add(scope.Tag);
-                }
+                QueueContexts(box, sample, scope);
                 box.TrimSamples(MaxSamplesPerBox);
                 changed = true;
             }
 
             if (changed)
             {
-                Save();
+                Save("MappingStore.Accept");
             }
         }
 
@@ -224,12 +255,33 @@ namespace RecoQuotaRecommend
             sample.Weight += 20;
             sample.CorrectedCount += 1;
             sample.LastUsedAt = Now();
-            if (scope != null && scope.Strict)
-            {
-                box.EntryCodes.Add(scope.Tag);
-            }
+            QueueContexts(box, sample, scope);
             box.TrimSamples(MaxSamplesPerBox);
-            Save();
+            Save("MappingStore.Correct");
+        }
+
+        private void QueueContexts(MappingBox box, MappingSample sample, EntryScope scope)
+        {
+            if (box == null || sample == null || scope == null || String.IsNullOrEmpty(scope.Tag)) return;
+            string partition = (scope.SoftwarePartition ?? "").Trim();
+            string methodNo = LearningPartitionIdentity.NormalizeLearningMethodNo(scope.MethodNo);
+            string entryCode = LearningPartitionIdentity.NormalizeLearningEntryCode(scope.MatchedEntryCode);
+            if (!String.Equals(partition, softwarePartition, StringComparison.OrdinalIgnoreCase) ||
+                String.IsNullOrEmpty(methodNo) || String.IsNullOrEmpty(entryCode)) return;
+            foreach (MappingTarget target in box.Targets)
+            {
+                Dictionary<string, string> row = BuildRelationshipRow(box, target, sample);
+                row["record_type"] = "mapping_context";
+                row["software_partition"] = softwarePartition;
+                row["method_no"] = methodNo;
+                row["entry_code"] = entryCode;
+                row["entry_name"] = scope.EntryName ?? "";
+                string identity = LocalMappingFileStore.BuildMappingContextIdentity(row);
+                if (identity.Length == 0) continue;
+                pendingContexts.RemoveAll(existing => String.Equals(
+                    LocalMappingFileStore.BuildMappingContextIdentity(existing), identity, StringComparison.OrdinalIgnoreCase));
+                pendingContexts.Add(row);
+            }
         }
 
         private void Penalize(ExcelQuantityItem item, RecommendationRow oldRecommendation, List<QuotaEntry> selectedTargets)
@@ -283,7 +335,7 @@ namespace RecoQuotaRecommend
             MappingBox box = boxes.FirstOrDefault(b => String.Equals(b.BoxId, boxId, StringComparison.OrdinalIgnoreCase));
             if (box == null)
             {
-                box = new MappingBox { BoxId = boxId };
+                box = new MappingBox { BoxId = boxId, SoftwarePartition = softwarePartition };
                 box.Targets.AddRange(normalized);
                 boxes.Add(box);
             }
@@ -326,15 +378,15 @@ namespace RecoQuotaRecommend
         private void LoadFile()
         {
             // 写入方使用同目录原子替换；读取旧文件或新文件都完整，不必占用写锁阻塞窗口打开。
-            List<MappingBox> parsed = ParseFile(path);
+            List<MappingBox> parsed = ParseFile(path, softwarePartition);
             boxes.Clear();
             boxes.AddRange(CanonicalizeBoxes(parsed));
         }
 
-        private static List<MappingBox> ParseFile(string filePath)
+        private static List<MappingBox> ParseFile(string filePath, string partition)
         {
             List<MappingBox> result = new List<MappingBox>();
-            if (!File.Exists(filePath))
+            if (!File.Exists(filePath) || String.IsNullOrWhiteSpace(partition))
             {
                 return result;
             }
@@ -348,6 +400,11 @@ namespace RecoQuotaRecommend
                 }
 
                 Dictionary<string, string> values = LearningStore.ParseFlatJson(line);
+                if (!String.Equals(LearningStore.Get(values, "record_type"), "mapping_box", StringComparison.OrdinalIgnoreCase) ||
+                    !String.Equals(LearningStore.Get(values, "software_partition").Trim(), partition, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
                 string boxId = LearningStore.Get(values, "box_id");
                 if (String.IsNullOrWhiteSpace(boxId))
                 {
@@ -357,14 +414,9 @@ namespace RecoQuotaRecommend
                 MappingBox box;
                 if (!byId.TryGetValue(boxId, out box))
                 {
-                    box = new MappingBox { BoxId = boxId };
+                    box = new MappingBox { BoxId = boxId, SoftwarePartition = partition };
                     byId[boxId] = box;
                     result.Add(box);
-                }
-
-                foreach (string entryTag in LearningStore.Get(values, "entry_codes").Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
-                {
-                    box.EntryCodes.Add(entryTag.Trim());
                 }
 
                 // 类别由编号确定地推导（覆盖旧文件里把 ZLF/TLF 等辅助代号误存成 quota 的记录）
@@ -393,6 +445,41 @@ namespace RecoQuotaRecommend
                 {
                     box.Samples.Add(sample);
                 }
+            }
+
+            foreach (string line in File.ReadAllLines(filePath, Encoding.UTF8))
+            {
+                Dictionary<string, string> values = LearningStore.ParseFlatJson(line);
+                if (!String.Equals(LearningStore.Get(values, "record_type"), "mapping_context", StringComparison.OrdinalIgnoreCase) ||
+                    !String.Equals(LearningStore.Get(values, "software_partition").Trim(), partition, StringComparison.OrdinalIgnoreCase)) continue;
+                string boxId = LearningStore.Get(values, "box_id").Trim();
+                MappingBox box;
+                if (!byId.TryGetValue(boxId, out box))
+                {
+                    QuotaRecommendPanel.Log("MappingStore ignored orphan mapping_context: box_id=" + boxId);
+                    continue;
+                }
+                string targetIdentity = LocalMappingFileStore.BuildTargetIdentity(values);
+                string quantitySignature = LocalMappingFileStore.BuildQuantitySignature(LearningStore.Get(values, "quantity_name"));
+                bool relationExists = box.Targets.Any(target => String.Equals(BuildTargetIdentity(target), targetIdentity, StringComparison.OrdinalIgnoreCase)) &&
+                    box.Samples.Any(sample => String.Equals(LocalMappingFileStore.BuildQuantitySignature(sample.QuantityName), quantitySignature, StringComparison.OrdinalIgnoreCase));
+                if (!relationExists)
+                {
+                    QuotaRecommendPanel.Log("MappingStore ignored orphan mapping_context relation: box_id=" + boxId);
+                    continue;
+                }
+                string methodNo = LearningPartitionIdentity.NormalizeLearningMethodNo(LearningStore.Get(values, "method_no"));
+                string entryCode = LearningPartitionIdentity.NormalizeLearningEntryCode(LearningStore.Get(values, "entry_code"));
+                if (methodNo.Length == 0 || entryCode.Length == 0) continue;
+                box.Contexts.Add(new MappingContextEvidence
+                {
+                    SoftwarePartition = partition,
+                    MethodNo = methodNo,
+                    EntryCode = entryCode,
+                    EntryName = LearningStore.Get(values, "entry_name"),
+                    QuantitySignature = quantitySignature,
+                    TargetIdentity = targetIdentity
+                });
             }
 
             return result;
@@ -429,7 +516,10 @@ namespace RecoQuotaRecommend
 
         private static void MergeBox(MappingBox into, MappingBox from)
         {
-            into.EntryCodes.UnionWith(from.EntryCodes);
+            foreach (MappingContextEvidence context in from.Contexts)
+            {
+                if (!into.Contexts.Any(existing => existing.Identity == context.Identity)) into.Contexts.Add(context);
+            }
             foreach (MappingTarget target in from.Targets)
             {
                 if (!into.Targets.Any(t => String.Equals(t.TargetKey, target.TargetKey, StringComparison.OrdinalIgnoreCase)))
@@ -456,134 +546,106 @@ namespace RecoQuotaRecommend
             }
         }
 
-        private void Save()
+        private LocalMappingSaveResult Save(string sourceOperation)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path));
-            if (!TryWithMappingBoxesLock(delegate
-            {
-                MergeFromDisk();
-                WriteFile();
-            }, 5000))
-            {
-                QuotaRecommendPanel.Log("MappingStore save skipped: mapping-boxes lock timeout.");
-            }
-        }
-
-        // Excel联动AI匹配和扶正训练器也会写这个文件；整文件重写前先合并磁盘上的新增记录，避免覆盖丢失。
-        private void MergeFromDisk()
-        {
-            foreach (MappingBox diskBox in CanonicalizeBoxes(ParseFile(path)))
-            {
-                MappingBox memory = boxes.FirstOrDefault(b => String.Equals(b.BoxId, diskBox.BoxId, StringComparison.OrdinalIgnoreCase));
-                if (memory == null)
+            LocalMappingSaveResult result = LocalMappingFileStore.Save(path, softwarePartition, sourceOperation, 5000,
+                delegate(List<Dictionary<string, string>> snapshot)
                 {
-                    boxes.Add(diskBox);
-                }
-                else
-                {
-                    MergeBox(memory, diskBox);
-                }
-            }
-        }
-
-        private void WriteFile()
-        {
-            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                using (StreamWriter writer = new StreamWriter(temp, false, Encoding.UTF8))
-                {
+                    LocalMappingMutation mutation = new LocalMappingMutation
+                    {
+                        SoftwarePartition = softwarePartition,
+                        SourceOperation = sourceOperation,
+                        TrimSamples = true,
+                        MaxSamplesPerBox = MaxSamplesPerBox
+                    };
                     foreach (MappingBox box in boxes)
                     {
                         box.TrimSamples(MaxSamplesPerBox);
-                        foreach (MappingTarget target in box.Targets
-                            .OrderBy(t => TargetSortRank(t.TargetKind, t.Code))
-                            .ThenBy(t => t.Code ?? "", StringComparer.OrdinalIgnoreCase))
+                        foreach (MappingTarget target in box.Targets)
                         {
                             foreach (MappingSample sample in box.Samples)
                             {
-                                Dictionary<string, string> row = new Dictionary<string, string>();
-                                row["record_type"] = "mapping_box";
-                                row["box_id"] = box.BoxId;
-                                row["target_kind"] = String.IsNullOrWhiteSpace(target.TargetKind) ? QuotaEntry.GuessKind(target.Code) : target.TargetKind;
-                                row["target_code"] = target.Code;
-                                row["target_name"] = target.Name;
-                                row["target_unit"] = target.Unit;
-                                row["quantity_name"] = sample.QuantityName;
-                                row["quantity_unit"] = sample.QuantityUnit;
-                                row["weight"] = sample.Weight.ToString(CultureInfo.InvariantCulture);
-                                row["accepted_count"] = sample.AcceptedCount.ToString(CultureInfo.InvariantCulture);
-                                row["corrected_count"] = sample.CorrectedCount.ToString(CultureInfo.InvariantCulture);
-                                row["rejected_count"] = sample.RejectedCount.ToString(CultureInfo.InvariantCulture);
-                                row["last_used_at"] = sample.LastUsedAt;
-                                if (box.EntryCodes.Count > 0)
-                                {
-                                    row["entry_codes"] = String.Join(",", box.EntryCodes.OrderBy(t => t, StringComparer.OrdinalIgnoreCase).ToArray());
-                                }
-                                writer.WriteLine(LearningStore.ToJson(row));
+                                mutation.MappingBoxes.Add(BuildRelationshipRow(box, target, sample));
                             }
                         }
                     }
-                }
-
-                ReplaceFileAtomically(path, temp);
-            }
-            finally
-            {
-                if (File.Exists(temp))
-                {
-                    File.Delete(temp);
-                }
-            }
+                    foreach (Dictionary<string, string> context in pendingContexts)
+                    {
+                        mutation.MappingContexts.Add(new Dictionary<string, string>(context, StringComparer.OrdinalIgnoreCase));
+                    }
+                    return mutation;
+                });
+            if (result.Succeeded) pendingContexts.Clear();
+            ReportLocalMappingSaveResult(result);
+            return result;
         }
 
-        private static void ReplaceFileAtomically(string filePath, string temp)
+        private static Dictionary<string, string> BuildRelationshipRow(MappingBox box, MappingTarget target, MappingSample sample)
         {
-            if (!File.Exists(filePath))
-            {
-                File.Move(temp, filePath);
-                return;
-            }
-
-            string backup = filePath + ".bak";
-            File.Replace(temp, filePath, backup, true);
+            Dictionary<string, string> row = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            row["record_type"] = "mapping_box";
+            row["software_partition"] = box.SoftwarePartition ?? "";
+            row["box_id"] = box.BoxId ?? "";
+            row["target_kind"] = String.IsNullOrWhiteSpace(target.TargetKind) ? QuotaEntry.GuessKind(target.Code) : target.TargetKind;
+            row["target_code"] = target.Code ?? "";
+            row["target_name"] = target.Name ?? "";
+            row["target_unit"] = target.Unit ?? "";
+            row["quantity_name"] = sample.QuantityName ?? "";
+            row["quantity_unit"] = sample.QuantityUnit ?? "";
+            row["weight"] = sample.Weight.ToString(CultureInfo.InvariantCulture);
+            row["accepted_count"] = sample.AcceptedCount.ToString(CultureInfo.InvariantCulture);
+            row["corrected_count"] = sample.CorrectedCount.ToString(CultureInfo.InvariantCulture);
+            row["rejected_count"] = sample.RejectedCount.ToString(CultureInfo.InvariantCulture);
+            row["last_used_at"] = sample.LastUsedAt ?? "";
+            return row;
         }
 
-        private const string MappingBoxesMutexName = "RecoQuotaData.mapping-boxes.lock";
+        private static readonly object LocalMappingWarningLock = new object();
+        private static readonly HashSet<string> LocalMappingWarningFingerprints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // 学习库有多个写入方（本窗口扶正、RecoExpandPanel 的 Excel联动与训练器），
-        // 用跨程序集一致的命名互斥锁串行化读改写，名称必须与 RecoExpandPanel 保持一致。
-        private static bool TryWithMappingBoxesLock(Action action, int timeoutMilliseconds)
+        private static void ReportLocalMappingSaveResult(LocalMappingSaveResult result)
         {
-            Mutex mutex = new Mutex(false, MappingBoxesMutexName);
-            bool acquired = false;
+            if (result == null || result.Succeeded) return;
+            QuotaRecommendPanel.Log("MappingStore local save: " + result.Status + "; " + result.ErrorMessage);
+            if (result.Status != LocalMappingSaveStatus.DuplicateContextIdentity &&
+                result.Status != LocalMappingSaveStatus.AmbiguousBoxUnknownFields) return;
+            string fingerprint = (result.FilePath ?? "") + "\n" + (result.FileSha256 ?? "") + "\n" + (result.ConflictIdentity ?? "");
+            lock (LocalMappingWarningLock)
+            {
+                if (!LocalMappingWarningFingerprints.Add(fingerprint)) return;
+            }
+            string lines = result.LineNumbers.Count == 0 ? "" : String.Join(",", result.LineNumbers.Select(value => value.ToString(CultureInfo.InvariantCulture)).ToArray());
+            string message = "\u672c\u5730\u5b66\u4e60\u5df2\u6682\u505c\uff0c\u5f53\u524d\u6587\u4ef6\u672a\u4fee\u6539\u3002\r\n" +
+                "\u51b2\u7a81\u8eab\u4efd\u952e\uff1a" + result.ConflictIdentity.Replace("\n", " / ") + "\r\n" +
+                "\u547d\u4e2d\u884c\u53f7\uff1a" + lines + "\r\n" +
+                "\u6765\u6e90\u64cd\u4f5c\uff1a" + result.SourceOperation + "\r\n" +
+                "\u4fee\u590d\u62a5\u544a\uff1a" + (String.IsNullOrWhiteSpace(result.DiagnosticReportPath) ? "(write failed; see log)" : result.DiagnosticReportPath);
+            MessageBox.Show(message, "\u672c\u5730\u5b66\u4e60\u51b2\u7a81", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        private static string ResolveCurrentSoftwarePartition()
+        {
+            string processName = "";
+            string moduleFileName = "";
             try
             {
-                try
-                {
-                    acquired = mutex.WaitOne(timeoutMilliseconds);
-                }
-                catch (AbandonedMutexException)
-                {
-                    acquired = true;
-                }
-
-                if (!acquired)
-                {
-                    return false;
-                }
-
-                action();
-                return true;
+                Process process = Process.GetCurrentProcess();
+                processName = process.ProcessName ?? "";
+                try { moduleFileName = process.MainModule == null ? "" : process.MainModule.FileName ?? ""; }
+                catch { moduleFileName = ""; }
             }
-            finally
-            {
-                if (acquired)
-                {
-                    mutex.ReleaseMutex();
-                }
-                mutex.Dispose();
-            }
+            catch { }
+            return LearningPartitionIdentity.ResolveFromProcessIdentity(processName, moduleFileName);
+        }
+
+        private static string BuildTargetIdentity(MappingTarget target)
+        {
+            Dictionary<string, string> row = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            row["target_kind"] = target == null ? "" : target.TargetKind ?? "";
+            row["target_code"] = target == null ? "" : target.Code ?? "";
+            row["target_name"] = target == null ? "" : target.Name ?? "";
+            row["target_unit"] = target == null ? "" : target.Unit ?? "";
+            return LocalMappingFileStore.BuildTargetIdentity(row);
         }
 
         // 与 RecoExpandPanel 的 BuildStableMappingBoxId 使用同一套规则：对小写化目标键做 SHA1。
@@ -634,10 +696,10 @@ namespace RecoQuotaRecommend
     internal sealed class MappingBox
     {
         public string BoxId;
+        public string SoftwarePartition;
         public readonly List<MappingTarget> Targets = new List<MappingTarget>();
         public readonly List<MappingSample> Samples = new List<MappingSample>();
-        // 章节条目标签（"2020:0101-01" 形式，method:条目编号），用于按条目分类对应框
-        public readonly HashSet<string> EntryCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public readonly List<MappingContextEvidence> Contexts = new List<MappingContextEvidence>();
 
         public int Score(ExcelQuantityItem item)
         {
@@ -792,6 +854,25 @@ namespace RecoQuotaRecommend
                     .ThenBy(s => s.LastUsedAt ?? "")
                     .First();
                 Samples.Remove(remove);
+            }
+        }
+    }
+
+    internal sealed class MappingContextEvidence
+    {
+        public string SoftwarePartition;
+        public string MethodNo;
+        public string EntryCode;
+        public string EntryName;
+        public string QuantitySignature;
+        public string TargetIdentity;
+
+        public string Identity
+        {
+            get
+            {
+                return (SoftwarePartition ?? "") + "\n" + (MethodNo ?? "") + "\n" +
+                    (EntryCode ?? "") + "\n" + (QuantitySignature ?? "") + "\n" + (TargetIdentity ?? "");
             }
         }
     }

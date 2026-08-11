@@ -16,12 +16,6 @@ namespace RecoNet
     {
         private static readonly Dictionary<Form, List<AgentUndoRecord>> AgentUndoStacks = new Dictionary<Form, List<AgentUndoRecord>>();
         private static readonly Dictionary<Form, List<AgentUndoRecord>> AgentRedoStacks = new Dictionary<Form, List<AgentUndoRecord>>();
-        private static readonly object AgentConnectionFailureLock = new object();
-        private static readonly HashSet<string> AgentCloneConnectionFailures = new HashSet<string>(StringComparer.Ordinal);
-
-        // 与迁移工具相同的诊断账号，仅当主程序连接串克隆失败时兜底使用。
-        private const string AgentDbUser = "reco";
-        private const string AgentDbPassword = "Des_Reco_2006";
 
         // 删除定额行时需要同事务清理的从属表（均含 定额序号 列，主程序的计算缓存）。
         private static readonly string[] AgentQuotaDependentTables = new string[]
@@ -129,6 +123,8 @@ namespace RecoNet
 
         private sealed class AgentPlan
         {
+            public SqlConnection ProjectConnection;
+            public string ProjectConnectionIdentity;
             public List<AgentCommand> Commands = new List<AgentCommand>();
             public List<AgentFieldUpdate> FieldUpdates = new List<AgentFieldUpdate>();
             public List<AgentDeleteRow> Deletes = new List<AgentDeleteRow>();
@@ -164,6 +160,8 @@ namespace RecoNet
 
         private sealed class AgentUndoRecord
         {
+            public SqlConnection ProjectConnection;
+            public string ProjectConnectionIdentity;
             public string Summary;
             public DateTime Time;
             public List<AgentUndoRow> Rows = new List<AgentUndoRow>();
@@ -209,70 +207,54 @@ namespace RecoNet
 
         // ===== 连接与选中快照 =====
 
-        private static SqlConnection AgentCreateWorkConnection(Form mainForm)
+        private static SqlConnection GetOpenProjectConnection(Form mainForm)
         {
-            SqlConnection host = GetProjectConnection(mainForm);
-            if (host == null)
+            SqlConnection conn = GetProjectConnection(mainForm);
+            if (conn == null)
             {
                 throw new AgentPlanException("没有找到当前项目数据库连接，请先打开一个项目。");
             }
-
-            string hostString = host.ConnectionString;
-            string database = host.Database;
-            string connectionKey = hostString + "\n" + database;
-            bool skipClone;
-            lock (AgentConnectionFailureLock)
-            {
-                skipClone = AgentCloneConnectionFailures.Contains(connectionKey);
-            }
-
-            bool cloneFailed = false;
-            if (!skipClone)
-            {
-                SqlConnection conn = null;
-                try
-                {
-                    conn = new SqlConnection(hostString);
-                    conn.Open();
-                    if (!String.IsNullOrEmpty(database) && !String.Equals(conn.Database, database, StringComparison.OrdinalIgnoreCase))
-                    {
-                        conn.ChangeDatabase(database);
-                    }
-
-                    return conn;
-                }
-                catch (Exception ex)
-                {
-                    if (conn != null)
-                    {
-                        conn.Dispose();
-                    }
-                    cloneFailed = true;
-                    Log("Agent clone connection failed, fallback to reco: " + ex.Message);
-                }
-            }
-
-            SqlConnectionStringBuilder builder = new SqlConnectionStringBuilder(hostString);
-            string fallback = "Server=" + builder.DataSource + ";Database=" + database +
-                ";User ID=" + AgentDbUser + ";Password=" + AgentDbPassword + ";Connect Timeout=8";
-            SqlConnection fallbackConn = new SqlConnection(fallback);
             try
             {
-                fallbackConn.Open();
-                if (cloneFailed)
-                {
-                    lock (AgentConnectionFailureLock)
-                    {
-                        AgentCloneConnectionFailures.Add(connectionKey);
-                    }
-                }
-                return fallbackConn;
+                EnsureOpen(conn);
             }
-            catch
+            catch (Exception ex)
             {
-                fallbackConn.Dispose();
-                throw;
+                Log("Host project connection reopen failed: " + ex.GetType().Name);
+                throw new AgentPlanException("当前项目数据库连接无法重新打开，请在主软件中重新打开项目后重试。");
             }
+            return conn;
+        }
+
+        private static string GetProjectConnectionIdentity(SqlConnection conn)
+        {
+            if (conn == null) return "";
+            return (conn.DataSource ?? "").Trim() + "|" + (conn.Database ?? "").Trim();
+        }
+
+        private static T WithOpenProjectConnectionOnUi<T>(Form mainForm, SqlConnection expectedConnection,
+            string expectedConnectionIdentity, Func<SqlConnection, T> work)
+        {
+            if (mainForm == null || mainForm.IsDisposed || mainForm.Disposing || !mainForm.IsHandleCreated)
+            {
+                throw new AgentPlanException("主软件窗口已关闭，已取消当前指令。");
+            }
+            if (mainForm.InvokeRequired)
+            {
+                return (T)mainForm.Invoke(new Func<T>(delegate
+                {
+                    return WithOpenProjectConnectionOnUi(mainForm, expectedConnection, expectedConnectionIdentity, work);
+                }));
+            }
+
+            SqlConnection conn = GetOpenProjectConnection(mainForm);
+            if (expectedConnection != null && (!Object.ReferenceEquals(conn, expectedConnection) ||
+                !String.Equals(GetProjectConnectionIdentity(conn), expectedConnectionIdentity ?? "",
+                    StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new AgentPlanException("当前项目已切换，请重新发起指令并核对预览。");
+            }
+            return work(conn);
         }
 
         private static AgentSelectionSnapshot CaptureAgentSelection(Form mainForm)
@@ -891,6 +873,8 @@ namespace RecoNet
         private static AgentPlan BuildAgentPlan(SqlConnection conn, AgentSelectionSnapshot selection, List<AgentCommand> commands)
         {
             AgentPlan plan = new AgentPlan();
+            plan.ProjectConnection = conn;
+            plan.ProjectConnectionIdentity = GetProjectConnectionIdentity(conn);
             plan.Commands = commands;
 
             foreach (AgentCommand command in commands)
@@ -1916,7 +1900,13 @@ namespace RecoNet
 
         private static string ExecuteAgentPlan(Form mainForm, AgentPlan plan, Action<string> progress)
         {
-            using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
+            SqlConnection conn = GetOpenProjectConnection(mainForm);
+            if (plan.ProjectConnection == null || !Object.ReferenceEquals(conn, plan.ProjectConnection) ||
+                !String.Equals(GetProjectConnectionIdentity(conn), plan.ProjectConnectionIdentity ?? "",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new AgentPlanException("当前项目已切换，已取消旧项目的预览计划。");
+            }
             {
                 if (plan.IsUndo)
                 {
@@ -1940,6 +1930,8 @@ namespace RecoNet
                 }
 
                 AgentUndoRecord undo = new AgentUndoRecord();
+                undo.ProjectConnection = conn;
+                undo.ProjectConnectionIdentity = GetProjectConnectionIdentity(conn);
                 undo.Summary = plan.Summary;
                 undo.Time = DateTime.Now;
 
@@ -2667,7 +2659,16 @@ namespace RecoNet
             }
 
             AgentUndoRecord record = stack[stack.Count - 1];
+            SqlConnection conn = GetOpenProjectConnection(mainForm);
+            if (record.ProjectConnection == null || !Object.ReferenceEquals(conn, record.ProjectConnection) ||
+                !String.Equals(GetProjectConnectionIdentity(conn), record.ProjectConnectionIdentity ?? "",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new AgentPlanException("当前项目已切换，不能撤销其他项目的指令。");
+            }
             AgentPlan plan = new AgentPlan();
+            plan.ProjectConnection = record.ProjectConnection;
+            plan.ProjectConnectionIdentity = record.ProjectConnectionIdentity;
             plan.IsUndo = true;
             plan.UndoRecord = record;
             plan.Summary = "撤销：" + record.Summary + "（" + record.Time.ToString("HH:mm:ss", CultureInfo.InvariantCulture) + "）";
@@ -2830,7 +2831,16 @@ namespace RecoNet
             }
 
             AgentUndoRecord record = stack[stack.Count - 1];
+            SqlConnection conn = GetOpenProjectConnection(mainForm);
+            if (record.ProjectConnection == null || !Object.ReferenceEquals(conn, record.ProjectConnection) ||
+                !String.Equals(GetProjectConnectionIdentity(conn), record.ProjectConnectionIdentity ?? "",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new AgentPlanException("当前项目已切换，不能重做其他项目的指令。");
+            }
             AgentPlan plan = new AgentPlan();
+            plan.ProjectConnection = record.ProjectConnection;
+            plan.ProjectConnectionIdentity = record.ProjectConnectionIdentity;
             plan.IsRedo = true;
             plan.UndoRecord = record;
             plan.Summary = "重做：" + record.Summary;

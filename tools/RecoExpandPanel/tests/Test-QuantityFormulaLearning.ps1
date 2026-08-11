@@ -87,12 +87,12 @@ try {
         throw 'Single-operand cross-unit factor was not stored as a formula'
     }
     $formulaHash = $type.GetMethod('BuildLearningFormulaRuleHash', $flags)
-    $targetType.GetField('EntryCode', $flags).SetValue($compositeTargets[0], '0101-ENTRY-A')
+    $targetType.GetField('EntryCode', $flags).SetValue($compositeTargets[0], '0101-01')
     $hashArgs = New-Object 'object[]' 2
     $hashArgs[0] = $composite.PSObject.BaseObject
     $hashArgs[1] = $compositeTargets[0].PSObject.BaseObject
     $hashA = [string]$formulaHash.Invoke($null, $hashArgs)
-    $targetType.GetField('EntryCode', $flags).SetValue($compositeTargets[0], '0101-ENTRY-B')
+    $targetType.GetField('EntryCode', $flags).SetValue($compositeTargets[0], '0101-02')
     $hashB = [string]$formulaHash.Invoke($null, $hashArgs)
     $targetType.GetField('EntryCode', $flags).SetValue($compositeTargets[0], '0101-01')
     if ($hashA -eq $hashB) { throw 'Formula rule hash still uses the legacy group entry instead of the target entry' }
@@ -201,11 +201,13 @@ try {
     }
     $formulaRuleType.GetField('EntryCode', $flags).SetValue($rule, '')
     $genericResult = Invoke-ResolveFormula '0101-01'
-    if (-not $genericResult.Ok) { throw "显式空条目通用公式未命中：$($genericResult.Args[9])" }
+    if ($genericResult.Ok -or [string]$genericResult.Args[9] -notmatch '当前办法/条目') {
+        throw '空条目公式不得跨条目作为可信换算公式复用'
+    }
     $formulaRuleType.GetField('EntryCode', $flags).SetValue($rule, '0101-01')
     $exactResult = Invoke-ResolveFormula '0101-01'
     if (-not $exactResult.Ok) { throw "当前办法+条目精确公式未命中：$($exactResult.Args[9])" }
-    Write-Host 'PASS 公式严格按当前办法/条目或显式通用规则选择，不回退其他条目'
+    Write-Host 'PASS 公式严格按当前办法和当前条目选择，不回退其他条目或空条目'
 
     # 已有多参数派生公式时，即使锚点单位与定额单位相同，也必须先完整求值；缺参数不得回退锚点单值。
     $targetRowType = $targetRows[0].GetType()
@@ -224,6 +226,8 @@ try {
 
     $sameUnitSnapshot = [Activator]::CreateInstance($snapshotType, $true).PSObject.BaseObject
     $snapshotType.GetField('Method', $flags).SetValue($sameUnitSnapshot, '2024')
+    $snapshotType.GetField('SoftwarePartition', $flags).SetValue($sameUnitSnapshot, '2024')
+    $snapshotType.GetField('MethodNo', $flags).SetValue($sameUnitSnapshot, 'TB 10801—2024')
     $sameUnitSignature = [string]$signatureMethod.Invoke($null, [object[]]@('主体混凝土', 'm3'))
     $sameUnitKey = [string]$formulaKeyMethod.Invoke($null, [object[]]@($sameUnitSignature, 'quota', 'TEST-DERIVED'))
     $sameUnitFormulaByKey = $snapshotType.GetField('FormulaByKey', $flags).GetValue($sameUnitSnapshot)
@@ -251,7 +255,7 @@ try {
     $smartTargetType.GetField('Kind', $flags).SetValue($sameUnitTarget, 'quota')
     $smartTargetType.GetField('Code', $flags).SetValue($sameUnitTarget, 'TEST-DERIVED')
     [void]$mapEntryType.GetField('Targets', $flags).GetValue($sameUnitEntry).Add($sameUnitTarget)
-    [void]$mapEntryType.GetField('LocalContextKeys', $flags).GetValue($sameUnitEntry).Add("2024`n0101-01")
+    [void]$mapEntryType.GetField('LocalContextKeys', $flags).GetValue($sameUnitEntry).Add("TB 10801—2024`n0101-01")
 
     $projectEntries = [Collections.Generic.Dictionary[string,long]]::new([StringComparer]::OrdinalIgnoreCase)
     $projectEntries.Add('0101-01', [long]1)
@@ -294,20 +298,20 @@ try {
     $missingRows = [Activator]::CreateInstance($targetRowListType)
     [void]$missingRows.Add($sameUnitRows[0])
     $missingPreview = Invoke-DerivedPreview $missingRows
-    if ($missingPreview[0].Selected -or [string]$missingPreview[0].Status -notmatch '待确认换算') {
+    if ($missingPreview[0].Selected -or [string]$missingPreview[0].Status -notmatch '公式参数缺失或歧义') {
         throw '多参数派生公式缺参数时不得回退锚点行标准换算。'
     }
     Write-Host 'PASS 多参数派生公式优先完整求值，缺参数时整组待确认'
 
-    # 单参数线性 V0*k 在同量纲下仍使用当前标准换算，不重放历史系数。
+    # 当前分区、办法和条目精确命中的可信 SQL 公式优先于标准同量纲换算。
     $formulaRuleType.GetField('RuleHash', $flags).SetValue($derivedRule, 'linear-rule')
     $formulaRuleType.GetField('Template', $flags).SetValue($derivedRule, 'V0*0.2')
     $derivedOperands.RemoveAt(1)
     $linearPreview = Invoke-DerivedPreview $sameUnitRows
-    if ([string]$linearPreview[0].QuantityText -ne '10' -or -not [String]::IsNullOrWhiteSpace([string]$linearPreview[0].FormulaTemplate)) {
-        throw '单参数线性公式在同量纲下应保持标准换算优先。'
+    if ([string]$linearPreview[0].QuantityText -ne '10*0.2' -or [string]$linearPreview[0].FormulaTemplate -ne 'V0*0.2') {
+        throw '当前办法和条目精确命中的可信 SQL 公式未优先采用。'
     }
-    Write-Host 'PASS 单参数线性公式保持标准同量纲换算优先'
+    Write-Host 'PASS 当前办法和条目精确命中的可信 SQL 公式优先采用'
 
     $candidateScoreType = $type.GetNestedType('SmartMapCandidateScore', $nestedFlags)
     $mapEntryType = $type.GetNestedType('SmartMapEntry', $nestedFlags)
@@ -361,7 +365,7 @@ try {
     $usableArgs[0] = $safetyEntry
     $usableArgs[1] = '弃渣外运'
     $usableArgs[2] = $currentMetadata.PSObject.BaseObject
-    if (-not $usableEntry.Invoke($null, $usableArgs)) { throw '名称和单位精确一致的纯 SH 组件应允许推荐' }
+    if ($usableEntry.Invoke($null, $usableArgs)) { throw '纯 SH 辅助组件不得独立进入普通推荐' }
 
     $missingIdentityEntry = [Activator]::CreateInstance($mapEntryType, $true).PSObject.BaseObject
     $missingIdentityTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject

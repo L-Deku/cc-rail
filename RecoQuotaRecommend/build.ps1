@@ -1,8 +1,43 @@
 ﻿$ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
-$outDir = Join-Path $PSScriptRoot "bin"
-New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+$BuildOnly = $false
+$OutputDirectory = ""
+for ($argIndex = 0; $argIndex -lt $args.Count; $argIndex++) {
+  if ([string]::Equals([string]$args[$argIndex], '-BuildOnly', [StringComparison]::OrdinalIgnoreCase)) {
+    $BuildOnly = $true
+    continue
+  }
+  if ([string]::Equals([string]$args[$argIndex], '-OutputDirectory', [StringComparison]::OrdinalIgnoreCase)) {
+    $argIndex++
+    if ($argIndex -ge $args.Count) { throw "OutputDirectory value is missing." }
+    $OutputDirectory = [string]$args[$argIndex]
+    continue
+  }
+  throw "Unknown build argument: $($args[$argIndex])"
+}
+
+if ($BuildOnly) {
+  if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    throw "BuildOnly requires -OutputDirectory."
+  }
+  $outDir = if ([IO.Path]::IsPathRooted($OutputDirectory)) {
+    [IO.Path]::GetFullPath($OutputDirectory)
+  } else {
+    [IO.Path]::GetFullPath((Join-Path $root $OutputDirectory))
+  }
+  $rootBoundary = [IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+  if (-not ($outDir.TrimEnd('\') + '\').StartsWith($rootBoundary, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "BuildOnly output must stay inside the workspace."
+  }
+  if ([IO.Directory]::Exists($outDir) -and @(Get-ChildItem -LiteralPath $outDir -Force).Count -ne 0) {
+    throw "BuildOnly output directory must be empty: $outDir"
+  }
+  [void][IO.Directory]::CreateDirectory($outDir)
+} else {
+  $outDir = Join-Path $PSScriptRoot "bin"
+  [void][IO.Directory]::CreateDirectory($outDir)
+}
 
 function Add-SoftwareTarget {
   param(
@@ -152,7 +187,6 @@ if (-not $referenceDir) {
 }
 
 $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-$importerOut = Join-Path $outDir "QuotaLearningImporter.exe"
 $quotaOut = Join-Path $outDir "RecoQuotaRecommend.dll"
 $loaderOut = Join-Path $outDir "RecoPluginLoader.dll"
 $expandOut = Join-Path $outDir "RecoExpandPanel.dll"
@@ -179,14 +213,43 @@ $quotaSources = Get-ChildItem -LiteralPath $PSScriptRoot -Filter "*.cs" |
 $expandSources = Get-ChildItem -LiteralPath (Join-Path $root "tools\RecoExpandPanel") -Filter "*.cs" |
   Sort-Object Name |
   ForEach-Object { $_.FullName }
+$learningIdentitySource = Join-Path $root "RecoShared\LearningPartitionIdentity.cs"
+$credentialStoreSource = Join-Path $root "RecoShared\RecoSqlCredentialStore.cs"
+$localMappingStoreSource = Join-Path $root "RecoShared\LocalMappingFileStore.cs"
+foreach ($sharedSource in @($learningIdentitySource, $credentialStoreSource, $localMappingStoreSource)) {
+  if (-not (Test-Path -LiteralPath $sharedSource -PathType Leaf)) {
+    throw "Missing shared source: $sharedSource"
+  }
+}
+$quotaSources = @($quotaSources) + @($learningIdentitySource, $localMappingStoreSource)
+$expandSources = @($expandSources) + @($learningIdentitySource, $credentialStoreSource, $localMappingStoreSource)
+$originalQuotaSources = @($quotaSources)
+$originalExpandSources = @($expandSources)
+$artifactSetId = [Guid]::NewGuid().ToString('N')
+$sourceSnapshotRoot = ''
 
-& $csc /nologo /target:exe /out:$importerOut `
-  /reference:$npoi `
-  /reference:$npoiOoxml `
-  /reference:$npoiOpenXml4Net `
-  /reference:$npoiOpenXmlFormats `
-  (Join-Path $PSScriptRoot "QuotaLearningImporter.cs")
-Assert-NativeSuccess "Build QuotaLearningImporter"
+if ($BuildOnly) {
+  $sourceSnapshotRoot = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $outDir) ('.build-source-' + $artifactSetId)))
+  $workspaceBoundary = [IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+  if (-not ($sourceSnapshotRoot.TrimEnd('\') + '\').StartsWith($workspaceBoundary, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Build source snapshot must stay inside the workspace."
+  }
+  [void][IO.Directory]::CreateDirectory($sourceSnapshotRoot)
+  $sourceMap = @{}
+  foreach ($source in @($originalQuotaSources + $originalExpandSources) | Sort-Object -Unique) {
+    $fullSource = [IO.Path]::GetFullPath($source)
+    if (-not ($fullSource.StartsWith($workspaceBoundary, [StringComparison]::OrdinalIgnoreCase))) {
+      throw "Build source is outside the workspace: $fullSource"
+    }
+    $relativeSource = $fullSource.Substring($workspaceBoundary.Length)
+    $snapshotSource = Join-Path $sourceSnapshotRoot $relativeSource
+    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $snapshotSource))
+    Copy-Item -LiteralPath $fullSource -Destination $snapshotSource
+    $sourceMap[$fullSource] = $snapshotSource
+  }
+  $quotaSources = @($originalQuotaSources | ForEach-Object { $sourceMap[[IO.Path]::GetFullPath($_)] })
+  $expandSources = @($originalExpandSources | ForEach-Object { $sourceMap[[IO.Path]::GetFullPath($_)] })
+}
 
 & $csc /nologo /target:library /out:$quotaOut `
   /reference:System.Windows.Forms.dll `
@@ -197,9 +260,11 @@ Assert-NativeSuccess "Build QuotaLearningImporter"
   $quotaSources
 Assert-NativeSuccess "Build RecoQuotaRecommend"
 
-& $csc /nologo /target:library /out:$loaderOut `
-  (Join-Path $root "RecoPluginLoader\AutoLoadDomainManager.cs")
-Assert-NativeSuccess "Build RecoPluginLoader"
+if (-not $BuildOnly) {
+  & $csc /nologo /target:library /out:$loaderOut `
+    (Join-Path $root "RecoPluginLoader\AutoLoadDomainManager.cs")
+  Assert-NativeSuccess "Build RecoPluginLoader"
+}
 
 & $csc /nologo /target:library /out:$expandOut `
   /reference:System.Windows.Forms.dll `
@@ -211,6 +276,7 @@ Assert-NativeSuccess "Build RecoPluginLoader"
   /reference:System.Web.Extensions.dll `
   /reference:System.IO.Compression.dll `
   /reference:System.IO.Compression.FileSystem.dll `
+  /reference:System.Security.dll `
   /reference:$npoi `
   /reference:$npoiOoxml `
   /reference:$npoiOpenXml4Net `
@@ -221,6 +287,86 @@ Assert-NativeSuccess "Build RecoExpandPanel"
 Assert-DllContainsText -Path $expandOut -FeatureName "Excel quantity instant input" -Markers @("ExcelInstantQuantityInputRuntime")
 Assert-DllContainsText -Path $expandOut -FeatureName "Template fill" -Markers @("TemplateFillPanel", "模板铺量")
 Assert-DllContainsText -Path $expandOut -FeatureName "Agent chat" -Markers @("AgentChat")
+
+if ($BuildOnly) {
+  $sourceCommit = (& git -C $root rev-parse HEAD).Trim()
+  Assert-NativeSuccess "Resolve source commit"
+  $rootUri = New-Object Uri(([IO.Path]::GetFullPath($root).TrimEnd('\') + '\'))
+  $sourceFiles = @($originalQuotaSources + $originalExpandSources) |
+    Sort-Object -Unique |
+    ForEach-Object {
+      $fileUri = New-Object Uri([IO.Path]::GetFullPath($_))
+      [Uri]::UnescapeDataString($rootUri.MakeRelativeUri($fileUri).ToString()).Replace('/', '\')
+    }
+  $sourceFileHashes = @($originalQuotaSources + $originalExpandSources) |
+    Sort-Object -Unique |
+    ForEach-Object {
+      $fullSource = [IO.Path]::GetFullPath($_)
+      $fileUri = New-Object Uri($fullSource)
+      $manifestSource = $sourceMap[$fullSource]
+      if ([string]::IsNullOrWhiteSpace([string]$manifestSource) -or -not (Test-Path -LiteralPath $manifestSource -PathType Leaf)) {
+        throw "Build manifest source snapshot is missing: $fullSource"
+      }
+      [ordered]@{
+        path = [Uri]::UnescapeDataString($rootUri.MakeRelativeUri($fileUri).ToString()).Replace('/', '\')
+        sha256 = (Get-FileHash -LiteralPath $manifestSource -Algorithm SHA256).Hash
+      }
+    }
+  $worktreeStatus = @(& git -C $root status --porcelain --untracked-files=normal)
+  Assert-NativeSuccess "Resolve source worktree state"
+  $manifest = [ordered]@{
+    artifact_set_id = $artifactSetId
+    source_commit = $sourceCommit
+    source_commit_role = 'base-head'
+    source_worktree_dirty = $worktreeStatus.Count -gt 0
+    generated_at_utc = [DateTime]::UtcNow.ToString('o')
+    files = @(
+      [ordered]@{
+        name = 'RecoQuotaRecommend.dll'
+        path = $quotaOut
+        sha256 = (Get-FileHash -LiteralPath $quotaOut -Algorithm SHA256).Hash
+      },
+      [ordered]@{
+        name = 'RecoExpandPanel.dll'
+        path = $expandOut
+        sha256 = (Get-FileHash -LiteralPath $expandOut -Algorithm SHA256).Hash
+      }
+    )
+    source_files = $sourceFiles
+    source_file_hashes = $sourceFileHashes
+    build_source_snapshot = [ordered]@{
+      mode = 'workspace-clean-copy'
+      source_count = $sourceFileHashes.Count
+      hash_source = 'snapshot-copy'
+      removed_after_build = $true
+    }
+  }
+  $manifestPath = Join-Path $outDir 'artifact-manifest.json'
+  [IO.File]::WriteAllText(
+    $manifestPath,
+    ($manifest | ConvertTo-Json -Depth 6),
+    (New-Object Text.UTF8Encoding($true)))
+  $unexpected = @(Get-ChildItem -LiteralPath $outDir -Force | Where-Object {
+    $_.Name -notin @('RecoQuotaRecommend.dll', 'RecoExpandPanel.dll', 'artifact-manifest.json')
+  })
+  if ($unexpected.Count -ne 0) {
+    throw "BuildOnly produced files outside the whitelist."
+  }
+  if (-not [string]::IsNullOrWhiteSpace($sourceSnapshotRoot) -and [IO.Directory]::Exists($sourceSnapshotRoot)) {
+    $resolvedSnapshot = [IO.Path]::GetFullPath($sourceSnapshotRoot)
+    $workspaceBoundary = [IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+    if (-not ($resolvedSnapshot.TrimEnd('\') + '\').StartsWith($workspaceBoundary, [StringComparison]::OrdinalIgnoreCase) -or
+        [IO.File]::GetAttributes($resolvedSnapshot).HasFlag([IO.FileAttributes]::ReparsePoint)) {
+      throw "Refusing to clean unexpected build source snapshot."
+    }
+    [IO.Directory]::Delete($resolvedSnapshot, $true)
+  }
+  Write-Host "BuildOnly output: $outDir"
+  Write-Host "Built $quotaOut"
+  Write-Host "Built $expandOut"
+  Write-Host "Manifest $manifestPath"
+  return
+}
 
 Copy-Item -LiteralPath $npoi -Destination $outDir -Force
 Copy-Item -LiteralPath $npoiOoxml -Destination $outDir -Force
@@ -244,18 +390,18 @@ foreach ($softwareDir in $targets) {
 
   $dataTarget = Join-Path $softwareDir "RecoQuotaData"
   New-Item -ItemType Directory -Path $dataTarget -Force | Out-Null
-  # 2024 判定按 exe 而非路径名:合装目录路径可能不含"2024",误判会覆盖其本地学习文件。
+  # 本地学习已停用：任何目标都不得复制 mapping-boxes/learning 文件族。
   $has2024Exe = (Test-Path -LiteralPath (Join-Path $softwareDir "ReJJGSNet2024.exe")) -or (Test-Path -LiteralPath (Join-Path $softwareDir "ReJJQDNet2024.exe"))
   if (-not $has2024Exe -and $softwareDir -notmatch "2024") {
     $dataSource = Join-Path $root "RecoQuotaData"
     if (Test-Path -LiteralPath $dataSource) {
-      Copy-Item -Path (Join-Path $dataSource "*") -Destination $dataTarget -Force
+      Get-ChildItem -LiteralPath $dataSource -Force |
+        Where-Object { $_.Name -notin @("mapping-boxes.jsonl", "learning.jsonl", "learning.csv", "learning-summary.txt") } |
+        ForEach-Object {
+          Copy-Item -LiteralPath $_.FullName -Destination $dataTarget -Recurse:($_.PSIsContainer) -Force
+        }
     }
   } else {
-    $mappingPath = Join-Path $dataTarget "mapping-boxes.jsonl"
-    if (-not (Test-Path -LiteralPath $mappingPath)) {
-      New-Item -ItemType File -Path $mappingPath -Force | Out-Null
-    }
     # 2024 targets still need the chapter-entry library files (kept per-method inside the files)
     foreach ($chapterFile in @("chapter-entries.jsonl", "chapter-quota-library.jsonl")) {
       $chapterSource = Join-Path (Join-Path $root "RecoQuotaData") $chapterFile

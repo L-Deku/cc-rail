@@ -2,6 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $outDir = Join-Path $PSScriptRoot "bin"
+$credentialSource = Join-Path $root "RecoShared\RecoSqlCredentialStore.cs"
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
 
 # Find a software directory containing NPOI.dll (same discovery as RecoQuotaRecommend/build.ps1)
@@ -36,11 +37,13 @@ $out = Join-Path $outDir "ChapterQuotaLibrary.exe"
 & $csc /nologo /target:exe /out:$out `
   /reference:System.Data.dll `
   /reference:System.Core.dll `
+  /reference:System.Security.dll `
   /reference:$npoi `
   /reference:$npoiOoxml `
   /reference:$npoiOpenXml4Net `
   /reference:$npoiOpenXmlFormats `
-  (Join-Path $PSScriptRoot "ChapterQuotaLibrary.cs")
+  (Join-Path $PSScriptRoot "ChapterQuotaLibrary.cs") `
+  $credentialSource
 if ($LASTEXITCODE -ne 0) {
   throw "Build ChapterQuotaLibrary failed with exit code $LASTEXITCODE"
 }

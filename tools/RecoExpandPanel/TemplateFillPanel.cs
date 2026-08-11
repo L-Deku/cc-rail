@@ -357,10 +357,8 @@ namespace RecoNet
                 {
                     string keep = cmbSourceSheet.Text;
                     cmbSourceSheet.Items.Clear();
-                    using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
-                    {
-                        foreach (string s in ListBoundSheetNames(conn)) cmbSourceSheet.Items.Add(s);
-                    }
+                    SqlConnection conn = GetOpenProjectConnection(mainForm);
+                    foreach (string s in ListBoundSheetNames(conn)) cmbSourceSheet.Items.Add(s);
                     if (!String.IsNullOrEmpty(keep)) cmbSourceSheet.Text = keep;
                     else if (cmbSourceSheet.Items.Count > 0) cmbSourceSheet.SelectedIndex = 0;
                 }
@@ -732,18 +730,16 @@ namespace RecoNet
                 List<string> result = new List<string>();
                 try
                 {
-                    using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
+                    SqlConnection conn = GetOpenProjectConnection(mainForm);
+                    using (SqlCommand cmd = conn.CreateCommand())
                     {
-                        using (SqlCommand cmd = conn.CreateCommand())
+                        cmd.CommandText = "select 总概算编号 from 总概算信息 order by 总概算序号";
+                        using (SqlDataReader reader = cmd.ExecuteReader())
                         {
-                            cmd.CommandText = "select 总概算编号 from 总概算信息 order by 总概算序号";
-                            using (SqlDataReader reader = cmd.ExecuteReader())
+                            while (reader.Read())
                             {
-                                while (reader.Read())
-                                {
-                                    string code = reader.IsDBNull(0) ? "" : Convert.ToString(reader.GetValue(0)).Trim();
-                                    if (code.Length > 0) result.Add(code);
-                                }
+                                string code = reader.IsDBNull(0) ? "" : Convert.ToString(reader.GetValue(0)).Trim();
+                                if (code.Length > 0) result.Add(code);
                             }
                         }
                     }
@@ -770,21 +766,18 @@ namespace RecoNet
             {
                 try
                 {
-                    // 用克隆的独立连接（与 ApplyFill/智能助手一致），不要直接用主程序共享连接，
-                    // 否则可能拿到未初始化连接串、或被 using 误释放主程序连接。
+                    // 借用宿主当前项目连接，不得在插件中关闭或释放。
                     int count;
                     List<string> warnings;
-                    using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
-                    {
-                        FillTemplate existing = LoadFillTemplate(txtName.Text.Trim());
-                        FillTemplate t = chkNameMode.Checked
-                            ? BuildNameFillTemplateFromBindings(mainForm, conn, txtName.Text.Trim(), txtUnit.Text.Trim(), cmbSourceSheet.Text.Trim())
-                            : BuildFillTemplateFromBindings(mainForm, conn, txtName.Text.Trim(), txtUnit.Text.Trim(), cmbSourceSheet.Text.Trim());
-                        t = MergeRegeneratedFillTemplate(existing, t);
-                        count = t.Rows.Count;
-                        warnings = t.BuildWarnings;
-                        SaveFillTemplate(t);
-                    }
+                    SqlConnection conn = GetOpenProjectConnection(mainForm);
+                    FillTemplate existing = LoadFillTemplate(txtName.Text.Trim());
+                    FillTemplate t = chkNameMode.Checked
+                        ? BuildNameFillTemplateFromBindings(mainForm, conn, txtName.Text.Trim(), txtUnit.Text.Trim(), cmbSourceSheet.Text.Trim())
+                        : BuildFillTemplateFromBindings(mainForm, conn, txtName.Text.Trim(), txtUnit.Text.Trim(), cmbSourceSheet.Text.Trim());
+                    t = MergeRegeneratedFillTemplate(existing, t);
+                    count = t.Rows.Count;
+                    warnings = t.BuildWarnings;
+                    SaveFillTemplate(t);
                     ReloadTemplateList();
                     string msg = count > 0
                         ? ("模板已生成并保存：" + count + " 条定额。")
@@ -930,7 +923,8 @@ namespace RecoNet
                     : "";
                 row.Cells["code"].ReadOnly = true;
                 row.Cells["sname"].ReadOnly = !hasCandidates;
-                row.Cells["sel"].ReadOnly = isGroupMember || item.GroupOrder == 0 && !String.IsNullOrWhiteSpace(blockingReason);
+                row.Cells["qty"].ReadOnly = false;
+                row.Cells["sel"].ReadOnly = isGroupMember;
                 if (hasCandidates)
                 {
                     row.Cells["sname"].ToolTipText = "点击选择该工程量名称绑定的源行定额或组件组";
@@ -950,10 +944,7 @@ namespace RecoNet
                 {
                     row.Cells["sel"].ToolTipText = "该组件存在风险：" + blockingReason + "。请先修改数量或处理单位、条目问题。";
                 }
-                if (item.NeedExactNameConfirmation || !String.IsNullOrEmpty(item.Status))
-                    row.DefaultCellStyle.BackColor = Color.MistyRose;
-                else if (item.NeedManualQuota)
-                    row.DefaultCellStyle.BackColor = Color.FromArgb(255, 246, 196);
+                row.DefaultCellStyle.BackColor = GetNameQuotaRowBackColor(item);
             }
 
             private sealed class TemplateFillGridViewState
@@ -1130,14 +1121,31 @@ namespace RecoNet
             {
                 FillPreviewItem item = row == null ? null : row.Tag as FillPreviewItem;
                 bool value = row != null && Convert.ToBoolean(row.Cells["sel"].Value ?? false);
-                if (item == null || !value || !item.NeedExactNameConfirmation) return;
+                if (item == null || !value) return;
                 List<FillPreviewItem> currentGroup = preview.Where(candidate => candidate != null &&
                     candidate.IsNameDriven && candidate.TargetRow == item.TargetRow).ToList();
+                foreach (FillPreviewItem candidate in currentGroup) ConfirmPendingCountUnitScale(candidate);
                 if (HasUnsafeNameQuotaCandidate(currentGroup))
                 {
                     foreach (FillPreviewItem candidate in currentGroup) candidate.Selected = false;
-                    row.Cells["sel"].Value = false;
-                    row.Cells["sel"].ToolTipText = "该组件存在单位、条目或公式风险，不能直接确认，请先人工调整。";
+                    updatingNameQuotaCell = true;
+                    try
+                    {
+                        row.Cells["sel"].Value = false;
+                        RefreshTargetGroupInGrid(item.TargetRow);
+                        DataGridViewRow firstBlockingRow = grid.Rows.Cast<DataGridViewRow>().FirstOrDefault(candidateRow =>
+                        {
+                            FillPreviewItem candidate = candidateRow.Tag as FillPreviewItem;
+                            return candidate != null && candidate.IsNameDriven && candidate.TargetRow == item.TargetRow &&
+                                IsNameQuotaHardStatus(candidate.Status);
+                        });
+                        if (firstBlockingRow != null)
+                        {
+                            firstBlockingRow.Cells["qty"].ToolTipText = "请先处理：" + firstBlockingRow.Cells["st"].Value;
+                            grid.CurrentCell = firstBlockingRow.Cells["qty"];
+                        }
+                    }
+                    finally { updatingNameQuotaCell = false; }
                     return;
                 }
 
@@ -1145,8 +1153,11 @@ namespace RecoNet
                 try
                 {
                     int targetRow = item.TargetRow;
-                    if (ConfirmCurrentExactNameGroup(preview, targetRow))
-                        RefreshTargetGroupInGrid(targetRow);
+                    if (currentGroup.Any(candidate => candidate.NeedExactNameConfirmation))
+                        ConfirmCurrentExactNameGroup(preview, targetRow);
+                    else
+                        foreach (FillPreviewItem candidate in currentGroup) candidate.Selected = true;
+                    RefreshTargetGroupInGrid(targetRow);
                 }
                 finally { updatingNameQuotaCell = false; }
             }
@@ -1156,7 +1167,7 @@ namespace RecoNet
                 FillPreviewItem item = row == null ? null : row.Tag as FillPreviewItem;
                 if (item == null || !item.IsNameDriven || item.GroupOrder != 0) return;
                 bool value = Convert.ToBoolean(row.Cells["sel"].Value ?? false);
-                if (value && item.NeedExactNameConfirmation)
+                if (value)
                 {
                     ConfirmExactNameFromCheck(row);
                     return;
@@ -1170,31 +1181,89 @@ namespace RecoNet
 
             private static bool HasUnsafeNameQuotaCandidate(IEnumerable<FillPreviewItem> items)
             {
-                return items == null || items.Any(item => item == null || !String.IsNullOrWhiteSpace(item.Status));
+                return items == null || items.Any(item => item == null || IsNameQuotaHardStatus(item.Status));
             }
 
             private static string GetUnsafeNameQuotaCandidateReason(IEnumerable<FillPreviewItem> items)
             {
                 if (items == null) return "未找到组件数据";
-                return String.Join("；", items.Where(item => item != null && !String.IsNullOrWhiteSpace(item.Status))
-                    .Select(item => item.Status.Trim()).Distinct(StringComparer.Ordinal).ToArray());
+                return String.Join("；", items.Where(item => item != null && IsNameQuotaHardStatus(item.Status))
+                    .SelectMany(item => SplitNameQuotaStatus(item.Status).Where(part => !IsSoftNameQuotaStatusPart(part)))
+                    .Distinct(StringComparer.Ordinal).ToArray());
+            }
+
+            private static List<string> SplitNameQuotaStatus(string status)
+            {
+                return (status ?? "").Split(new[] { '；' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(part => part.Trim()).Where(part => part.Length > 0).ToList();
+            }
+
+            private static bool IsSoftNameQuotaStatusPart(string statusPart)
+            {
+                return String.Equals((statusPart ?? "").Trim(), "待确认计数单位1:1", StringComparison.Ordinal);
+            }
+
+            private static bool IsNameQuotaHardStatus(string status)
+            {
+                List<string> parts = SplitNameQuotaStatus(status);
+                return parts.Any(part => !IsSoftNameQuotaStatusPart(part));
+            }
+
+            private static Color GetNameQuotaRowBackColor(FillPreviewItem item)
+            {
+                if (item == null) return Color.Empty;
+                if (item.NeedManualQuota &&
+                    String.Equals((item.Status ?? "").Trim(), "未匹配", StringComparison.Ordinal))
+                    return Color.FromArgb(255, 246, 196);
+                if (IsNameQuotaHardStatus(item.Status)) return Color.MistyRose;
+                if (item.NeedExactNameConfirmation || item.NeedManualQuota ||
+                    SplitNameQuotaStatus(item.Status).Any(IsSoftNameQuotaStatusPart))
+                    return Color.FromArgb(255, 246, 196);
+                return Color.Empty;
+            }
+
+            private static bool ConfirmPendingCountUnitScale(FillPreviewItem item)
+            {
+                if (item == null) return false;
+                List<string> parts = SplitNameQuotaStatus(item.Status);
+                if (!parts.Any(IsSoftNameQuotaStatusPart)) return false;
+                string suffix;
+                if (!TryBuildConfirmedCountUnitScaleSuffix(item.TargetUnit, item.Unit, out suffix)) return false;
+
+                string quantityBase = String.IsNullOrWhiteSpace(item.TargetQuantityText)
+                    ? item.QuantityText
+                    : item.TargetQuantityText;
+                item.QuantityText = (quantityBase ?? "") + suffix;
+                item.Status = String.Join("；", parts.Where(part => !IsSoftNameQuotaStatusPart(part)).ToArray());
+                item.AlignNote = AppendPreviewNote(item.AlignNote,
+                    "计数单位1:1已确认" + (String.IsNullOrEmpty(suffix) ? "" : "，数量" + suffix));
+                return true;
             }
 
             private static bool ApplyEditedNameQuotaQuantity(FillPreviewItem item, string quantityText)
             {
                 if (item == null) return false;
-                item.QuantityText = (quantityText ?? "").Trim();
+                string editedText = (quantityText ?? "").Trim();
+                if (String.Equals(editedText, (item.QuantityText ?? "").Trim(), StringComparison.Ordinal)) return false;
+                string quantityBase = (item.TargetQuantityText ?? "").Trim();
+                if (editedText.IndexOf("原数量", StringComparison.Ordinal) >= 0)
+                {
+                    if (String.IsNullOrWhiteSpace(quantityBase)) return false;
+                    editedText = editedText.Replace("原数量", "(" + quantityBase + ")");
+                }
+                item.QuantityText = editedText;
                 if (String.IsNullOrWhiteSpace(item.Status)) return false;
 
-                List<string> statusParts = item.Status.Split(new[] { '；' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(part => part.Trim()).Where(part => part.Length > 0).ToList();
-                if (!statusParts.Any(part => String.Equals(part, "待确认换算", StringComparison.Ordinal))) return false;
+                List<string> statusParts = SplitNameQuotaStatus(item.Status);
+                if (!statusParts.Any(part => String.Equals(part, "缺跨量纲换算系数", StringComparison.Ordinal) ||
+                    String.Equals(part, "公式参数缺失或歧义", StringComparison.Ordinal))) return false;
                 decimal quantity;
                 string error;
                 if (!TryEvaluateDecimal(item.QuantityText, out quantity, out error) || quantity <= 0m) return false;
 
                 item.Status = String.Join("；", statusParts.Where(part =>
-                    !String.Equals(part, "待确认换算", StringComparison.Ordinal)).ToArray());
+                    !String.Equals(part, "缺跨量纲换算系数", StringComparison.Ordinal) &&
+                    !String.Equals(part, "公式参数缺失或歧义", StringComparison.Ordinal)).ToArray());
                 item.AlignNote = AppendPreviewNote(item.AlignNote, "数量已人工确认");
                 return true;
             }
@@ -1209,14 +1278,13 @@ namespace RecoNet
                     FillPreviewItem item = row.Tag as FillPreviewItem;
                     if (item == null || !item.IsNameDriven || item.TargetRow != targetRow) continue;
                     bool isGroupMember = item.GroupOrder > 0;
-                    row.Cells["sel"].ReadOnly = isGroupMember || !String.IsNullOrWhiteSpace(blockingReason);
+                    row.Cells["qty"].ReadOnly = false;
+                    row.Cells["sel"].ReadOnly = isGroupMember;
                     row.Cells["sel"].ToolTipText = String.IsNullOrWhiteSpace(blockingReason)
                         ? (item.NeedExactNameConfirmation ? "勾选接受当前候选" : "")
                         : "该组件存在风险：" + blockingReason + "。请先修改数量或处理单位、条目问题。";
                     row.Cells["st"].Value = String.IsNullOrEmpty(item.Status) ? (item.AlignNote ?? "") : item.Status;
-                    row.DefaultCellStyle.BackColor = item.NeedExactNameConfirmation || !String.IsNullOrEmpty(item.Status)
-                        ? Color.MistyRose
-                        : (item.NeedManualQuota ? Color.FromArgb(255, 246, 196) : Color.Empty);
+                    row.DefaultCellStyle.BackColor = GetNameQuotaRowBackColor(item);
                 }
             }
 

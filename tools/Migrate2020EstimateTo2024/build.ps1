@@ -1,6 +1,8 @@
 $ErrorActionPreference = "Stop"
 
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $outDir = Join-Path $PSScriptRoot "bin"
+$credentialSource = Join-Path $root "RecoShared\RecoSqlCredentialStore.cs"
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
 
 $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\csc.exe"
@@ -15,10 +17,12 @@ $source = Join-Path $PSScriptRoot "Migrate2020EstimateTo2024.cs"
   /reference:System.Data.dll `
   /reference:System.IO.Compression.dll `
   /reference:System.IO.Compression.FileSystem.dll `
+  /reference:System.Security.dll `
   /reference:System.Web.Extensions.dll `
   /reference:System.Xml.dll `
   /reference:System.Xml.Linq.dll `
-  $source
+  $source `
+  $credentialSource
 
 if ($LASTEXITCODE -ne 0) {
   throw "Build failed with exit code $LASTEXITCODE"

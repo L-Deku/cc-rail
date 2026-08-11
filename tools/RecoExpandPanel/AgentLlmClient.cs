@@ -25,7 +25,7 @@ namespace RecoNet
             public bool TreeTruncated;
         }
 
-        // 采集项目上下文（纯数据库 + 快照，无 UI 访问，可在后台线程调用）。
+        // 采集项目上下文（纯数据库 + 快照，无 UI 访问；调用方必须在 UI 线程借用宿主连接）。
         private static AgentContext CollectAgentContext(SqlConnection conn, AgentSelectionSnapshot selection, string userText)
         {
             AgentContext context = new AgentContext();

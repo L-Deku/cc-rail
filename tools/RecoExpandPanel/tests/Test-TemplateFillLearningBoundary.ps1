@@ -11,7 +11,12 @@ if (-not (Test-Path -LiteralPath $dll)) { throw "Missing test DLL: $dll" }
 
 $dllDir = Split-Path -Parent $dll
 foreach ($dependency in @('NPOI.dll', 'NPOI.OpenXmlFormats.dll', 'NPOI.OpenXml4Net.dll', 'NPOI.OOXML.dll')) {
-    [void][System.Reflection.Assembly]::LoadFrom((Join-Path $dllDir $dependency))
+    $dependencyPath = @($dllDir, (Join-Path $repoRoot 'RecoQuotaRecommend\bin')) |
+        ForEach-Object { Join-Path $_ $dependency } |
+        Where-Object { Test-Path -LiteralPath $_ } |
+        Select-Object -First 1
+    if ([String]::IsNullOrWhiteSpace($dependencyPath)) { throw "Missing dependency: $dependency" }
+    [void][System.Reflection.Assembly]::LoadFrom($dependencyPath)
 }
 
 $flags = [System.Reflection.BindingFlags]'Public,NonPublic,Static,Instance'
@@ -147,11 +152,17 @@ $groupType = $type.GetNestedType('MappingFeedbackGroup', $flags)
 $targetType = $type.GetNestedType('MappingFeedbackTarget', $flags)
 $upsert = $type.GetMethod('UpsertMappingBoxGroup', $flags)
 $rows = [Activator]::CreateInstance($upsert.GetParameters()[0].ParameterType)
+$desiredBoxes = [Activator]::CreateInstance($upsert.GetParameters()[1].ParameterType)
+$desiredContexts = [Activator]::CreateInstance($upsert.GetParameters()[2].ParameterType)
 function New-FeedbackGroup([string]$code, [int]$accepted, [int]$corrected, [int]$rejected) {
     $group = [Activator]::CreateInstance($groupType)
     $group.QuantityName = 'Mud transport'
     $group.QuantityUnit = 'm3'
     $group.Method = '2024'
+    $group.SoftwarePartition = '2024'
+    $group.MethodNo = 'TB 10801—2024'
+    $group.EntryCode = '0101-01'
+    $group.EntryName = 'test entry'
     $group.AcceptedCount = $accepted
     $group.CorrectedCount = $corrected
     $group.RejectedCount = $rejected
@@ -161,51 +172,59 @@ function New-FeedbackGroup([string]$code, [int]$accepted, [int]$corrected, [int]
     $group.Targets.Add($target)
     return $group
 }
-$upsert.Invoke($null, [object[]]@($rows.PSObject.BaseObject, (New-FeedbackGroup 'Q-A' 1 0 0)))
-$upsert.Invoke($null, [object[]]@($rows.PSObject.BaseObject, (New-FeedbackGroup 'Q-A' 0 0 1)))
-$upsert.Invoke($null, [object[]]@($rows.PSObject.BaseObject, (New-FeedbackGroup 'Q-B' 0 1 0)))
-$oldRow = @($rows | Where-Object { $_['target_code'] -eq 'Q-A' })[0]
-$newRow = @($rows | Where-Object { $_['target_code'] -eq 'Q-B' })[0]
+function Invoke-UpsertFeedbackGroup($group, $boxRows, $contextRows) {
+    $arguments = New-Object object[] 4
+    $arguments[0] = $rows.PSObject.BaseObject
+    $arguments[1] = $boxRows.PSObject.BaseObject
+    $arguments[2] = $contextRows.PSObject.BaseObject
+    $arguments[3] = $group.PSObject.BaseObject
+    [void]$upsert.Invoke($null, $arguments)
+}
+Invoke-UpsertFeedbackGroup (New-FeedbackGroup 'Q-A' 1 0 0) $desiredBoxes $desiredContexts
+Invoke-UpsertFeedbackGroup (New-FeedbackGroup 'Q-A' 0 0 1) $desiredBoxes $desiredContexts
+Invoke-UpsertFeedbackGroup (New-FeedbackGroup 'Q-B' 0 1 0) $desiredBoxes $desiredContexts
+$oldRow = @($desiredBoxes | Where-Object { $_['target_code'] -eq 'Q-A' })[0]
+$newRow = @($desiredBoxes | Where-Object { $_['target_code'] -eq 'Q-B' })[0]
 if ($oldRow['accepted_count'] -ne '1' -or $oldRow['rejected_count'] -ne '1' -or $oldRow['weight'] -ne '0') {
     throw 'Rejected old relation did not lose local weight.'
 }
-if ($newRow['accepted_count'] -ne '0' -or $newRow['corrected_count'] -ne '1' -or $newRow['weight'] -ne '20') {
+if ($newRow['accepted_count'] -ne '0' -or $newRow['corrected_count'] -ne '1' -or $newRow['weight'] -ne '20' -or
+    $newRow['software_partition'] -ne '2024' -or $newRow.ContainsKey('entry_code') -or $newRow.ContainsKey('method_no')) {
     throw 'Corrected new relation did not gain local weight.'
 }
-$buildBoxIndex = $type.GetMethod('BuildMappingBoxIndex', $flags)
-$boxIndexArgs = [object[]]::new(1)
-$boxIndexArgs[0] = $rows.PSObject.BaseObject
-$boxIndex = $buildBoxIndex.Invoke($null, $boxIndexArgs.PSObject.BaseObject)
-$lookupBox = $type.GetMethod('LookupMappingBox', $flags)
-$lookupArgs = [object[]]::new(2)
-$lookupArgs[0] = ([string]'Mud transport').PSObject.BaseObject
-$lookupArgs[1] = $boxIndex.PSObject.BaseObject
-$matches = $lookupBox.Invoke($null, $lookupArgs.PSObject.BaseObject)
-if ($matches.Count -ne 1 -or $matches[0].Targets.Count -ne 1 -or $matches[0].Targets[0].QuotaCode -ne 'Q-B') {
-    throw 'Rejected local relation remained visible to name-driven fallback.'
+$matchingContexts = @($desiredContexts | Where-Object { $_['record_type'] -eq 'mapping_context' -and -not [String]::IsNullOrWhiteSpace([string]$_['method_no']) })
+if ($matchingContexts.Count -lt 2) {
+    throw "Local relations did not emit method-scoped mapping_context rows: total=$($desiredContexts.Count) methods=$(@($desiredContexts | ForEach-Object { $_['method_no'] }) -join ',')."
 }
-Write-Host 'PASS local learning applies correction and rejection deltas'
+Write-Host 'PASS legacy mapping serializer keeps correction/rejection math (not an active learning path)'
 
 $targetEntryRows = [Activator]::CreateInstance($upsert.GetParameters()[0].ParameterType)
+$targetEntryBoxes = [Activator]::CreateInstance($upsert.GetParameters()[1].ParameterType)
+$targetEntryContexts = [Activator]::CreateInstance($upsert.GetParameters()[2].ParameterType)
 $targetEntryGroup = New-FeedbackGroup 'Q-TARGET' 1 0 0
-$groupType.GetField('EntryCode', $flags).SetValue($targetEntryGroup, '0101-LEGACY')
+$groupType.GetField('EntryCode', $flags).SetValue($targetEntryGroup, '0101-01')
 $groupType.GetField('EntryName', $flags).SetValue($targetEntryGroup, 'legacy group entry')
 $targetEntryTarget = $groupType.GetField('Targets', $flags).GetValue($targetEntryGroup)[0]
-$targetType.GetField('EntryCode', $flags).SetValue($targetEntryTarget, '0202-TARGET')
+$targetType.GetField('EntryCode', $flags).SetValue($targetEntryTarget, '0202-02')
 $targetType.GetField('EntryName', $flags).SetValue($targetEntryTarget, 'target entry')
-$upsert.Invoke($null, [object[]]@($targetEntryRows.PSObject.BaseObject, $targetEntryGroup.PSObject.BaseObject))
-$targetEntryRow = @($targetEntryRows)[0]
-if ($targetEntryRow['entry_code'] -ne '0202-TARGET' -or $targetEntryRow['entry_name'] -ne 'target entry') {
-    throw 'mapping-boxes persistence used legacy group entry instead of target-level entry.'
+$arguments = New-Object object[] 4
+$arguments[0] = $targetEntryRows.PSObject.BaseObject
+$arguments[1] = $targetEntryBoxes.PSObject.BaseObject
+$arguments[2] = $targetEntryContexts.PSObject.BaseObject
+$arguments[3] = $targetEntryGroup.PSObject.BaseObject
+[void]$upsert.Invoke($null, $arguments)
+$targetEntryBox = @($targetEntryBoxes)[0]
+$targetEntryContext = @($targetEntryContexts)[0]
+if ($targetEntryBox.ContainsKey('entry_code') -or $targetEntryContext['entry_code'] -ne '0202-02' -or
+    $targetEntryContext['entry_name'] -ne 'target entry') {
+    throw 'mapping_context persistence used legacy group entry or leaked context fields into mapping_box.'
 }
-Write-Host 'PASS mapping-boxes persists each target entry before the legacy group fallback'
+Write-Host 'PASS mapping_box and mapping_context persist target entry separately'
 
 $collectAccepted = $type.GetMethod('CollectFullyWrittenNameDrivenGroups', $flags)
-$shouldRecordLocal = $type.GetMethod('ShouldRecordAcceptedFillGroupLocally', $flags)
-$shouldRetryRemote = $type.GetMethod('ShouldRetryAcceptedFillGroupRemotely', $flags)
+$shouldWriteSql = $type.GetMethod('ShouldWriteAcceptedFillGroupToSql', $flags)
 $buildAccepted = $type.GetMethod('BuildTemplateRightClickFeedbackGroup', $flags)
-if ($null -eq $collectAccepted -or $null -eq $shouldRecordLocal -or
-    $null -eq $shouldRetryRemote -or $null -eq $buildAccepted) {
+if ($null -eq $collectAccepted -or $null -eq $shouldWriteSql -or $null -eq $buildAccepted) {
     throw 'Accepted apply learning behavior entry points are missing.'
 }
 $acceptedItems = [Activator]::CreateInstance($itemListType)
@@ -271,35 +290,12 @@ if ($collectAccepted.Invoke($null, $anchorArgs).Count -ne 0) { throw 'Column-anc
 
 $gateArgs = [object[]]::new(1)
 $gateArgs[0] = $fullGroups[0]
-if (-not [bool]$shouldRecordLocal.Invoke($null, $gateArgs)) { throw 'Fresh accepted group did not request local feedback.' }
-foreach ($item in $acceptedItems) { $item.LocalFeedbackRecorded = $true; $item.RemoteFeedbackDurable = $false }
-if ([bool]$shouldRecordLocal.Invoke($null, $gateArgs)) { throw 'Repeated apply would add a second local vote after remote failure.' }
-if (-not [bool]$shouldRetryRemote.Invoke($null, $gateArgs)) { throw 'Remote-only retry was not preserved after local feedback.' }
-foreach ($item in $acceptedItems) { $item.RemoteFeedbackDurable = $true }
-if ([bool]$shouldRetryRemote.Invoke($null, $gateArgs)) { throw 'Durable accepted feedback was scheduled for another remote retry.' }
-Write-Host 'PASS accepted apply learns only complete name-driven groups and keeps local/remote idempotence separate'
-
-$batchType = $type.GetNestedType('LearningDbOutboxBatch', $flags)
-$batch = [Activator]::CreateInstance($batchType, $true).PSObject.BaseObject
-$batchType.GetField('BatchId', $flags).SetValue($batch, ('a' * 32))
-$batchType.GetField('Source', $flags).SetValue($batch, 'apply-accept')
-[void]$batchType.GetField('Groups', $flags).GetValue($batch).Add($acceptedFeedback)
-$serializeBatch = $type.GetMethod('SerializeLearningDbOutboxBatch', $flags)
-$toFlatJson = $type.GetMethod('ToFlatJson', $flags)
-$parseBatch = $type.GetMethod('ParseLearningDbOutboxBatch', $flags)
-$serializeArgs = New-Object 'object[]' 1; $serializeArgs[0] = $batch
-$flatBatch = $serializeBatch.Invoke($null, $serializeArgs)
-$jsonArgs = New-Object 'object[]' 1; $jsonArgs[0] = $flatBatch.PSObject.BaseObject
-$outboxLine = [string]$toFlatJson.Invoke($null, $jsonArgs)
-$parseArgs = New-Object 'object[]' 1; $parseArgs[0] = $outboxLine
-$parsedBatch = $parseBatch.Invoke($null, $parseArgs)
-$parsedGroup = $batchType.GetField('Groups', $flags).GetValue($parsedBatch)[0]
-$parsedTargets = $groupType.GetField('Targets', $flags).GetValue($parsedGroup)
-if ($parsedTargets.Count -ne 3 -or $parsedTargets[0].EntryCode -ne '02-01' -or
-    $parsedTargets[2].EntryCode -ne '02-03' -or $parsedTargets[2].EntryName -ne 'target entry 3') {
-    throw 'Outbox serialize/parse roundtrip lost target-level entries.'
-}
-Write-Host 'PASS Outbox roundtrip preserves target-level entries without database access'
+if (-not [bool]$shouldWriteSql.Invoke($null, $gateArgs)) { throw 'Fresh accepted group did not request SQL feedback.' }
+foreach ($item in $acceptedItems) { $item.LearningFeedbackAttempted = $true; $item.SqlFeedbackDurable = $false }
+if (-not [bool]$shouldWriteSql.Invoke($null, $gateArgs)) { throw 'SQL failure did not preserve a retry on the current preview.' }
+foreach ($item in $acceptedItems) { $item.SqlFeedbackDurable = $true }
+if ([bool]$shouldWriteSql.Invoke($null, $gateArgs)) { throw 'Durable SQL feedback was scheduled for another write.' }
+Write-Host 'PASS accepted apply learns only complete name-driven groups and keeps SQL retry state'
 
 $applySource = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpandPanel\TemplateFillFeature.cs') -Raw
 if ($applySource -notmatch 'apply-accept' -or $applySource -notmatch 'CollectFullyWrittenNameDrivenGroups') {

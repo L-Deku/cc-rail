@@ -86,9 +86,7 @@ foreach ($name in @(
   "quota-index.jsonl",
   "material-index.jsonl",
   "chapter-entries.jsonl",
-  "chapter-quota-library.jsonl",
-  "mapping-boxes.jsonl",
-  "learning.jsonl"
+  "chapter-quota-library.jsonl"
 )) {
   Copy-RequiredFile -Source (Join-Path $SeedDataDir $name) -Destination (Join-Path $seedTarget $name)
 }
@@ -119,7 +117,7 @@ Write-Utf8BomFile -Path (Join-Path $OutputDir "使用说明.txt") -Lines @(
   "",
   "后续更新：",
   "只发送 90-后续更新文件 中对应功能的 DLL，让同事覆盖到软件根目录。",
-  "不要在普通更新中发送 RecoQuotaData，以免覆盖同事自己的参考池、扶正和模板。",
+  "不要在普通更新中发送 RecoQuotaData，以免覆盖同事自己的参考池和模板。",
   "覆盖 DLL 前必须关闭两个目标软件。"
 )
 

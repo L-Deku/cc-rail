@@ -18,7 +18,8 @@ function Assert-Contains([string]$Text, [string]$Expected, [string]$Message) {
 Assert-Contains $excelLink 'ExtractPositiveAdditiveCellAddresses' '缺少正向相加单元格拆分入口。'
 Assert-Contains $excelLink 'BuildBindingFeedbackGroups' '缺少按原始表达式构建独立学习组的入口。'
 if ($excelLink.Contains('(entryScope ?? "").Trim()')) { throw '绑定组件仍按组级条目拆分，跨条目目标无法组成完整组件。' }
-Assert-Contains $excelLink 'string targetEntryCode = GetMappingFeedbackTargetEntryCode(group, target);' '本机待同步组件没有按目标保存条目上下文。'
+Assert-Contains $excelLink 'string targetEntryCode = LearningPartitionIdentity.NormalizeLearningEntryCode(' 'SQL 学习组件没有规范化目标条目上下文。'
+Assert-Contains $excelLink 'GetMappingFeedbackTargetEntryCode(group, target));' 'SQL 学习组件没有按目标保存条目上下文。'
 Assert-Contains $excelLink 'EntryCode = !String.IsNullOrWhiteSpace(target.EntryCode) ? target.EntryCode : group.EntryCode ?? ""' '绑定学习组没有优先传递 ExcelQuotaLink 的目标条目或兼容空值旧字段。'
 Assert-Contains $excelLink 'group.Targets.Add' '表达式学习组没有保留完整组件框目标。'
 Assert-Contains $excelLink 'public string QuotaUnit { get; set; }' 'ExcelQuotaLink 没有持久化定额单位。'
@@ -29,7 +30,9 @@ Assert-Contains $excelLink 'item.Link.QuotaUnit = item.QuotaUnit;' '自动匹配
 Assert-Contains $autoMatch 'link.QuotaUnit = quotaUnit;' '自动匹配绑定没有传递定额单位。'
 Assert-Contains $autoMatch 'link.EntryName = ReadAutoMatchReaderText(reader, 9);' '自动匹配绑定没有传递条目名称。'
 Assert-Contains $autoMatch 'link.Method = projectMethod;' '自动匹配绑定没有传递编制办法。'
-Assert-Contains $smartFill 'MergePendingLocalMappingsIntoSmartSnapshot' 'SQL 快照没有合并本机尚未汇总的新学习关系。'
+if ($smartFill.Contains('MergePendingLocalMappingsIntoSmartSnapshot') -or $smartFill.Contains('LoadMappingBoxRows(')) {
+    throw '推荐预览仍会叠加或回退本机学习关系。'
+}
 Assert-Contains $smartFill 'LoadCurrentSmartQuotaMetadata' '推荐预览没有从当前运行版本读取定额元数据。'
 if ($smartFill.Contains('BuildNameDrivenQtyText(row.QuantityText, row.Unit, target.Unit)')) { throw '推荐数量仍在使用 SQL 历史 target_unit 换算。' }
 Assert-Contains $templatePanel 'FeedbackNameMatches(groupLeader.TemplateName, replacements' '模板铺量右键绑定后没有立即写入学习关系。'
@@ -38,7 +41,10 @@ $dll = if (-not [String]::IsNullOrWhiteSpace($env:RECO_EXPAND_DLL)) { $env:RECO_
 if (-not (Test-Path -LiteralPath $dll)) { throw "找不到 $dll，先构建" }
 $dllDir = Split-Path -Parent $dll
 foreach ($dependency in @('NPOI.dll', 'NPOI.OpenXmlFormats.dll', 'NPOI.OpenXml4Net.dll', 'NPOI.OOXML.dll', 'ICSharpCode.SharpZipLib.dll')) {
-    $dependencyPath = Join-Path $dllDir $dependency
+    $dependencyPath = @($dllDir, (Join-Path $repoRoot 'RecoQuotaRecommend\bin')) |
+        ForEach-Object { Join-Path $_ $dependency } |
+        Where-Object { Test-Path -LiteralPath $_ } |
+        Select-Object -First 1
     if (Test-Path -LiteralPath $dependencyPath) { [void][System.Reflection.Assembly]::LoadFrom($dependencyPath) }
 }
 

@@ -619,8 +619,12 @@ namespace RecoNet
         private static List<BoxCandidate> BuildMappingBoxIndex(List<Dictionary<string, string>> boxRows)
         {
             List<BoxCandidate> result = new List<BoxCandidate>();
+            string softwarePartition = ResolveLearningSoftwarePartition();
+            if (!IsValidLearningSoftwarePartition(softwarePartition)) return result;
             foreach (IGrouping<string, Dictionary<string, string>> boxGroup in (boxRows ?? new List<Dictionary<string, string>>())
-                .Where(row => !String.IsNullOrWhiteSpace(GetFlat(row, "box_id")) &&
+                .Where(row => String.Equals(GetFlat(row, "record_type"), "mapping_box", StringComparison.OrdinalIgnoreCase) &&
+                    String.Equals(GetFlat(row, "software_partition").Trim(), softwarePartition, StringComparison.OrdinalIgnoreCase) &&
+                    !String.IsNullOrWhiteSpace(GetFlat(row, "box_id")) &&
                     ReadFlatInt(row, "weight", 1) > 0)
                 .GroupBy(row => GetFlat(row, "box_id"), StringComparer.OrdinalIgnoreCase))
             {
@@ -994,13 +998,6 @@ namespace RecoNet
                 return new List<FillPreviewItem>();
             }
 
-            List<ProjectQuota> projectQuotas = LoadProjectQuotas(mainForm);
-            Dictionary<string, ProjectQuota> projectQuotaByCode = projectQuotas
-                .GroupBy(q => q.Code, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-            List<Dictionary<string, string>> boxRows = LoadMappingBoxRows();
-            List<BoxCandidate> boxIndex = BuildMappingBoxIndex(boxRows);
-
             List<FillPreviewItem> items = new List<FillPreviewItem>();
             List<TemplateNameGroup> templateGroups = BuildTemplateNameGroups(template);
             Dictionary<string, List<TemplateNameGroup>> groupsByNorm = templateGroups
@@ -1123,63 +1120,15 @@ namespace RecoNet
                     continue;
                 }
 
-                List<BoxCandidate> box = LookupMappingBox(tr.RawName, boxIndex);
-                if (box.Count > 0 && box[0].Score >= 70)
+                item.ItemNo = lastMatched == null ? "" : lastMatched.ItemNo;
+                item.NeighborSourceQuotaSeq = lastMatched == null ? 0 : lastMatched.ChosenQuotaSeq;
+                item.AlignNote = "无对应定额，右键绑定软件选中定额";
+                item.NeedManualQuota = true;
+                item.Selected = false;
+                if (lastMatched == null)
                 {
-                    BoxCandidate bestBox = box[0];
-                    int groupOrder = 0;
-                    foreach (BoxCandidateTarget boxTarget in bestBox.Targets)
-                    {
-                        FillPreviewItem boxItem = groupOrder == 0 ? item : new FillPreviewItem();
-                        ProjectQuota boxQuota;
-                        projectQuotaByCode.TryGetValue(boxTarget.QuotaCode ?? "", out boxQuota);
-                        boxItem.IsNameDriven = true;
-                        boxItem.TemplateName = template.Name;
-                        boxItem.TargetRow = tr.Row;
-                        boxItem.TargetChapter = tr.Chapter;
-                        boxItem.TargetFullName = tr.RawName;
-                        boxItem.TargetName = groupOrder == 0 ? tr.DisplayName : "";
-                        boxItem.TargetUnit = tr.Unit;
-                        boxItem.TargetQuantityText = tr.QuantityText;
-                        boxItem.GroupOrder = groupOrder;
-                        boxItem.QuotaCode = boxTarget.QuotaCode;
-                        boxItem.SourceName = boxQuota == null ? boxTarget.QuotaName : boxQuota.Name;
-                        boxItem.ChosenQuotaSeq = boxQuota == null ? 0 : boxQuota.QuotaSeq;
-                        boxItem.Unit = boxQuota == null ? boxTarget.QuotaUnit : boxQuota.Unit;
-                        boxItem.QuantityText = String.IsNullOrEmpty(boxItem.Unit)
-                            ? tr.QuantityText
-                            : BuildNameDrivenQtyText(tr.QuantityText, tr.Unit, boxItem.Unit);
-                        boxItem.ItemNo = lastMatched == null ? "" : lastMatched.ItemNo;
-                        boxItem.NeighborSourceQuotaSeq = lastMatched == null ? 0 : lastMatched.ChosenQuotaSeq;
-                        boxItem.NeedManualQuota = true;
-                        boxItem.Selected = false;
-                        bool supportedQuota = BuildMappingTargetKey(boxTarget.Kind, boxTarget.QuotaCode)
-                            .StartsWith("quota:", StringComparison.OrdinalIgnoreCase) && boxItem.ChosenQuotaSeq > 0;
-                        boxItem.AlignNote = groupOrder == 0
-                            ? ("对应框组件建议 " + bestBox.Targets.Count.ToString(CultureInfo.InvariantCulture) + " 条" +
-                                (supportedQuota ? "，可勾选确认或右键整组重绑" : "，含不可直接写入目标，需右键整组重绑"))
-                            : ("对应框组件建议第 " + (groupOrder + 1).ToString(CultureInfo.InvariantCulture) + " 条");
-                        if (lastMatched == null)
-                        {
-                            boxItem.Status = "无条目锚点（上方无模版命中行），需右键绑定软件选中定额";
-                        }
-                        items.Add(boxItem);
-                        groupOrder++;
-                    }
-                    continue;
-                }
-                else
-                {
-                    item.ItemNo = lastMatched == null ? "" : lastMatched.ItemNo;
-                    item.NeighborSourceQuotaSeq = lastMatched == null ? 0 : lastMatched.ChosenQuotaSeq;
-                    item.AlignNote = "无对应定额，右键绑定软件选中定额";
-                    item.NeedManualQuota = true;
-                    item.Selected = false;
-                    if (lastMatched == null)
-                    {
-                        item.Status = "无条目锚点（上方无模版命中行），不可写入";
-                        item.NeedManualQuota = false;
-                    }
+                    item.Status = "无条目锚点（上方无模版命中行），不可写入";
+                    item.NeedManualQuota = false;
                 }
                 items.Add(item);
             }
@@ -1204,27 +1153,24 @@ namespace RecoNet
             List<ProjectQuota> list = new List<ProjectQuota>();
             try
             {
-                using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
+                SqlConnection conn = GetOpenProjectConnection(mainForm);
+                using (SqlCommand cmd = conn.CreateCommand())
                 {
-                    EnsureOpen(conn);
-                    using (SqlCommand cmd = conn.CreateCommand())
+                    cmd.CommandText = "select 定额编号, 工程或费用项目名称, 单位, min(定额序号) from 定额输入 " +
+                        "where 定额编号 is not null and ltrim(rtrim(定额编号))<>'' and 定额编号<>'-' " +
+                        "group by 定额编号, 工程或费用项目名称, 单位";
+                    using (SqlDataReader r = cmd.ExecuteReader())
                     {
-                        cmd.CommandText = "select 定额编号, 工程或费用项目名称, 单位, min(定额序号) from 定额输入 " +
-                            "where 定额编号 is not null and ltrim(rtrim(定额编号))<>'' and 定额编号<>'-' " +
-                            "group by 定额编号, 工程或费用项目名称, 单位";
-                        using (SqlDataReader r = cmd.ExecuteReader())
+                        while (r.Read())
                         {
-                            while (r.Read())
-                            {
-                                ProjectQuota q = new ProjectQuota();
-                                q.Code = r.IsDBNull(0) ? "" : Convert.ToString(r.GetValue(0)).Trim();
-                                q.Name = r.IsDBNull(1) ? "" : Convert.ToString(r.GetValue(1)).Trim();
-                                q.Unit = r.IsDBNull(2) ? "" : Convert.ToString(r.GetValue(2)).Trim();
-                                q.QuotaSeq = r.IsDBNull(3) ? 0L : Convert.ToInt64(r.GetValue(3), CultureInfo.InvariantCulture);
-                                q.NormCode = NormalizeMatchText(q.Code);
-                                q.NormName = NormalizeMatchText(q.Name);
-                                if (q.Code.Length > 0 && q.QuotaSeq > 0) list.Add(q);
-                            }
+                            ProjectQuota q = new ProjectQuota();
+                            q.Code = r.IsDBNull(0) ? "" : Convert.ToString(r.GetValue(0)).Trim();
+                            q.Name = r.IsDBNull(1) ? "" : Convert.ToString(r.GetValue(1)).Trim();
+                            q.Unit = r.IsDBNull(2) ? "" : Convert.ToString(r.GetValue(2)).Trim();
+                            q.QuotaSeq = r.IsDBNull(3) ? 0L : Convert.ToInt64(r.GetValue(3), CultureInfo.InvariantCulture);
+                            q.NormCode = NormalizeMatchText(q.Code);
+                            q.NormName = NormalizeMatchText(q.Name);
+                            if (q.Code.Length > 0 && q.QuotaSeq > 0) list.Add(q);
                         }
                     }
                 }
@@ -1485,7 +1431,7 @@ namespace RecoNet
         {
             List<MappingFeedbackGroup> mappingGroups = new List<MappingFeedbackGroup>();
             foreach (IGrouping<int, FillPreviewItem> group in (written ?? new List<FillPreviewItem>())
-                .Where(item => item != null && item.IsNameDriven && !item.LocalFeedbackRecorded &&
+                .Where(item => item != null && item.IsNameDriven && !item.LearningFeedbackAttempted &&
                     !String.IsNullOrWhiteSpace(item.QuotaCode))
                 .GroupBy(item => item.TargetRow))
             {
@@ -1522,15 +1468,15 @@ namespace RecoNet
                 return;
             }
 
-            RecordNameMatchesToMappingStore(mappingGroups);
+            RecordNameMatchesToLearningDb(mappingGroups);
             bool learningDurable = ConsumeLearningDbDurableResult(mappingGroups);
             foreach (FillPreviewItem item in mappingGroups.Count == 0
                 ? Enumerable.Empty<FillPreviewItem>()
                 : (written ?? new List<FillPreviewItem>())
-                    .Where(item => item != null && item.IsNameDriven && !item.LocalFeedbackRecorded))
+                    .Where(item => item != null && item.IsNameDriven && !item.LearningFeedbackAttempted))
             {
-                item.LocalFeedbackRecorded = true;
-                item.RemoteFeedbackDurable = learningDurable;
+                item.LearningFeedbackAttempted = true;
+                item.SqlFeedbackDurable = learningDurable;
             }
         }
     }

@@ -518,8 +518,17 @@ try {
     $itemType.GetField('SourceName', $flags).SetValue($uiRiskItems[1], '风险材料D')
     $itemType.GetField('ItemNo', $flags).SetValue($uiRiskItems[0], '0309-01-03-03')
     $itemType.GetField('ItemNo', $flags).SetValue($uiRiskItems[1], '0401-01-01')
-    $itemType.GetField('Status', $flags).SetValue($uiRiskItems[0], '待确认换算')
-    $itemType.GetField('Status', $flags).SetValue($uiRiskItems[1], '待确认换算')
+    $itemType.GetField('Status', $flags).SetValue($uiRiskItems[0], '待确认计数单位1:1')
+    $itemType.GetField('Status', $flags).SetValue($uiRiskItems[1], '缺跨量纲换算系数')
+    foreach ($definition in @(
+        @($uiRiskItems[0], '个', '台', '50'),
+        @($uiRiskItems[1], 'm', 'm2', '100')
+    )) {
+        $itemType.GetField('TargetUnit', $flags).SetValue($definition[0], $definition[1])
+        $itemType.GetField('Unit', $flags).SetValue($definition[0], $definition[2])
+        $itemType.GetField('TargetQuantityText', $flags).SetValue($definition[0], $definition[3])
+        $itemType.GetField('QuantityText', $flags).SetValue($definition[0], $definition[3])
+    }
     $uiCandidates.Add($uiRisk)
     $itemType.GetField('NameQuotaCandidates', $flags).SetValue($uiLeader, $uiCandidates)
     $itemType.GetField('SelectedNameQuotaCandidateKey', $flags).SetValue($uiLeader, 'group-a')
@@ -562,8 +571,8 @@ try {
         -not ($uiGrid.Rows[1].Cells['sel'] -is [System.Windows.Forms.DataGridViewTextBoxCell])) {
         throw '多候选应在源行定额列下拉，定额编号只读且组件成员不显示复选框'
     }
-    if ($uiGrid.Rows[0].DefaultCellStyle.BackColor.ToArgb() -ne [System.Drawing.Color]::MistyRose.ToArgb()) {
-        throw '多候选未确认行应标红'
+    if ($uiGrid.Rows[0].DefaultCellStyle.BackColor.ToArgb() -ne [System.Drawing.Color]::FromArgb(255, 246, 196).ToArgb()) {
+        throw '多候选未确认行应标黄，不得与硬阻断同色'
     }
     $uiGrid.Rows[0].Cells['sel'].Value = $true
     $panelType.GetMethod('ApplyNameGroupSelectionFromCheck', $flags).Invoke(
@@ -619,18 +628,34 @@ try {
     if ($riskRows.Count -ne 2 -or $riskRows[0].Cells['code'].Value -ne 'Q-D' -or
         $riskRows[1].Cells['code'].Value -ne 'M-D' -or
         @($riskRows | Where-Object { $_.Tag.Selected }).Count -ne 0 -or
-        @($riskRows | Where-Object { $_.Tag.Status -ne '待确认换算' }).Count -ne 0) {
+        $riskRows[0].Tag.Status -ne '待确认计数单位1:1' -or
+        $riskRows[1].Tag.Status -ne '缺跨量纲换算系数') {
         throw '风险候选应刷新完整组件但保持未勾选和风险状态'
     }
-    if (-not $riskRows[0].Cells['sel'].ReadOnly -or
-        $riskRows[0].Cells['sel'].ToolTipText -notmatch '待确认换算') {
-        throw '存在换算风险时应明确禁用组首勾选并显示原因'
+    if ($riskRows[0].Cells['sel'].ReadOnly -or
+        $riskRows[0].Cells['sel'].ToolTipText -notmatch '缺跨量纲换算系数' -or
+        @($riskRows | Where-Object { $_.Cells['qty'].ReadOnly }).Count -ne 0) {
+        throw '存在换算风险时组首仍应可点击并显示原因，且所有数量格保持可编辑'
     }
-    foreach ($riskRow in $riskRows) { $riskRow.Cells['qty'].Value = '50*0.1' }
+    if ($riskRows[0].DefaultCellStyle.BackColor.ToArgb() -ne [System.Drawing.Color]::FromArgb(255, 246, 196).ToArgb() -or
+        $riskRows[1].DefaultCellStyle.BackColor.ToArgb() -ne [System.Drawing.Color]::MistyRose.ToArgb()) {
+        throw '计数确认行应为黄色，跨量纲硬阻断行应为红色'
+    }
+    $riskRows[0].Cells['sel'].Value = $true
+    $panelType.GetMethod('ApplyNameGroupSelectionFromCheck', $flags).Invoke(
+        $panel, @($riskRows[0].PSObject.BaseObject))
+    $riskRows = @($uiGrid.Rows | Where-Object { $_.Tag.TargetRow -eq 60 } | Sort-Object { $_.Tag.GroupOrder })
+    if ($riskRows[0].Tag.Status -ne '' -or $riskRows[0].Tag.QuantityText -ne '50' -or
+        $riskRows[1].Tag.Status -ne '缺跨量纲换算系数' -or
+        @($riskRows | Where-Object { $_.Tag.Selected }).Count -ne 0 -or
+        [bool]$riskRows[0].Cells['sel'].Value -or $uiGrid.CurrentCell.RowIndex -ne $riskRows[1].Index) {
+        throw '首次勾选应确认计数1:1，但保留跨量纲硬阻断并退回整组未选中'
+    }
+    $riskRows[1].Cells['qty'].Value = '100*0.35'
     [System.Windows.Forms.Application]::DoEvents()
     if (@($riskRows | Where-Object { -not [String]::IsNullOrWhiteSpace([string]$_.Tag.Status) }).Count -ne 0 -or
         $riskRows[0].Cells['sel'].ReadOnly) {
-        throw '人工输入有效正数表达式后应解除待确认换算阻断'
+        throw '人工输入有效正数表达式后应解除跨量纲换算阻断'
     }
     $riskRows[0].Cells['sel'].Value = $true
     $panelType.GetMethod('ApplyNameGroupSelectionFromCheck', $flags).Invoke(
@@ -788,6 +813,7 @@ Write-Host "PASS 右键原子整组替换"
 $groupType = $type.GetNestedType('MappingFeedbackGroup', $flags)
 $targetType = $type.GetNestedType('MappingFeedbackTarget', $flags)
 $upsert = $type.GetMethod('UpsertMappingBoxGroup', $flags)
+if ($upsert.GetParameters().Count -eq 2) {
 $rows = [Activator]::CreateInstance($upsert.GetParameters()[0].ParameterType)
 $group = [Activator]::CreateInstance($groupType)
 $groupType.GetField('QuantityName', $flags).SetValue($group, '土方外运')
@@ -827,6 +853,9 @@ $targetsField = $boxCandidateType.GetField('Targets', $flags)
 $readTargets = $targetsField.GetValue($boxMatches[0])
 if ($readTargets.Count -ne 3) { throw "组件框回读应保留3个目标，实际 $($readTargets.Count)" }
 Write-Host "PASS 组件框整组回读"
+} else {
+    Write-Host 'SKIP SQL-only模式不再执行本地mapping-boxes整组回写/回读旧测试'
+}
 
 $fixturePath = Join-Path $env:TEMP 'reco-template-chapter-test.xlsx'
 $targetFixturePath = Join-Path $env:TEMP 'reco-template-target-test.xlsx'

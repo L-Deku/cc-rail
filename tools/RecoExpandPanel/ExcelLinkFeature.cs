@@ -247,7 +247,7 @@ namespace RecoNet
                 }
 
                 SaveStore(conn, store);
-                RecordBindingsToMappingStore(savedQuantityNames);
+                RecordBindingsToLearningDb(savedQuantityNames);
                 EnsureExcelLinkRuntime(mainForm);
                 if (ExcelLinkRuntimes.ContainsKey(mainForm))
                 {
@@ -614,6 +614,41 @@ namespace RecoNet
 
             suffix = FormatExcelLinkScaleSuffix(excelUnit.Scale / quotaUnit.Scale);
             return true;
+        }
+
+        private static bool TryBuildConfirmedCountUnitScaleSuffix(string excelUnitText, string quotaUnitText, out string suffix)
+        {
+            suffix = "";
+            decimal excelScale;
+            decimal quotaScale;
+            string excelBaseUnit;
+            string quotaBaseUnit;
+            if (!TryParseExcelLinkUnitPrefix(excelUnitText, out excelScale, out excelBaseUnit) ||
+                !TryParseExcelLinkUnitPrefix(quotaUnitText, out quotaScale, out quotaBaseUnit) ||
+                excelScale <= 0m || quotaScale <= 0m ||
+                !IsConfirmedExcelLinkCountBaseUnit(excelBaseUnit) ||
+                !IsConfirmedExcelLinkCountBaseUnit(quotaBaseUnit))
+            {
+                return false;
+            }
+
+            suffix = FormatExcelLinkScaleSuffix(excelScale / quotaScale);
+            return true;
+        }
+
+        private static bool IsConfirmedExcelLinkCountBaseUnit(string unitText)
+        {
+            string unit = NormalizeExcelLinkUnit(unitText);
+            switch (unit)
+            {
+                case "\u5904": case "\u5ea7": case "\u7ec4": case "\u6839": case "\u9879":
+                case "\u53f0": case "\u5b54": case "\u5957": case "\u4e2a": case "\u5757":
+                case "\u7247": case "\u5f20": case "\u6bb5": case "\u773c": case "\u53e3": case "\u69fd":
+                case "\u6a18": case "\u95f4": case "\u68f5": case "\u682a":
+                    return true;
+                default:
+                    return false;
+            }
         }
 
         private static bool IsExcelLinkPureScaleUnit(string unitText)
@@ -1257,7 +1292,7 @@ namespace RecoNet
                 ExcelLinkStore store = LoadStore(conn);
                 store.Upsert(link);
                 SaveStore(conn, store);
-                RecordBindingToMappingStore(link, fullQuantityName);
+                RecordBindingToLearningDb(link, fullQuantityName);
 
                 EnsureExcelLinkRuntime(mainForm);
                 if (ExcelLinkRuntimes.ContainsKey(mainForm))
@@ -1337,7 +1372,7 @@ namespace RecoNet
                 Dictionary<ExcelQuotaLink, string> fullQuantityNames = FinalizeBoundLinkNames(pendingLinks, true);
                 foreach (ExcelQuotaLink link in pendingLinks) store.Upsert(link);
                 SaveStore(conn, store);
-                RecordBindingsToMappingStore(fullQuantityNames);
+                RecordBindingsToLearningDb(fullQuantityNames);
                 EnsureExcelLinkRuntime(mainForm);
                 if (ExcelLinkRuntimes.ContainsKey(mainForm))
                 {
@@ -1712,6 +1747,8 @@ namespace RecoNet
         {
             if (conn == null || group == null) return;
             if (String.IsNullOrWhiteSpace(group.Method)) group.Method = SmartResolveProjectMethod(conn);
+            if (String.IsNullOrWhiteSpace(group.MethodNo)) group.MethodNo = NormalizeLearningMethodNo(group.Method);
+            if (String.IsNullOrWhiteSpace(group.SoftwarePartition)) group.SoftwarePartition = ResolveLearningSoftwarePartition();
             if (String.IsNullOrWhiteSpace(group.ProjectId)) group.ProjectId = GetProjectId(conn);
             if (String.IsNullOrWhiteSpace(group.EntryCode) || !String.IsNullOrWhiteSpace(group.EntryName)) return;
 
@@ -2299,6 +2336,8 @@ namespace RecoNet
             public string QuantityName;
             public string QuantityUnit;   // Excel 侧单位(只作审计/观察，不参与推荐关系主键)
             public string Method;         // 当前项目编制办法(条目定位)
+            public string MethodNo;       // 保留 30号文/101号文估算/2024 的精确办法身份
+            public string SoftwarePartition; // 只由当前运行进程决定
             public string ProjectId;      // 当前项目标识(审计追溯)
             public string EntryCode;      // 稳定条目编号(学习条目定位)
             public string EntryName;      // 条目名称(学习条目核对)
@@ -2325,9 +2364,9 @@ namespace RecoNet
             public bool IsCompositeFormula;
         }
 
-        // 绑定Excel工程量成功后，把“工程量全名 -> 定额编号”写入推荐插件的定额对应框（mapping-boxes.jsonl）。
-        // 复用推荐窗口扶正一致的 schema/互斥锁/框内去重加权；写库失败不得影响绑定本身。
-        private static void RecordBindingToMappingStore(ExcelQuotaLink link, string fullQuantityName)
+        // 绑定Excel工程量成功后，只把“工程量全名 -> 定额编号”写入 RecoLearning。
+        // SQL 学习失败不得影响已经完成的业务绑定，但不会落入任何本地学习文件或队列。
+        private static void RecordBindingToLearningDb(ExcelQuotaLink link, string fullQuantityName)
         {
             if (link == null || !IsAutoMatchQuotaCode(link.QuotaCode))
             {
@@ -2336,12 +2375,12 @@ namespace RecoNet
 
             Dictionary<ExcelQuotaLink, string> names = new Dictionary<ExcelQuotaLink, string>();
             names[link] = fullQuantityName ?? "";
-            RecordMappingGroupsToStore(BuildBindingFeedbackGroups(names), "excel-bind");
+            RecordMappingGroupsToLearningDb(BuildBindingFeedbackGroups(names), "excel-bind");
         }
 
-        private static void RecordBindingsToMappingStore(Dictionary<ExcelQuotaLink, string> fullNames)
+        private static void RecordBindingsToLearningDb(Dictionary<ExcelQuotaLink, string> fullNames)
         {
-            RecordMappingGroupsToStore(BuildBindingFeedbackGroups(fullNames), "excel-bind-batch");
+            RecordMappingGroupsToLearningDb(BuildBindingFeedbackGroups(fullNames), "excel-bind-batch");
         }
 
         // 一个原始绑定表达式是一套独立关系：同式多条定额组成完整组件框；
@@ -2529,53 +2568,45 @@ namespace RecoNet
         }
 
         // 名字驱动右键新增/重绑：每个工程量组保持完整目标集合，共享同一个 box_id。
-        private static void RecordNameMatchesToMappingStore(List<MappingFeedbackGroup> groups)
+        private static void RecordNameMatchesToLearningDb(List<MappingFeedbackGroup> groups)
         {
-            RecordMappingGroupsToStore(groups, "template-right-click");
+            RecordMappingGroupsToLearningDb(groups, "template-right-click");
         }
 
-        private static void RecordMappingGroupsToStore(List<MappingFeedbackGroup> groups, string source = "mapping-store")
+        private static void RecordMappingGroupsToLearningDb(List<MappingFeedbackGroup> groups, string source = "learning-db")
         {
             if (groups == null || groups.Count == 0) return;
-            try
-            {
-                if (!TryWithMappingBoxesLock(delegate
-                {
-                string path = Path.Combine(FindRecoQuotaDataDir(), "mapping-boxes.jsonl");
-                Directory.CreateDirectory(Path.GetDirectoryName(path));
-                List<Dictionary<string, string>> rows = new List<Dictionary<string, string>>();
-                if (File.Exists(path))
-                {
-                    foreach (string line in File.ReadAllLines(path, Encoding.UTF8))
-                    {
-                        Dictionary<string, string> parsed = ParseFlatJson(line);
-                        if (parsed.Count > 0) rows.Add(parsed);
-                    }
-                }
-                foreach (MappingFeedbackGroup group in groups)
-                {
-                    if (group == null || String.IsNullOrWhiteSpace(group.QuantityName)) continue;
-                    UpsertMappingBoxGroup(rows, group);
-                }
-                TrimMappingRows(rows, 30);
-                WriteAllLinesAtomic(path, rows.Select(ToFlatJson).ToArray(), Encoding.UTF8);
-                }, 5000))
-                {
-                    Log("Record name matches to mapping store skipped: mapping-boxes lock timeout.");
-                }
-            }
-            catch (Exception ex)
-            {
-                Log("Record name matches to mapping store failed: " + ex.Message);
-            }
-
-            // SQL 是多人共享主学习库；本机 jsonl 锁超时或写入失败也必须独立尝试 SQL。
-            // SQL 失败由其自身吞掉并记录，不反过来影响本机绑定和 jsonl 备份。
             RecordBindingEventsToLearningDb(source, groups);
         }
 
+        private static LocalMappingSaveResult SaveMappingGroupsToLocalFile(
+            string path, string partition, List<MappingFeedbackGroup> groups, string sourceOperation)
+        {
+            return LocalMappingFileStore.Save(path, partition, sourceOperation, 5000,
+                        delegate(List<Dictionary<string, string>> snapshot)
+                    {
+                        LocalMappingMutation mutation = new LocalMappingMutation
+                        {
+                            SoftwarePartition = partition,
+                            SourceOperation = sourceOperation,
+                            TrimSamples = true,
+                            MaxSamplesPerBox = 30
+                        };
+                        foreach (MappingFeedbackGroup group in groups ?? new List<MappingFeedbackGroup>())
+                        {
+                            if (group == null || String.IsNullOrWhiteSpace(group.QuantityName)) continue;
+                            UpsertMappingBoxGroup(snapshot, mutation.MappingBoxes, mutation.MappingContexts, group);
+                        }
+                        return mutation;
+                    });
+        }
+
         // 整组 upsert：相同目标集合共用一个 box_id；相同工程量样本的计数在各目标行保持一致。
-        private static void UpsertMappingBoxGroup(List<Dictionary<string, string>> rows, MappingFeedbackGroup group)
+        private static void UpsertMappingBoxGroup(
+            List<Dictionary<string, string>> rows,
+            List<Dictionary<string, string>> desiredBoxes,
+            List<Dictionary<string, string>> desiredContexts,
+            MappingFeedbackGroup group)
         {
             List<MappingFeedbackTarget> eligibleTargets = group.Targets
                 .Where(t => t != null && !String.IsNullOrWhiteSpace(t.Code) &&
@@ -2593,14 +2624,20 @@ namespace RecoNet
             if (targets.Count == 0) return;
 
             List<string> targetKeys = targets.Select(t => BuildLearningTargetIdentityKey(t.Kind, t.Code, t.Name, t.Unit)).ToList();
-            string boxId = FindExistingMappingBoxId(rows, targetKeys) ??
+            string groupPartition = (group.SoftwarePartition ?? "").Trim();
+            if (!IsValidLearningSoftwarePartition(groupPartition)) return;
+            List<Dictionary<string, string>> currentPartitionBoxes = rows.Concat(desiredBoxes)
+                .Where(row => String.Equals(GetFlat(row, "record_type"), "mapping_box", StringComparison.OrdinalIgnoreCase) &&
+                    String.Equals(GetFlat(row, "software_partition").Trim(), groupPartition, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            string boxId = FindExistingMappingBoxId(currentPartitionBoxes, targetKeys) ??
                 BuildStableMappingBoxId(String.Join("|", targetKeys.ToArray()));
             group.BoxId = boxId;
             string signature = NormalizeForSignature(group.QuantityName) + "|";
-            string groupMethod = (group.Method ?? "").Trim();
-            List<Dictionary<string, string>> existingRows = rows.Where(row =>
+            string groupMethodNo = NormalizeLearningMethodNo(group.MethodNo);
+            List<Dictionary<string, string>> existingRows = currentPartitionBoxes.Where(row =>
                 String.Equals(GetFlat(row, "box_id"), boxId, StringComparison.OrdinalIgnoreCase) &&
-                String.Equals(GetFlat(row, "method").Trim(), groupMethod, StringComparison.OrdinalIgnoreCase) &&
+                String.Equals(GetFlat(row, "software_partition").Trim(), groupPartition, StringComparison.OrdinalIgnoreCase) &&
                 String.Equals(NormalizeForSignature(GetFlat(row, "quantity_name")) + "|", signature, StringComparison.OrdinalIgnoreCase))
                 .ToList();
             int acceptedDelta = Math.Max(0, group.AcceptedCount);
@@ -2615,53 +2652,105 @@ namespace RecoNet
 
             foreach (MappingFeedbackTarget target in targets)
             {
-                string targetKey = BuildMappingTargetKey(target.Kind, target.Code);
+                string targetKey = BuildLearningTargetIdentityKey(target.Kind, target.Code, target.Name, target.Unit);
                 List<Dictionary<string, string>> matchingTargets = existingRows.Where(row =>
-                    String.Equals(BuildMappingTargetKey(GetFlat(row, "target_kind"), GetFlat(row, "target_code")), targetKey, StringComparison.OrdinalIgnoreCase)).ToList();
-                Dictionary<string, string> existing = matchingTargets.FirstOrDefault();
-                foreach (Dictionary<string, string> duplicate in matchingTargets.Skip(1).ToList()) rows.Remove(duplicate);
-                if (existing == null)
-                {
-                    existing = new Dictionary<string, string>();
-                    rows.Add(existing);
-                }
-                existing["record_type"] = "mapping_box";
-                existing["box_id"] = boxId;
-                existing["target_kind"] = String.IsNullOrWhiteSpace(target.Kind) ? "quota" : target.Kind;
-                existing["target_code"] = target.Code ?? "";
-                if (!String.IsNullOrWhiteSpace(target.Name) || !existing.ContainsKey("target_name")) existing["target_name"] = target.Name ?? "";
-                if (!String.IsNullOrWhiteSpace(target.Unit) || !existing.ContainsKey("target_unit")) existing["target_unit"] = target.Unit ?? "";
-                existing["quantity_name"] = group.QuantityName;
-                existing["quantity_unit"] = group.QuantityUnit ?? "";
-                if (!String.IsNullOrWhiteSpace(group.Method) || !existing.ContainsKey("method")) existing["method"] = group.Method ?? "";
-                if (!String.IsNullOrWhiteSpace(group.ProjectId) || !existing.ContainsKey("project_id")) existing["project_id"] = group.ProjectId ?? "";
-                string targetEntryCode = GetMappingFeedbackTargetEntryCode(group, target);
+                    String.Equals(BuildLearningTargetIdentityKey(GetFlat(row, "target_kind"), GetFlat(row, "target_code"),
+                        GetFlat(row, "target_name"), GetFlat(row, "target_unit")), targetKey, StringComparison.OrdinalIgnoreCase)).ToList();
+                Dictionary<string, string> existing = matchingTargets.FirstOrDefault() ?? new Dictionary<string, string>();
+                Dictionary<string, string> boxRow = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (KeyValuePair<string, string> pair in existing) boxRow[pair.Key] = pair.Value;
+                boxRow["record_type"] = "mapping_box";
+                boxRow["box_id"] = boxId;
+                boxRow["target_kind"] = String.IsNullOrWhiteSpace(target.Kind) ? "quota" : target.Kind;
+                boxRow["target_code"] = target.Code ?? "";
+                if (!String.IsNullOrWhiteSpace(target.Name) || !boxRow.ContainsKey("target_name")) boxRow["target_name"] = target.Name ?? "";
+                if (!String.IsNullOrWhiteSpace(target.Unit) || !boxRow.ContainsKey("target_unit")) boxRow["target_unit"] = target.Unit ?? "";
+                boxRow["quantity_name"] = group.QuantityName;
+                boxRow["quantity_unit"] = group.QuantityUnit ?? "";
+                boxRow["software_partition"] = groupPartition;
+                boxRow["weight"] = weight.ToString(CultureInfo.InvariantCulture);
+                boxRow["accepted_count"] = accepted.ToString(CultureInfo.InvariantCulture);
+                boxRow["corrected_count"] = corrected.ToString(CultureInfo.InvariantCulture);
+                boxRow["rejected_count"] = rejected.ToString(CultureInfo.InvariantCulture);
+                boxRow["last_used_at"] = now;
+                foreach (string forbidden in boxRow.Keys.Where(key =>
+                    String.Equals(key, "method", StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(key, "method_no", StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(key, "project_id", StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(key, "entry_codes", StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(key, "entry_code", StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(key, "entry_name", StringComparison.OrdinalIgnoreCase) ||
+                    key.StartsWith("formula_", StringComparison.OrdinalIgnoreCase)).ToList()) boxRow.Remove(forbidden);
+                string boxIdentity = LocalMappingFileStore.BuildMappingBoxIdentity(boxRow);
+                desiredBoxes.RemoveAll(row => String.Equals(LocalMappingFileStore.BuildMappingBoxIdentity(row), boxIdentity, StringComparison.OrdinalIgnoreCase));
+                desiredBoxes.Add(boxRow);
+
+                string targetEntryCode = LearningPartitionIdentity.NormalizeLearningEntryCode(
+                    GetMappingFeedbackTargetEntryCode(group, target));
                 string targetEntryName = GetMappingFeedbackTargetEntryName(group, target);
-                if (!String.IsNullOrWhiteSpace(targetEntryCode) || !existing.ContainsKey("entry_code")) existing["entry_code"] = targetEntryCode;
-                if (!String.IsNullOrWhiteSpace(targetEntryName) || !existing.ContainsKey("entry_name")) existing["entry_name"] = targetEntryName;
-                if (!String.IsNullOrWhiteSpace(target.FormulaTemplate) && group.FormulaOperands.Count > 0)
+                if (!String.IsNullOrEmpty(groupMethodNo) && !String.IsNullOrEmpty(targetEntryCode))
                 {
-                    existing["formula_rule_hash"] = BuildLearningFormulaRuleHash(group, target);
-                    existing["formula_template"] = target.FormulaTemplate;
-                    existing["formula_target_unit"] = target.Unit ?? "";
-                    existing["formula_method"] = group.Method ?? "";
-                    existing["formula_entry_code"] = targetEntryCode;
-                    existing["formula_operand_count"] = group.FormulaOperands.Count.ToString(CultureInfo.InvariantCulture);
-                    for (int operandIndex = 0; operandIndex < group.FormulaOperands.Count; operandIndex++)
+                    Dictionary<string, string> contextRow = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    contextRow["record_type"] = "mapping_context";
+                    contextRow["software_partition"] = groupPartition;
+                    contextRow["method_no"] = groupMethodNo;
+                    contextRow["box_id"] = boxId;
+                    contextRow["target_kind"] = boxRow["target_kind"];
+                    contextRow["target_code"] = boxRow["target_code"];
+                    contextRow["target_name"] = boxRow["target_name"];
+                    contextRow["target_unit"] = boxRow["target_unit"];
+                    contextRow["quantity_name"] = group.QuantityName;
+                    contextRow["quantity_unit"] = group.QuantityUnit ?? "";
+                    contextRow["entry_code"] = targetEntryCode;
+                    contextRow["entry_name"] = targetEntryName;
+                    if (!String.IsNullOrWhiteSpace(target.FormulaTemplate) && group.FormulaOperands.Count > 0)
                     {
-                        QuantityFormulaOperandInfo operand = group.FormulaOperands[operandIndex];
-                        string prefix = "formula_operand_" + operandIndex.ToString(CultureInfo.InvariantCulture) + "_";
-                        existing[prefix + "name"] = operand.Name ?? "";
-                        existing[prefix + "unit"] = operand.Unit ?? "";
-                        existing[prefix + "signature"] = operand.Signature ?? "";
+                        contextRow["formula_rule_hash"] = BuildLearningFormulaRuleHash(group, target);
+                        contextRow["formula_template"] = target.FormulaTemplate;
+                        contextRow["formula_target_unit"] = target.Unit ?? "";
+                        contextRow["formula_method"] = group.Method ?? "";
+                        contextRow["formula_software_partition"] = groupPartition;
+                        contextRow["formula_method_no"] = groupMethodNo;
+                        contextRow["formula_entry_code"] = targetEntryCode;
+                        contextRow["formula_operand_count"] = group.FormulaOperands.Count.ToString(CultureInfo.InvariantCulture);
+                        for (int operandIndex = 0; operandIndex < group.FormulaOperands.Count; operandIndex++)
+                        {
+                            QuantityFormulaOperandInfo operand = group.FormulaOperands[operandIndex];
+                            string prefix = "formula_operand_" + operandIndex.ToString(CultureInfo.InvariantCulture) + "_";
+                            contextRow[prefix + "name"] = operand.Name ?? "";
+                            contextRow[prefix + "unit"] = operand.Unit ?? "";
+                            contextRow[prefix + "signature"] = operand.Signature ?? "";
+                        }
                     }
+                    string contextIdentity = LocalMappingFileStore.BuildMappingContextIdentity(contextRow);
+                    desiredContexts.RemoveAll(row => String.Equals(LocalMappingFileStore.BuildMappingContextIdentity(row), contextIdentity, StringComparison.OrdinalIgnoreCase));
+                    desiredContexts.Add(contextRow);
                 }
-                existing["weight"] = weight.ToString(CultureInfo.InvariantCulture);
-                existing["accepted_count"] = accepted.ToString(CultureInfo.InvariantCulture);
-                existing["corrected_count"] = corrected.ToString(CultureInfo.InvariantCulture);
-                existing["rejected_count"] = rejected.ToString(CultureInfo.InvariantCulture);
-                existing["last_used_at"] = now;
             }
+        }
+
+        private static readonly object LocalMappingWarningLock = new object();
+        private static readonly HashSet<string> LocalMappingWarningFingerprints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private static void ReportLocalMappingSaveResult(LocalMappingSaveResult result, string caller)
+        {
+            if (result == null || result.Succeeded) return;
+            string detail = (caller ?? "") + " local mapping save: " + result.Status + "; " + result.ErrorMessage;
+            Log(detail);
+            if (result.Status != LocalMappingSaveStatus.DuplicateContextIdentity &&
+                result.Status != LocalMappingSaveStatus.AmbiguousBoxUnknownFields) return;
+            string fingerprint = (result.FilePath ?? "") + "\n" + (result.FileSha256 ?? "") + "\n" + (result.ConflictIdentity ?? "");
+            lock (LocalMappingWarningLock)
+            {
+                if (!LocalMappingWarningFingerprints.Add(fingerprint)) return;
+            }
+            string lines = result.LineNumbers.Count == 0 ? "" : String.Join(",", result.LineNumbers.Select(value => value.ToString(CultureInfo.InvariantCulture)).ToArray());
+            string message = "\u672c\u5730\u5b66\u4e60\u5df2\u6682\u505c\uff0c\u5f53\u524d\u6587\u4ef6\u672a\u4fee\u6539\u3002\r\n" +
+                "\u51b2\u7a81\u8eab\u4efd\u952e\uff1a" + result.ConflictIdentity.Replace("\n", " / ") + "\r\n" +
+                "\u547d\u4e2d\u884c\u53f7\uff1a" + lines + "\r\n" +
+                "\u6765\u6e90\u64cd\u4f5c\uff1a" + result.SourceOperation + "\r\n" +
+                "\u4fee\u590d\u62a5\u544a\uff1a" + (String.IsNullOrWhiteSpace(result.DiagnosticReportPath) ? "(write failed; see log)" : result.DiagnosticReportPath);
+            MessageBox.Show(message, "\u672c\u5730\u5b66\u4e60\u51b2\u7a81", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         private static string BuildMappingTargetKey(string kind, string code)
@@ -2710,6 +2799,12 @@ namespace RecoNet
             List<MappingFeedbackTarget> list = (targets ?? Enumerable.Empty<MappingFeedbackTarget>())
                 .Where(target => target != null && !String.IsNullOrWhiteSpace(target.Code)).ToList();
             if (list.Count == 0) return false;
+            bool hasPrimaryTarget = list.Any(target => IsPrimaryLearningTarget(target.Kind, target.Code));
+            bool allSf = list.All(target =>
+                String.Equals(String.IsNullOrWhiteSpace(target.Kind) ? "quota" : target.Kind.Trim(), "quota",
+                    StringComparison.OrdinalIgnoreCase) &&
+                GetLearningBaseTargetCode(target.Code) == "SF");
+            if (!hasPrimaryTarget && !allSf) return false;
             foreach (MappingFeedbackTarget target in list)
             {
                 if (IsContextSensitiveLearningCode(target.Code) &&
@@ -2764,36 +2859,6 @@ namespace RecoNet
             return Path.Combine(Path.GetDirectoryName(typeof(FormPanel).Assembly.Location), "RecoQuotaData");
         }
 
-        private static void TrimMappingRows(List<Dictionary<string, string>> rows, int maxSamplesPerBox)
-        {
-            foreach (IGrouping<string, Dictionary<string, string>> boxGroup in rows
-                .Where(row => !String.IsNullOrWhiteSpace(GetFlat(row, "box_id")))
-                .GroupBy(row => GetFlat(row, "method").Trim() + "\n" + GetFlat(row, "box_id"), StringComparer.OrdinalIgnoreCase)
-                .ToList())
-            {
-                List<IGrouping<string, Dictionary<string, string>>> sampleGroups = boxGroup
-                    .GroupBy(row => NormalizeForSignature(GetFlat(row, "quantity_name")) + "|", StringComparer.OrdinalIgnoreCase)
-                    .Where(group => !String.IsNullOrWhiteSpace(group.Key.Trim('|')))
-                    .ToList();
-                if (sampleGroups.Count <= maxSamplesPerBox)
-                {
-                    continue;
-                }
-
-                HashSet<string> removeSamples = new HashSet<string>(
-                    sampleGroups
-                        .OrderBy(group => group.Min(row => ReadFlatInt(row, "weight", 0)))
-                        .ThenBy(group => group.Min(row => GetFlat(row, "last_used_at")))
-                        .Take(sampleGroups.Count - maxSamplesPerBox)
-                        .Select(group => group.Key),
-                    StringComparer.OrdinalIgnoreCase);
-
-                rows.RemoveAll(row =>
-                    String.Equals(GetFlat(row, "method").Trim() + "\n" + GetFlat(row, "box_id"), boxGroup.Key, StringComparison.OrdinalIgnoreCase) &&
-                    removeSamples.Contains(NormalizeForSignature(GetFlat(row, "quantity_name")) + "|"));
-            }
-        }
-
         // 与 RecoQuotaRecommend 的 MappingStore 使用同一套规则：对小写化的目标键做 SHA1。
         // String.GetHashCode 在 x86/x64 进程间不一致且会碰撞，不能用于持久化 ID。
         private static string BuildStableMappingBoxId(string raw)
@@ -2839,43 +2904,6 @@ namespace RecoNet
             }
 
             return null;
-        }
-
-        private const string MappingBoxesMutexName = "RecoQuotaData.mapping-boxes.lock";
-
-        // mapping-boxes.jsonl 有三个写入方（推荐窗口扶正、Excel联动自动匹配、扶正训练器），
-        // 都是整文件读改写，必须用跨程序集一致的命名互斥锁串行化，避免互相覆盖。
-        private static bool TryWithMappingBoxesLock(Action action, int timeoutMilliseconds)
-        {
-            System.Threading.Mutex mutex = new System.Threading.Mutex(false, MappingBoxesMutexName);
-            bool acquired = false;
-            try
-            {
-                try
-                {
-                    acquired = mutex.WaitOne(timeoutMilliseconds);
-                }
-                catch (System.Threading.AbandonedMutexException)
-                {
-                    acquired = true;
-                }
-
-                if (!acquired)
-                {
-                    return false;
-                }
-
-                action();
-                return true;
-            }
-            finally
-            {
-                if (acquired)
-                {
-                    mutex.ReleaseMutex();
-                }
-                mutex.Dispose();
-            }
         }
 
         private static void WriteAllLinesAtomic(string filePath, string[] lines, Encoding encoding)
@@ -6891,7 +6919,7 @@ namespace RecoNet
                     ExcelLinkStore store = LoadStore(conn);
                     store.Upsert(link);
                     SaveStore(conn, store);
-                    RecordBindingToMappingStore(link, fullQuantityName);
+                    RecordBindingToLearningDb(link, fullQuantityName);
 
                     EnsureExcelLinkRuntime(mainForm);
                     if (ExcelLinkRuntimes.ContainsKey(mainForm))

@@ -16,11 +16,8 @@ namespace Migrate2020EstimateTo2024
 {
     internal static class Program
     {
-        private const string Server = "192.168.2.13";
         private const string SourceDb = "RecoData2020";
         private const string TargetDb = "RecoData2024";
-        private const string SqlUser = "reco";
-        private const string SqlPassword = "Des_Reco_2006";
         private const string ConfirmText = "APPLY RecoData2020 estimate-to-2024 migration";
 
         private static readonly HashSet<string> SourceCategories = new HashSet<string>(StringComparer.Ordinal)
@@ -327,9 +324,7 @@ namespace Migrate2020EstimateTo2024
 
         private static SqlConnection OpenDb(string database)
         {
-            string connectionString = "Data Source=" + Server + ",1433;Initial Catalog=" + database
-                + ";User ID=" + SqlUser + ";Password=" + SqlPassword
-                + ";Connect Timeout=8;Encrypt=False;TrustServerCertificate=True";
+            string connectionString = RecoSqlCredentialStore.BuildConnectionString("business", database, 1433, 8);
             SqlConnection conn = new SqlConnection(connectionString);
             conn.Open();
             return conn;

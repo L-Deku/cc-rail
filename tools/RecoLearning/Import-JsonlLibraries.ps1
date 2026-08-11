@@ -1,5 +1,5 @@
 ﻿# tools/RecoLearning/Import-JsonlLibraries.ps1
-# 导入 RecoQuotaData 下四个 jsonl:章节树/条目定额库全量重载；旧映射流水仅显式迁移。
+# 导入 RecoQuotaData 下的章节树/条目定额库；旧映射流水入口永久拒绝。
 param(
   [string]$DataDir = "D:\AI文件\自动预算\2024铁路工程云计价系统网络版V1.0\铁路工程云计价系统网络版V1.0\RecoQuotaData",
   # 只收 mapping-boxes/learning 流水,不重载章节树与条目定额库。
@@ -10,6 +10,10 @@ param(
   [string]$SourceId = ''
 )
 . "$PSScriptRoot\Common.ps1"
+
+if ($ImportBindingHistory) {
+  throw "mapping-boxes/learning -> BindingLog 旧流水导入已永久停用：该通路不具备 software_partition/method_no 身份，禁止写入无分区学习流水。"
+}
 
 function Read-Jsonl {
   param([string]$Path)
@@ -67,86 +71,5 @@ Write-Host ("EntryQuota: 源 $srcCount 行,去重导入 " + $dt2.Rows.Count + " 
   Write-Host "已跳过章节树与条目定额库重载(-SkipChapterLibraries)"
 }
 
-# ---------- 3/4. 旧 mapping-boxes/learning → BindingLog(显式一次性迁移) ----------
-if (-not $ImportBindingHistory) {
-  Write-Host "已跳过 mapping-boxes/learning 流水导入（默认安全模式）；仅迁移未双写的旧数据时使用 -ImportBindingHistory -SourceId <唯一来源>。"
-  return
-}
-if ([string]::IsNullOrWhiteSpace($SourceId) -or $SourceId -notmatch '^[A-Za-z0-9._-]{1,20}$') {
-  throw "-ImportBindingHistory 必须同时提供 1-20 位唯一 SourceId（字母/数字/._-）。"
-}
-$mappingImportSource = 'import:map:' + $SourceId
-$learningImportSource = 'import:learn:' + $SourceId
-$historyConnection = New-Object System.Data.SqlClient.SqlConnection (Get-RecoConnectionString)
-$historyTransaction = $null
-try {
-  $historyConnection.Open()
-  $historyTransaction = $historyConnection.BeginTransaction([System.Data.IsolationLevel]::Serializable)
-  $alreadyCommand = $historyConnection.CreateCommand(); $alreadyCommand.Transaction = $historyTransaction
-  $alreadyCommand.CommandText = "SELECT COUNT(*) FROM dbo.BindingLog WITH (UPDLOCK,HOLDLOCK) WHERE source IN (@map,@learn)"
-  [void]$alreadyCommand.Parameters.AddWithValue('@map', $mappingImportSource)
-  [void]$alreadyCommand.Parameters.AddWithValue('@learn', $learningImportSource)
-  if ([int]$alreadyCommand.ExecuteScalar() -gt 0) { throw "SourceId '$SourceId' 已完成过流水迁移，已拒绝重复导入。" }
-
-# ---------- 3. mapping-boxes.jsonl → BindingLog ----------
-$existing = @{}
-foreach ($row in (Invoke-RecoQueryInTransaction -Connection $historyConnection -Transaction $historyTransaction -Sql "SELECT event_hash FROM dbo.BindingLog WITH (HOLDLOCK)").Rows) { $existing[$row.event_hash] = $true }
-
-function Parse-EventTime {
-  param([string]$Text)
-  $t = [datetime]::MinValue
-  if ([datetime]::TryParse($Text, [ref]$t)) { return $t }
-  return (Get-Date)
-}
-
-$dt3 = New-Object System.Data.DataTable
-foreach ($c in 'source','method','project_id','entry_code','entry_name','quantity_name','quantity_unit','target_kind','target_code','target_name','target_unit','group_key','event_hash','extra') { [void]$dt3.Columns.Add($c, [string]) }
-[void]$dt3.Columns.Add('occurred_at', [datetime])
-
-$srcCount = 0; $skipped = 0
-foreach ($line in [System.IO.File]::ReadLines((Join-Path $DataDir 'mapping-boxes.jsonl'), [System.Text.Encoding]::UTF8)) {
-  if ([string]::IsNullOrWhiteSpace($line)) { continue }
-  $srcCount++
-  $hash = Get-Md5Hex ('mapping-boxes|' + $line)
-  if ($existing.ContainsKey($hash)) { $skipped++; continue }
-  $existing[$hash] = $true
-  $r = $line | ConvertFrom-Json
-  $entryCodes = Get-Prop $r 'entry_codes'
-  $method = ''; $entryCode = ''
-  if ($entryCodes -match '^([^:]+):([^,]+)') { $method = $Matches[1]; $entryCode = $Matches[2] }
-  $extra = @{ box_id = (Get-Prop $r 'box_id'); weight = (Get-Prop $r 'weight'); accepted_count = (Get-Prop $r 'accepted_count'); corrected_count = (Get-Prop $r 'corrected_count'); rejected_count = (Get-Prop $r 'rejected_count'); entry_codes = $entryCodes } | ConvertTo-Json -Compress
-  $groupKey = Get-Md5Hex ((Get-Prop $r 'box_id') + '|' + (Get-QuantitySignature (Get-Prop $r 'quantity_name') (Get-Prop $r 'quantity_unit')))
-  [void]$dt3.Rows.Add($mappingImportSource, $method, '', $entryCode, '', (Get-Prop $r 'quantity_name'), (Get-Prop $r 'quantity_unit'), (Get-Prop $r 'target_kind'), (Get-Prop $r 'target_code'), (Get-Prop $r 'target_name'), (Get-Prop $r 'target_unit'), $groupKey, $hash, $extra, (Parse-EventTime (Get-Prop $r 'last_used_at')))
-}
-$mappingSummary = "mapping-boxes: 源 $srcCount 行,新增 " + $dt3.Rows.Count + " 行,跳过已存在 $skipped 行"
-Invoke-RecoBulkCopyInTransaction -Connection $historyConnection -Transaction $historyTransaction -Table $dt3 -TargetTable 'dbo.BindingLog'
-
-# ---------- 4. learning.jsonl → BindingLog(追加,按行哈希幂等) ----------
-$dt4 = $dt3.Clone()
-$srcCount = 0; $skipped = 0
-foreach ($line in [System.IO.File]::ReadLines((Join-Path $DataDir 'learning.jsonl'), [System.Text.Encoding]::UTF8)) {
-  if ([string]::IsNullOrWhiteSpace($line)) { continue }
-  $srcCount++
-  $hash = Get-Md5Hex ('learning|' + $line)
-  if ($existing.ContainsKey($hash)) { $skipped++; continue }
-  $existing[$hash] = $true
-  $r = $line | ConvertFrom-Json
-  $extra = @{ user_action = (Get-Prop $r 'user_action'); match_reason = (Get-Prop $r 'match_reason'); match_score = (Get-Prop $r 'match_score') } | ConvertTo-Json -Compress
-  $groupKey = Get-Md5Hex ((Get-Prop $r 'quantity_signature') + '|' + (Get-Prop $r 'updated_at'))
-  [void]$dt4.Rows.Add($learningImportSource, '', '', '', '', (Get-Prop $r 'quantity_name'), (Get-Prop $r 'quantity_unit'), 'quota', (Get-Prop $r 'quota_code'), (Get-Prop $r 'quota_name'), (Get-Prop $r 'quota_unit'), $groupKey, $hash, $extra, (Parse-EventTime (Get-Prop $r 'updated_at')))
-}
-$learningSummary = "learning: 源 $srcCount 行,新增 " + $dt4.Rows.Count + " 行,跳过已存在 $skipped 行"
-Invoke-RecoBulkCopyInTransaction -Connection $historyConnection -Transaction $historyTransaction -Table $dt4 -TargetTable 'dbo.BindingLog'
-$historyTransaction.Commit()
-$historyTransaction.Dispose(); $historyTransaction = $null
-Write-Host $mappingSummary
-Write-Host $learningSummary
-}
-catch {
-  if ($null -ne $historyTransaction) { try { $historyTransaction.Rollback() } catch {} }
-  throw
-}
-finally {
-  if ($null -ne $historyTransaction) { $historyTransaction.Dispose() }
-  $historyConnection.Dispose()
-}
+# ---------- 3/4. 旧 mapping-boxes/learning → BindingLog ----------
+Write-Host "已跳过 mapping-boxes/learning 流水导入；该旧通路已永久停用，仅保留章节树与条目定额库导入。"

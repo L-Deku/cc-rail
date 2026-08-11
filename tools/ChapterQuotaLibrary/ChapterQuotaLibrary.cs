@@ -53,9 +53,6 @@ namespace ChapterQuotaLibrary
 
     internal static class Program
     {
-        private const string Server = "192.168.2.13";
-        private const string SqlUser = "reco";
-        private const string SqlPassword = "Des_Reco_2006";
 
         private static readonly MethodSpec Spec2020 = new MethodSpec
         {
@@ -236,9 +233,7 @@ namespace ChapterQuotaLibrary
 
         private static SqlConnection OpenDb(string database)
         {
-            string connectionString = "Data Source=" + Server + ",1433;Initial Catalog=" + database
-                + ";User ID=" + SqlUser + ";Password=" + SqlPassword
-                + ";Connect Timeout=8;Encrypt=False;TrustServerCertificate=True";
+            string connectionString = RecoSqlCredentialStore.BuildConnectionString("business", database, 1433, 8);
             SqlConnection conn = new SqlConnection(connectionString);
             conn.Open();
             return conn;
@@ -1400,67 +1395,8 @@ namespace ChapterQuotaLibrary
         // ===================== TagMappingBoxes =====================
 
         private const string MappingBoxesMutexName = "RecoQuotaData.mapping-boxes.lock";
-        private const int MaxEntryTagsPerBox = 50;
-
         private static void TagMappingBoxes(string filePath)
         {
-            if (!File.Exists(filePath))
-            {
-                Console.Error.WriteLine("mapping-boxes file not found: " + filePath);
-                return;
-            }
-
-            // 条目池：methodKey:entry_code -> codeKey 集合；若已有删减后的条目表则只对保留条目打标
-            string libraryPath = Path.Combine(dataDir, "chapter-quota-library.jsonl");
-            if (!File.Exists(libraryPath))
-            {
-                Console.Error.WriteLine("chapter-quota-library.jsonl not found, run BuildLibrary first.");
-                return;
-            }
-
-            // 只对"小计/指标"条目打标——只有这两类条目有定额输入框，其他类型不参与定额匹配
-            HashSet<string> keptKeys = null;
-            string entriesPath = Path.Combine(dataDir, "chapter-entries.jsonl");
-            if (File.Exists(entriesPath))
-            {
-                keptKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (string line in File.ReadAllLines(entriesPath, Encoding.UTF8))
-                {
-                    if (String.IsNullOrWhiteSpace(line))
-                    {
-                        continue;
-                    }
-                    Dictionary<string, string> values = FlatJson.Parse(line);
-                    if (!IsQuotaInputEntryType(FlatJson.Get(values, "entry_type").Trim()))
-                    {
-                        continue;
-                    }
-                    keptKeys.Add(FlatJson.Get(values, "method") + ":" + FlatJson.Get(values, "entry_code"));
-                }
-            }
-
-            Dictionary<string, HashSet<string>> entryPools = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-            foreach (string line in File.ReadAllLines(libraryPath, Encoding.UTF8))
-            {
-                if (String.IsNullOrWhiteSpace(line))
-                {
-                    continue;
-                }
-                Dictionary<string, string> values = FlatJson.Parse(line);
-                string entryKey = FlatJson.Get(values, "method") + ":" + FlatJson.Get(values, "entry_code");
-                if (keptKeys != null && !keptKeys.Contains(entryKey))
-                {
-                    continue;
-                }
-                HashSet<string> pool;
-                if (!entryPools.TryGetValue(entryKey, out pool))
-                {
-                    pool = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    entryPools[entryKey] = pool;
-                }
-                pool.Add(CodeKey(FlatJson.Get(values, "target_kind"), FlatJson.Get(values, "quota_code")));
-            }
-
             Mutex mutex = new Mutex(false, MappingBoxesMutexName);
             bool acquired = false;
             try
@@ -1476,94 +1412,40 @@ namespace ChapterQuotaLibrary
 
                 if (!acquired)
                 {
-                    throw new TimeoutException("Timed out waiting for mapping-boxes lock.");
+                    throw new TimeoutException("TagMappingBoxes 未取得 mapping-boxes 锁，已拒绝执行，文件未被修改。");
                 }
 
-                List<Dictionary<string, string>> lines = new List<Dictionary<string, string>>();
-                Dictionary<string, HashSet<string>> boxTargets = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-                Dictionary<string, HashSet<string>> boxTags = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-                foreach (string line in File.ReadAllLines(filePath, Encoding.UTF8))
+                // 必须在同名 Mutex 内重读，诊断后无条件拒绝写入。
+                // 该旧命令不理解分区身份，任何整文件重写都可能抹掉新字段。
+                string[] currentLines = File.Exists(filePath)
+                    ? File.ReadAllLines(filePath, Encoding.UTF8)
+                    : new string[0];
+                bool partitionAwareDataFound = false;
+                foreach (string line in currentLines)
                 {
                     if (String.IsNullOrWhiteSpace(line))
                     {
                         continue;
                     }
-                    Dictionary<string, string> values = FlatJson.Parse(line);
-                    lines.Add(values);
-                    string boxId = FlatJson.Get(values, "box_id");
-                    if (String.IsNullOrWhiteSpace(boxId))
+                    try
                     {
-                        continue;
-                    }
-                    HashSet<string> targets;
-                    if (!boxTargets.TryGetValue(boxId, out targets))
-                    {
-                        targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                        boxTargets[boxId] = targets;
-                    }
-                    string code = NormalizeQuotaCode(FlatJson.Get(values, "target_code"));
-                    if (!String.IsNullOrEmpty(code))
-                    {
-                        string kind = FlatJson.Get(values, "target_kind");
-                        if (String.IsNullOrWhiteSpace(kind))
+                        Dictionary<string, string> values = FlatJson.Parse(line);
+                        if (values.ContainsKey("software_partition"))
                         {
-                            kind = CodeKind(code);
-                        }
-                        targets.Add(CodeKey(kind.ToLowerInvariant(), code));
-                    }
-                    HashSet<string> tags;
-                    if (!boxTags.TryGetValue(boxId, out tags))
-                    {
-                        tags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                        boxTags[boxId] = tags;
-                    }
-                    foreach (string tag in FlatJson.Get(values, "entry_codes").Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
-                    {
-                        tags.Add(tag.Trim());
-                    }
-                }
-
-                int tagged = 0;
-                foreach (KeyValuePair<string, HashSet<string>> pair in boxTargets)
-                {
-                    // 全部 quota 类目标都落在条目池内才打该条目标签；纯材料框按材料码判断
-                    HashSet<string> quotaTargets = new HashSet<string>(pair.Value.Where(t => t.StartsWith("quota:", StringComparison.OrdinalIgnoreCase)), StringComparer.OrdinalIgnoreCase);
-                    HashSet<string> check = quotaTargets.Count > 0 ? quotaTargets : pair.Value;
-                    if (check.Count == 0)
-                    {
-                        continue;
-                    }
-                    HashSet<string> tags = boxTags[pair.Key];
-                    foreach (KeyValuePair<string, HashSet<string>> poolPair in entryPools)
-                    {
-                        if (tags.Count >= MaxEntryTagsPerBox)
-                        {
+                            partitionAwareDataFound = true;
                             break;
                         }
-                        if (check.All(t => poolPair.Value.Contains(t)))
-                        {
-                            if (tags.Add(poolPair.Key))
-                            {
-                                tagged++;
-                            }
-                        }
                     }
-                }
-
-                List<string> output = new List<string>();
-                foreach (Dictionary<string, string> values in lines)
-                {
-                    string boxId = FlatJson.Get(values, "box_id");
-                    HashSet<string> tags;
-                    if (!String.IsNullOrWhiteSpace(boxId) && boxTags.TryGetValue(boxId, out tags) && tags.Count > 0)
+                    catch
                     {
-                        values["entry_codes"] = String.Join(",", tags.OrderBy(t => t, StringComparer.OrdinalIgnoreCase).ToArray());
+                        // 坏行也只用于诊断；无论格式是否正确都不允许旧命令重写。
                     }
-                    output.Add(FlatJson.ToJson(values));
                 }
-
-                WriteAllLinesAtomic(filePath, output);
-                Console.WriteLine("Boxes: " + boxTargets.Count + ", new entry tags added: " + tagged + " -> " + filePath);
+                if (partitionAwareDataFound)
+                {
+                    Console.Error.WriteLine("TagMappingBoxes 尚未分区感知，不得处理含 software_partition 的 mapping-boxes 文件。");
+                }
+                throw new InvalidOperationException("TagMappingBoxes 写入模式已永久禁用，文件未被修改。");
             }
             finally
             {

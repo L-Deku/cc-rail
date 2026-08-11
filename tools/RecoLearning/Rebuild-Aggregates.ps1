@@ -9,8 +9,7 @@ param([switch]$DryRun)
 
 function Test-ClassifiedEntryCode {
   param([string]$EntryCode)
-  $code = ([string]$EntryCode).Trim()
-  return $code -match '^\d{2}[\d-]*$'
+  return (Get-NormalizedLearningEntryCode $EntryCode) -ne ''
 }
 
 $rebuildConnection = New-Object System.Data.SqlClient.SqlConnection (Get-RecoConnectionString)
@@ -19,7 +18,7 @@ try {
 $rebuildConnection.Open()
 $rebuildTransaction = $rebuildConnection.BeginTransaction([System.Data.IsolationLevel]::Serializable)
 # 从读取流水到全部聚合替换提交始终持有流水表独占锁，防止增量绑定在快照与替换之间被吞掉。
-$log = Invoke-RecoQueryInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Sql "SELECT occurred_at, quantity_name, quantity_unit, target_kind, target_code, target_name, target_unit, group_key, extra, method, entry_code, entry_name FROM dbo.BindingLog WITH (TABLOCKX,HOLDLOCK) WHERE quantity_name <> ''"
+$log = Invoke-RecoQueryInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Sql "SELECT occurred_at, quantity_name, quantity_unit, target_kind, target_code, target_name, target_unit, group_key, extra, method, software_partition, method_no, entry_code, entry_name FROM dbo.BindingLog WITH (TABLOCKX,HOLDLOCK) WHERE quantity_name <> ''"
 Write-Host ("流水行数: " + $log.Rows.Count)
 $knownUnits = @(Get-ReliableQuantityUnits -Rows $log.Rows)
 $inferredRows = 0
@@ -41,11 +40,18 @@ $groups = @{}
 foreach ($row in $log.Rows) {
   $gk = [string]$row.group_key
   if (-not $groups.ContainsKey($gk)) {
-    $groups[$gk] = @{ Name = [string]$row.quantity_name; Unit = [string]$row.quantity_unit; At = $row.occurred_at; Extra = [string]$row.extra; Targets = @{}; Method = ''; UnsafeContextTargets = $false }
+    $groups[$gk] = @{ Name = [string]$row.quantity_name; Unit = [string]$row.quantity_unit; At = $row.occurred_at; Extra = [string]$row.extra; Targets = @{}; Method = ''; Partition = ''; MethodNo = ''; MissingPartition = $false; UnsafePartition = $false; UnsafeMethodNo = $false; UnsafeContextTargets = $false }
   }
   $g = $groups[$gk]
   if ($row.occurred_at -gt $g.At) { $g.At = $row.occurred_at }
   if ($g.Method -eq '' -and [string]$row.method -ne '') { $g.Method = Get-LearningMethodPartition ([string]$row.method) }
+  $rowPartition = Get-NormalizedLearningSoftwarePartition ([string]$row.software_partition)
+  if ($rowPartition -eq '') { $g.MissingPartition = $true }
+  elseif ($g.Partition -eq '') { $g.Partition = $rowPartition }
+  elseif ($g.Partition -ne $rowPartition) { $g.UnsafePartition = $true }
+  $rowMethodNo = Get-NormalizedLearningMethodNo ([string]$row.method_no)
+  if ($rowMethodNo -ne '' -and $g.MethodNo -eq '') { $g.MethodNo = $rowMethodNo }
+  elseif ($rowMethodNo -ne '' -and $g.MethodNo -ne $rowMethodNo) { $g.UnsafeMethodNo = $true }
   $targetKind = ([string]$row.target_kind).Trim()
   $targetCode = ([string]$row.target_code).Trim()
   if ($targetKind -eq '') { $targetKind = if ($targetCode -match '^\d+$') { 'material' } else { 'quota' } }
@@ -57,13 +63,16 @@ foreach ($row in $log.Rows) {
       $g.UnsafeContextTargets = $true
     }
   } else {
-    $g.Targets[$baseKey] = @{ Kind = $targetKind; Code = $targetCode; Name = [string]$row.target_name; Unit = [string]$row.target_unit; Identity = $identityKey; EntryCode = [string]$row.entry_code; EntryName = [string]$row.entry_name }
+    $g.Targets[$baseKey] = @{ Kind = $targetKind; Code = $targetCode; Name = [string]$row.target_name; Unit = [string]$row.target_unit; Identity = $identityKey; EntryCode = (Get-NormalizedLearningEntryCode ([string]$row.entry_code)); EntryName = [string]$row.entry_name; Partition = $rowPartition; MethodNo = $rowMethodNo }
   }
   if ($g.Targets.ContainsKey($baseKey)) {
     $storedTarget = $g.Targets[$baseKey]
-    if ([string]::IsNullOrWhiteSpace([string]$storedTarget.EntryCode) -and -not [string]::IsNullOrWhiteSpace([string]$row.entry_code)) {
-      $storedTarget.EntryCode = [string]$row.entry_code
+    $normalizedEntryCode = Get-NormalizedLearningEntryCode ([string]$row.entry_code)
+    if ([string]::IsNullOrWhiteSpace([string]$storedTarget.EntryCode) -and $normalizedEntryCode -ne '') {
+      $storedTarget.EntryCode = $normalizedEntryCode
       $storedTarget.EntryName = [string]$row.entry_name
+      $storedTarget.Partition = $rowPartition
+      $storedTarget.MethodNo = $rowMethodNo
     }
   }
 }
@@ -84,12 +93,31 @@ function Test-PositiveLearningEvidence { param([string]$Extra)
 
 function Test-AggregateLearningGroupRecommendable { param($Group)
   $targets = @($Group.Targets.Values)
-  if ($targets.Count -eq 0 -or $Group.UnsafeContextTargets) { return $false }
+  if ($targets.Count -eq 0 -or $Group.UnsafeContextTargets -or $Group.UnsafePartition -or
+      $Group.MissingPartition -or (Get-NormalizedLearningSoftwarePartition ([string]$Group.Partition)) -eq '') { return $false }
+  if (-not (Test-AggregateLearningTargetSetRecommendable $targets)) { return $false }
   $incompleteContextTargets = @($targets | Where-Object {
     (Test-ContextSensitiveLearningCode ([string]$_.Code)) -and
       ([string]::IsNullOrWhiteSpace([string]$_.Name) -or [string]::IsNullOrWhiteSpace([string]$_.Unit))
   })
   return $incompleteContextTargets.Count -eq 0
+}
+
+function Test-AggregateLearningTargetSetRecommendable { param([System.Collections.IEnumerable]$Targets)
+  $targets = @($Targets)
+  if ($targets.Count -eq 0) { return $false }
+  $hasPrimaryTarget = @($targets | Where-Object {
+    $kind = [string]$_.Kind; if ($kind -eq '') { $kind = 'quota' }
+    $baseCode = Get-LearningBaseTargetCode ([string]$_.Code)
+    [string]::Equals($kind, 'quota', [System.StringComparison]::OrdinalIgnoreCase) -and
+      @('SF','SH','SQ','ZLF','LF','YF','TLF','GF','JF','XGT1') -notcontains $baseCode
+  }).Count -gt 0
+  $allSf = @($targets | Where-Object {
+    $kind = [string]$_.Kind; if ($kind -eq '') { $kind = 'quota' }
+    [string]::Equals($kind, 'quota', [System.StringComparison]::OrdinalIgnoreCase) -and
+      (Get-LearningBaseTargetCode ([string]$_.Code)) -eq 'SF'
+  }).Count -eq $targets.Count
+  return $hasPrimaryTarget -or $allSf
 }
 
 function Test-SfEntryConstraint { param($Group)
@@ -150,8 +178,12 @@ function Resolve-RebuildBoxIdCollisions {
 }
 
 $unsafeContextGroupCount = @($groups.Values | Where-Object { $_.UnsafeContextTargets }).Count
+$skippedPureAuxiliaryGroupCount = @($groups.Values | Where-Object {
+  -not $_.UnsafeContextTargets -and -not (Test-AggregateLearningTargetSetRecommendable @($_.Targets.Values))
+}).Count
 $skippedIncompleteContextGroupCount = @($groups.Values | Where-Object {
-  -not $_.UnsafeContextTargets -and -not (Test-AggregateLearningGroupRecommendable $_)
+  -not $_.UnsafeContextTargets -and (Test-AggregateLearningTargetSetRecommendable @($_.Targets.Values)) -and
+    -not (Test-AggregateLearningGroupRecommendable $_)
 }).Count
 $skippedSfConstraintGroupCount = @($groups.Values | Where-Object {
   -not $_.UnsafeContextTargets -and (Test-AggregateLearningGroupRecommendable $_) -and -not (Test-SfEntryConstraint $_)
@@ -203,7 +235,7 @@ $resolvedBoxIdCollisionCount = Resolve-RebuildBoxIdCollisions $boxes
 
 # 2b) 第二遍:用定稿的 box 编号归并别名与签名映射
 $aliases = @{}  # alias_hash → @{ Raw; Unit; Sig; Count; First; Last }
-$maps = @{}     # method + signature + box_id → 计数，2020/2024 隔离，101 号文估算归入 2020
+$maps = @{}     # software_partition + signature + box_id → 计数；30/101 普通关系在 2020 内共享
 foreach ($g in $aggregateGroups) {
   $boxId = $boxes[$g.SetHash].Id
 
@@ -220,8 +252,8 @@ foreach ($g in $aggregateGroups) {
   if ($cor -eq 0 -and (Get-ExtraText $g.Extra 'user_action') -eq 'correction') { $cor = 1 }
   $rej = Get-ExtraInt $g.Extra 'rejected_count' 0
   $method = Get-LearningMethodPartition ([string]$g.Method)
-  $mapKey = Get-MethodScopedMapKey $method $sig $boxId
-  if (-not $maps.ContainsKey($mapKey)) { $maps[$mapKey] = @{ Method = $method; Sig = $sig; BoxId = $boxId; Acc = 0; Cor = 0; Rej = 0; Last = $g.At } }
+  $mapKey = $g.Partition + "`n" + $sig + "`n" + $boxId
+  if (-not $maps.ContainsKey($mapKey)) { $maps[$mapKey] = @{ Partition = $g.Partition; Method = $method; Sig = $sig; BoxId = $boxId; Acc = 0; Cor = 0; Rej = 0; Last = $g.At } }
   $m = $maps[$mapKey]; $m.Acc += $acc; $m.Cor += $cor; $m.Rej += $rej
   if ($g.At -gt $m.Last) { $m.Last = $g.At }
 }
@@ -229,7 +261,7 @@ foreach ($g in $aggregateGroups) {
 $inferenceBySignature = @{}
 foreach ($g in $aggregateGroups) {
   $sig = Get-QuantitySignature $g.CanonicalName $g.EffectiveUnit $knownUnits
-  $methodSignature = (Get-LearningMethodPartition ([string]$g.Method)) + "`n" + $sig
+  $methodSignature = $g.Partition + "`n" + $sig
   if (-not $inferenceBySignature.ContainsKey($methodSignature)) {
     $inferenceBySignature[$methodSignature] = @{
       AllSets = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
@@ -271,12 +303,17 @@ foreach ($row in $log.Rows) {
   $operandCount = Get-ExtraInt $extra 'formula_operand_count' 0
   if ($template -eq '' -or $operandCount -le 0) { continue }
   $sig = Get-QuantitySignature ([string]$row.quantity_name) ([string]$row.quantity_unit) $knownUnits
-  $kind = [string]$row.target_kind; if ($kind -eq '') { $kind = 'quota' }
+  $kind = ([string]$row.target_kind).Trim().ToLowerInvariant(); if ($kind -eq '') { $kind = 'quota' }
   $code = [string]$row.target_code
   $targetUnit = Get-ExtraText $extra 'formula_target_unit'; if ($targetUnit -eq '') { $targetUnit = [string]$row.target_unit }
+  $targetUnit = Get-NormalizedLearningFormulaUnit $targetUnit
   $operands = @()
   $formulaMethod = Get-LearningMethodPartition ([string]$row.method)
-  $ruleRaw = $sig + '|' + $kind + ':' + $code.ToUpperInvariant() + '|' + $targetUnit.Trim().ToLowerInvariant() + '|' + $template + '|' + $formulaMethod + '|' + [string]$row.entry_code
+  $formulaPartition = Get-NormalizedLearningSoftwarePartition ([string]$row.software_partition)
+  $formulaMethodNo = Get-NormalizedLearningMethodNo ([string]$row.method_no)
+  $formulaEntryCode = Get-NormalizedLearningEntryCode ([string]$row.entry_code)
+  if ($formulaPartition -eq '' -or $formulaMethodNo -eq '' -or $formulaEntryCode -eq '') { continue }
+  $ruleRaw = $sig + '|' + $kind + ':' + $code.ToUpperInvariant() + '|' + $targetUnit + '|' + $template + '|' + $formulaPartition + '|' + $formulaMethodNo + '|' + $formulaEntryCode
   $valid = $true
   for ($i = 0; $i -lt $operandCount; $i++) {
     $prefix = 'formula_operand_' + $i + '_'
@@ -287,14 +324,15 @@ foreach ($row in $log.Rows) {
     if ($operandSig -eq '') { $valid = $false; break }
     $lastBar = $operandSig.LastIndexOf('|')
     $operandSig = if ($lastBar -ge 0) { $operandSig.Substring(0, $lastBar) + '|' } else { $operandSig + '|' }
+    $operandUnit = Get-NormalizedLearningFormulaUnit $operandUnit
     $operands += @{ Index = $i; Sig = $operandSig; Name = $operandName; Unit = $operandUnit }
-    $ruleRaw += '|' + $operandSig + '@' + $operandUnit.Trim().ToLowerInvariant()
+    $ruleRaw += '|' + $operandSig + '@' + $operandUnit
   }
   if (-not $valid) { continue }
-  $ruleHash = Get-ExtraText $extra 'formula_rule_hash'
-  if ($ruleHash -eq '' -or $formulaMethod -ne ([string]$row.method).Trim()) { $ruleHash = Get-Md5Hex $ruleRaw }
+  # 旧 extra.formula_rule_hash 不含分区与办法号，切换时必须无条件按新布局重算。
+  $ruleHash = Get-Md5Hex $ruleRaw
   if (-not $formulas.ContainsKey($ruleHash)) {
-    $formulas[$ruleHash] = @{ Hash = $ruleHash; Sig = $sig; Kind = $kind; Code = $code; Unit = $targetUnit; Template = $template; Method = $formulaMethod; Entry = [string]$row.entry_code; Count = 0; First = $row.occurred_at; Last = $row.occurred_at; Operands = $operands }
+    $formulas[$ruleHash] = @{ Hash = $ruleHash; Sig = $sig; Kind = $kind; Code = $code; Unit = $targetUnit; Template = $template; Method = $formulaMethod; Partition = $formulaPartition; MethodNo = $formulaMethodNo; Entry = $formulaEntryCode; Count = 0; First = $row.occurred_at; Last = $row.occurred_at; Operands = $operands }
   }
   $f = $formulas[$ruleHash]; $f.Count++
   if ($row.occurred_at -lt $f.First) { $f.First = $row.occurred_at }
@@ -325,23 +363,23 @@ foreach ($entry in $aliases.GetEnumerator()) {
 Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Table $dtAlias -TargetTable 'dbo.QuantityAlias'
 
 $dtMap = New-Object System.Data.DataTable
-foreach ($c in 'signature','box_id','method') { [void]$dtMap.Columns.Add($c, [string]) }
+foreach ($c in 'software_partition','signature','box_id','method') { [void]$dtMap.Columns.Add($c, [string]) }
 foreach ($c in 'weight','accepted_count','corrected_count','rejected_count') { [void]$dtMap.Columns.Add($c, [int]) }
 [void]$dtMap.Columns.Add('last_used_at', [datetime])
 foreach ($m in $maps.Values) {
   $weight = [Math]::Max(0, 10 * $m.Acc + 20 * $m.Cor - 10 * $m.Rej)
-  [void]$dtMap.Rows.Add($m.Sig, $m.BoxId, $m.Method, $weight, $m.Acc, $m.Cor, $m.Rej, $m.Last)
+  [void]$dtMap.Rows.Add($m.Partition, $m.Sig, $m.BoxId, $m.Method, $weight, $m.Acc, $m.Cor, $m.Rej, $m.Last)
 }
 Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Table $dtMap -TargetTable 'dbo.SignatureBoxMap'
 
 $dtFormula = New-Object System.Data.DataTable
-foreach ($c in 'rule_hash','anchor_signature','target_kind','target_code','target_unit','formula_template','method','entry_code') { [void]$dtFormula.Columns.Add($c, [string]) }
+foreach ($c in 'rule_hash','anchor_signature','target_kind','target_code','target_unit','formula_template','method','software_partition','method_no','entry_code') { [void]$dtFormula.Columns.Add($c, [string]) }
 [void]$dtFormula.Columns.Add('sample_count', [int]); [void]$dtFormula.Columns.Add('first_seen', [datetime]); [void]$dtFormula.Columns.Add('last_seen', [datetime])
 $dtOperand = New-Object System.Data.DataTable
 [void]$dtOperand.Columns.Add('rule_hash', [string]); [void]$dtOperand.Columns.Add('operand_index', [int])
 foreach ($c in 'operand_signature','operand_name','operand_unit') { [void]$dtOperand.Columns.Add($c, [string]) }
 foreach ($f in $formulas.Values) {
-  [void]$dtFormula.Rows.Add($f.Hash, $f.Sig, $f.Kind, $f.Code, $f.Unit, $f.Template, $f.Method, $f.Entry, $f.Count, $f.First, $f.Last)
+  [void]$dtFormula.Rows.Add($f.Hash, $f.Sig, $f.Kind, $f.Code, $f.Unit, $f.Template, $f.Method, $f.Partition, $f.MethodNo, $f.Entry, $f.Count, $f.First, $f.Last)
   foreach ($o in $f.Operands) { [void]$dtOperand.Rows.Add($f.Hash, $o.Index, $o.Sig, $o.Name, $o.Unit) }
 }
 [void](Invoke-RecoNonQueryInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Sql "TRUNCATE TABLE dbo.QuantityFormulaOperand; TRUNCATE TABLE dbo.QuantityFormulaRule")
@@ -353,21 +391,25 @@ $sigEntry = @{}
 foreach ($row in $log.Rows) {
   if (-not $aggregateGroupKeys.Contains([string]$row.group_key)) { continue }
   if (-not (Test-PositiveLearningEvidence ([string]$row.extra))) { continue }
-  if ([string]$row.entry_code -eq '' -or [string]$row.target_kind -ne 'quota' -or [string]$row.target_code -eq '') { continue }
+  $entryPartition = Get-NormalizedLearningSoftwarePartition ([string]$row.software_partition)
+  $entryMethodNo = Get-NormalizedLearningMethodNo ([string]$row.method_no)
+  $entryCode = Get-NormalizedLearningEntryCode ([string]$row.entry_code)
+  if ($entryPartition -eq '' -or $entryMethodNo -eq '' -or $entryCode -eq '' -or
+      [string]$row.target_kind -ne 'quota' -or [string]$row.target_code -eq '') { continue }
   $sig = Get-QuantitySignature ([string]$row.quantity_name) ([string]$row.quantity_unit) $knownUnits
   $entryMethod = Get-LearningMethodPartition ([string]$row.method)
-  $key = $sig + "`n" + [string]$row.target_code + "`n" + $entryMethod + "`n" + [string]$row.entry_code
+  $key = $entryPartition + "`n" + $entryMethodNo + "`n" + $sig + "`n" + [string]$row.target_code + "`n" + $entryCode
   if (-not $sigEntry.ContainsKey($key)) {
-    $sigEntry[$key] = @{ Sig = $sig; Code = [string]$row.target_code; Method = $entryMethod; Entry = [string]$row.entry_code; EntryName = [string]$row.entry_name; Count = 0; Last = $row.occurred_at }
+    $sigEntry[$key] = @{ Partition = $entryPartition; MethodNo = $entryMethodNo; Sig = $sig; Code = [string]$row.target_code; Method = $entryMethod; Entry = $entryCode; EntryName = [string]$row.entry_name; Count = 0; Last = $row.occurred_at }
   }
   $s = $sigEntry[$key]; $s.Count++
   if ($row.occurred_at -gt $s.Last) { $s.Last = $row.occurred_at }
   if ($s.EntryName -eq '' -and [string]$row.entry_name -ne '') { $s.EntryName = [string]$row.entry_name }
 }
 $dtSig = New-Object System.Data.DataTable
-foreach ($c in 'signature','target_code','method','entry_code','entry_name') { [void]$dtSig.Columns.Add($c, [string]) }
+foreach ($c in 'software_partition','method_no','signature','target_code','method','entry_code','entry_name') { [void]$dtSig.Columns.Add($c, [string]) }
 [void]$dtSig.Columns.Add('sample_count', [int]); [void]$dtSig.Columns.Add('last_used_at', [datetime])
-foreach ($s in $sigEntry.Values) { [void]$dtSig.Rows.Add($s.Sig, $s.Code, $s.Method, $s.Entry, $s.EntryName, $s.Count, $s.Last) }
+foreach ($s in $sigEntry.Values) { [void]$dtSig.Rows.Add($s.Partition, $s.MethodNo, $s.Sig, $s.Code, $s.Method, $s.Entry, $s.EntryName, $s.Count, $s.Last) }
 [void](Invoke-RecoNonQueryInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Sql "TRUNCATE TABLE dbo.SignatureEntryMap")
 Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Table $dtSig -TargetTable 'dbo.SignatureEntryMap'
 
@@ -375,65 +417,36 @@ Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $re
 $tmpl = @{}
 foreach ($g in $aggregateGroups) {
   if (-not (Test-PositiveLearningEvidence ([string]$g.Extra))) { continue }
+  if ($g.UnsafeMethodNo -or (Get-NormalizedLearningMethodNo ([string]$g.MethodNo)) -eq '') { continue }
   $boxId = $boxes[$g.SetHash].Id
   $scopeTargets = @(Get-DistinctEngineeringScopeTargets $g.Targets.Values)
   foreach ($scopeTarget in $scopeTargets) {
-    $entryCode = [string]$scopeTarget.EntryCode
+    $entryCode = Get-NormalizedLearningEntryCode ([string]$scopeTarget.EntryCode)
     if (-not (Test-ClassifiedEntryCode $entryCode)) { continue }
+    if ((Get-NormalizedLearningSoftwarePartition ([string]$scopeTarget.Partition)) -ne $g.Partition -or
+        (Get-NormalizedLearningMethodNo ([string]$scopeTarget.MethodNo)) -ne $g.MethodNo) { continue }
     $prefix = $entryCode.Substring(0, 2)
-    $key = $g.Method + "`n" + $prefix + "`n" + $entryCode + "`n" + $boxId
+    $key = $g.Partition + "`n" + $g.MethodNo + "`n" + $prefix + "`n" + $entryCode + "`n" + $boxId
     if (-not $tmpl.ContainsKey($key)) {
-      $tmpl[$key] = @{ Method = $g.Method; Prefix = $prefix; Entry = $entryCode; BoxId = $boxId; Count = 0; Last = $g.At }
+      $tmpl[$key] = @{ Partition = $g.Partition; MethodNo = $g.MethodNo; Method = $g.Method; Prefix = $prefix; Entry = $entryCode; BoxId = $boxId; Count = 0; Last = $g.At }
     }
     $t = $tmpl[$key]; $t.Count++
     if ($g.At -gt $t.Last) { $t.Last = $g.At }
   }
 }
 $dtTmpl = New-Object System.Data.DataTable
-foreach ($c in 'method','engineering_type','entry_code','box_id') { [void]$dtTmpl.Columns.Add($c, [string]) }
+foreach ($c in 'software_partition','method_no','method','engineering_type','entry_code','box_id') { [void]$dtTmpl.Columns.Add($c, [string]) }
 [void]$dtTmpl.Columns.Add('sample_count', [int]); [void]$dtTmpl.Columns.Add('last_seen', [datetime])
-foreach ($t in $tmpl.Values) { [void]$dtTmpl.Rows.Add($t.Method, $t.Prefix, $t.Entry, $t.BoxId, $t.Count, $t.Last) }
+foreach ($t in $tmpl.Values) { [void]$dtTmpl.Rows.Add($t.Partition, $t.MethodNo, $t.Method, $t.Prefix, $t.Entry, $t.BoxId, $t.Count, $t.Last) }
 [void](Invoke-RecoNonQueryInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Sql "TRUNCATE TABLE dbo.EngineeringTemplate")
 Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Table $dtTmpl -TargetTable 'dbo.EngineeringTemplate'
 
-# 6) 表模板行归集(一表一模板原料):带工作簿/工作表上下文的事件组,按表内行号有序沉淀。
-$sheetRows = @{}
-foreach ($g in $aggregateGroups) {
-  if (-not (Test-PositiveLearningEvidence ([string]$g.Extra))) { continue }
-  $wb = Get-ExtraText $g.Extra 'workbook'
-  if ($wb -eq '') { continue }
-  $ws = Get-ExtraText $g.Extra 'worksheet'
-  $rowNo = Get-ExtraInt $g.Extra 'excel_row' 0
-  if ($rowNo -eq 0) {
-    $cell = Get-ExtraText $g.Extra 'cell'
-    if ($cell -match '(\d+)') { $rowNo = [int]$Matches[1] }
-  }
-  $boxId = $boxes[$g.SetHash].Id
-  $sig = Get-QuantitySignature $g.Name $g.Unit $knownUnits
-  $scopeTargets = @(Get-DistinctEngineeringScopeTargets $g.Targets.Values)
-  foreach ($scopeTarget in $scopeTargets) {
-    $entryCode = [string]$scopeTarget.EntryCode
-    if (-not (Test-ClassifiedEntryCode $entryCode)) { continue }
-    $prefix = if ($entryCode.Length -ge 2) { $entryCode.Substring(0, 2) } else { '' }
-    $key = $g.Method + "`n" + $wb + "`n" + $ws + "`n" + $rowNo + "`n" + $sig + "`n" + $boxId + "`n" + $entryCode
-    if (-not $sheetRows.ContainsKey($key)) {
-      $sheetRows[$key] = @{ Method = $g.Method; Wb = $wb; Ws = $ws; RowNo = $rowNo; Sig = $sig; BoxId = $boxId; Entry = $entryCode; Prefix = $prefix; Count = 0; Last = $g.At }
-    }
-    $sr = $sheetRows[$key]; $sr.Count++
-    if ($g.At -gt $sr.Last) { $sr.Last = $g.At }
-  }
-}
+# 6) SheetTemplateRow 含条目却没有办法号，本次切换只清空且不再回填。
 $dtSheet = New-Object System.Data.DataTable
-foreach ($c in 'method','workbook','worksheet') { [void]$dtSheet.Columns.Add($c, [string]) }
-[void]$dtSheet.Columns.Add('excel_row', [int])
-foreach ($c in 'signature','box_id','entry_code','engineering_type') { [void]$dtSheet.Columns.Add($c, [string]) }
-[void]$dtSheet.Columns.Add('sample_count', [int]); [void]$dtSheet.Columns.Add('last_seen', [datetime])
-foreach ($sr in $sheetRows.Values) { [void]$dtSheet.Rows.Add($sr.Method, $sr.Wb, $sr.Ws, $sr.RowNo, $sr.Sig, $sr.BoxId, $sr.Entry, $sr.Prefix, $sr.Count, $sr.Last) }
 [void](Invoke-RecoNonQueryInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Sql "TRUNCATE TABLE dbo.SheetTemplateRow")
-Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Table $dtSheet -TargetTable 'dbo.SheetTemplateRow'
 
 $completionPrefix = "聚合完成"
-Write-Host ("跳过同码多义组件: " + $unsafeContextGroupCount + " 组；跳过身份不完整辅助组件: " + $skippedIncompleteContextGroupCount + " 组；跳过违反 SF 双向条目约束组件: " + $skippedSfConstraintGroupCount + " 组；解决 box_id 冲突: " + $resolvedBoxIdCollisionCount + " 个；保留原始 BindingLog")
+Write-Host ("跳过同码多义组件: " + $unsafeContextGroupCount + " 组；跳过纯辅助组件: " + $skippedPureAuxiliaryGroupCount + " 组；跳过身份不完整辅助组件: " + $skippedIncompleteContextGroupCount + " 组；跳过违反 SF 双向条目约束组件: " + $skippedSfConstraintGroupCount + " 组；解决 box_id 冲突: " + $resolvedBoxIdCollisionCount + " 个；保留原始 BindingLog")
 if ($DryRun) {
   Write-Host ("存量尾部单位推断: " + $inferredRows + " 行 / " + $inferredGroups.Count + " 组 / " + $inferredNames.Count + " 个原始名称 / " + $inferredSignatureCount + " 个名称级签名 / " + $inferredUnits.Count + " 种单位")
   Write-Host ("潜在归并冲突(按办法隔离): 与显式单位样本合流 " + $inferredMergeCount + " 个签名/办法 / 同名多推断单位 " + $multiUnitInferenceCount + " 个签名/办法 / 归并后多组件框 " + $potentialMappingConflictCount + " 个签名/办法")

@@ -520,12 +520,26 @@ namespace RecoNet
                     }
                 }
 
+                SqlConnection expectedConnection;
+                string expectedConnectionIdentity;
+                try
+                {
+                    expectedConnection = GetOpenProjectConnection(mainForm);
+                    expectedConnectionIdentity = GetProjectConnectionIdentity(expectedConnection);
+                }
+                catch (AgentPlanException ex)
+                {
+                    AppendError(ex.Message);
+                    return;
+                }
+
                 AgentSelectionSnapshot snapshot = CaptureAgentSelection(mainForm);
-                RunAgentPipeline(text, commands, settings, snapshot);
+                RunAgentPipeline(text, commands, settings, snapshot, expectedConnection, expectedConnectionIdentity);
             }
 
-            // 后台流水线：独立连接 -> (可选)LLM解析 -> 生成预览计划 -> 回UI线程展示。
-            private void RunAgentPipeline(string text, List<AgentCommand> preParsed, DeepSeekExcelMatchSettings settings, AgentSelectionSnapshot snapshot)
+            // 后台流水线：项目数据库阶段回 UI 线程借用宿主连接，LLM 请求仍在后台。
+            private void RunAgentPipeline(string text, List<AgentCommand> preParsed, DeepSeekExcelMatchSettings settings,
+                AgentSelectionSnapshot snapshot, SqlConnection expectedConnection, string expectedConnectionIdentity)
             {
                 parsing = true;
                 AppendSystem(preParsed != null ? "正在生成预览…" : "AI 解析中…");
@@ -538,30 +552,35 @@ namespace RecoNet
                     string error = null;
                     try
                     {
-                        using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
+                        if (commands == null)
                         {
-                            if (commands == null)
+                            AgentContext context = WithOpenProjectConnectionOnUi(mainForm, expectedConnection,
+                                expectedConnectionIdentity, delegate(SqlConnection conn)
                             {
-                                AgentContext context = CollectAgentContext(conn, snapshot, text);
-                                llmResult = RequestAgentParse(settings, context, text);
-                                if (!String.IsNullOrEmpty(llmResult.Error))
-                                {
-                                    error = llmResult.Error;
-                                }
-                                else if (llmResult.Commands.Count == 0)
-                                {
-                                    // 仅澄清，无命令
-                                }
-                                else
-                                {
-                                    commands = llmResult.Commands;
-                                }
+                                return CollectAgentContext(conn, snapshot, text);
+                            });
+                            llmResult = RequestAgentParse(settings, context, text);
+                            if (!String.IsNullOrEmpty(llmResult.Error))
+                            {
+                                error = llmResult.Error;
                             }
+                            else if (llmResult.Commands.Count == 0)
+                            {
+                                // 仅澄清，无命令
+                            }
+                            else
+                            {
+                                commands = llmResult.Commands;
+                            }
+                        }
 
-                            if (error == null && commands != null && commands.Count > 0)
+                        if (error == null && commands != null && commands.Count > 0)
+                        {
+                            plan = WithOpenProjectConnectionOnUi(mainForm, expectedConnection,
+                                expectedConnectionIdentity, delegate(SqlConnection conn)
                             {
-                                plan = BuildAgentPlan(conn, snapshot, commands);
-                            }
+                                return BuildAgentPlan(conn, snapshot, commands);
+                            });
                         }
                     }
                     catch (AgentPlanException ex)

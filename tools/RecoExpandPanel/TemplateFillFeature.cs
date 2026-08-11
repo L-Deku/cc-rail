@@ -107,8 +107,8 @@ namespace RecoNet
             public string ChosenItemNo;    // 对应条目编号(显示/粘贴导航用)
             public string ChosenItemName;  // 对应条目名称(目标级学习回流用)
             public bool NeedExactNameConfirmation; // 精确同名已带出定额，但仍需用户确认
-            public bool LocalFeedbackRecorded;     // 当前预览已给本机学习关系加票
-            public bool RemoteFeedbackDurable;     // SQL 已提交或已持久化进 outbox
+            public bool LearningFeedbackAttempted; // 当前预览已尝试写入 SQL 学习库
+            public bool SqlFeedbackDurable;        // SQL 事务已提交
             public string SelectedNameQuotaCandidateKey;
             public List<NameQuotaCandidateGroup> NameQuotaCandidates;
 
@@ -811,29 +811,26 @@ namespace RecoNet
             Dictionary<string, string> names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             try
             {
-                using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
+                SqlConnection conn = GetOpenProjectConnection(mainForm);
+                using (SqlCommand cmd = conn.CreateCommand())
                 {
-                    EnsureOpen(conn);
-                    using (SqlCommand cmd = conn.CreateCommand())
+                    cmd.CommandText = "select 条目编号, 工程或费用项目名称 from 章节表";
+                    using (SqlDataReader reader = cmd.ExecuteReader())
                     {
-                        cmd.CommandText = "select 条目编号, 工程或费用项目名称 from 章节表";
-                        using (SqlDataReader reader = cmd.ExecuteReader())
+                        while (reader.Read())
                         {
-                            while (reader.Read())
+                            if (reader.IsDBNull(0))
                             {
-                                if (reader.IsDBNull(0))
-                                {
-                                    continue;
-                                }
-
-                                string code = Convert.ToString(reader.GetValue(0)).Trim();
-                                if (code.Length == 0 || names.ContainsKey(code))
-                                {
-                                    continue;
-                                }
-
-                                names[code] = reader.IsDBNull(1) ? "" : Convert.ToString(reader.GetValue(1)).Trim();
+                                continue;
                             }
+
+                            string code = Convert.ToString(reader.GetValue(0)).Trim();
+                            if (code.Length == 0 || names.ContainsKey(code))
+                            {
+                                continue;
+                            }
+
+                            names[code] = reader.IsDBNull(1) ? "" : Convert.ToString(reader.GetValue(1)).Trim();
                         }
                     }
                 }
@@ -1029,13 +1026,56 @@ namespace RecoNet
             return hidden;
         }
 
+        private static bool IsNameQuotaGroupSafeForWrite(IEnumerable<FillPreviewItem> items)
+        {
+            List<FillPreviewItem> group = (items ?? Enumerable.Empty<FillPreviewItem>())
+                .Where(item => item != null).ToList();
+            if (group.Count == 0 || group.Any(item => !item.IsNameDriven || !item.Selected ||
+                !String.IsNullOrWhiteSpace(item.Status))) return false;
+            List<FillPreviewItem> recommended = group.Where(item =>
+                String.Equals(item.TemplateName, "推荐定额", StringComparison.Ordinal)).ToList();
+            if (recommended.Count > 0)
+            {
+                bool hasPrimaryTarget = recommended.Any(item => IsPrimaryLearningTarget("quota", item.QuotaCode));
+                bool pureSfEquipment = recommended.All(item => GetLearningBaseTargetCode(item.QuotaCode) == "SF" &&
+                    (item.ChosenItemName ?? "").IndexOf("设备购置费", StringComparison.OrdinalIgnoreCase) >= 0);
+                if (!hasPrimaryTarget && !pureSfEquipment) return false;
+                foreach (FillPreviewItem item in recommended)
+                {
+                    bool sf = GetLearningBaseTargetCode(item.QuotaCode) == "SF";
+                    bool equipmentEntry = (item.ChosenItemName ?? "").IndexOf("设备购置费",
+                        StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (sf != equipmentEntry) return false;
+                }
+            }
+
+            foreach (FillPreviewItem item in group)
+            {
+                decimal quantity;
+                string error;
+                if (!TryEvaluateDecimal(item.QuantityText, out quantity, out error) || quantity <= 0m) return false;
+                bool hasSource = item.ChosenQuotaSeq > 0 &&
+                    (item.NeighborSourceQuotaSeq > 0 || item.ChosenItemSeq > 0) ||
+                    item.IsLibraryQuota && !String.IsNullOrEmpty(item.QuotaCode) &&
+                    !String.IsNullOrEmpty(item.ChosenItemNo);
+                if (!hasSource) return false;
+            }
+            return true;
+        }
+
         // 写入：把选中预览项对应的源定额行，直接复制到【目标单元】的对应条目（条目序号全局共享，原样保留），
         // 改 总概算序号/顺号/工程数量、丢弃旧 定额序号(新建标识)。不走界面树。
         private static string ApplyFill(Form mainForm, string targetUnitNo, List<FillPreviewItem> items,
             string sourceWorkbookName, string sourceWorksheet)
         {
+            HashSet<int> safeNameGroups = new HashSet<int>((items ?? new List<FillPreviewItem>())
+                .Where(item => item != null && item.IsNameDriven)
+                .GroupBy(item => item.TargetRow)
+                .Where(group => IsNameQuotaGroupSafeForWrite(group))
+                .Select(group => group.Key));
             List<FillPreviewItem> selected = items
                 .Where(i => i.Selected &&
+                    (!i.IsNameDriven || safeNameGroups.Contains(i.TargetRow)) &&
                     (String.IsNullOrEmpty(i.Status) || String.Equals(i.Status, "\u6570\u91cf\u4e3a0", StringComparison.Ordinal)) &&
                     (i.SourceQuotaSeq > 0 || (i.IsNameDriven && (
                         (i.ChosenQuotaSeq > 0 && (i.NeighborSourceQuotaSeq > 0 || i.ChosenItemSeq > 0)) ||
@@ -1045,7 +1085,9 @@ namespace RecoNet
                 .ToList();
             if (selected.Count == 0) return "没有可写入的行。";
 
-            using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
+            // 只有用户在插件界面确认“写入目标单元”才会到达此处。
+            // 借用宿主当前项目连接；不得在插件中 Close/Dispose/ChangeDatabase。
+            SqlConnection conn = GetOpenProjectConnection(mainForm);
             {
                 string targetLabel;
                 long targetSeq = ResolveAgentUnitIdSimple(conn, targetUnitNo, out targetLabel);
@@ -1206,50 +1248,28 @@ namespace RecoNet
                 {
                     try
                     {
-                        List<MappingFeedbackGroup> localGroups = new List<MappingFeedbackGroup>();
-                        List<List<FillPreviewItem>> localPreviewGroups = new List<List<FillPreviewItem>>();
-                        List<MappingFeedbackGroup> remoteRetryGroups = new List<MappingFeedbackGroup>();
-                        List<List<FillPreviewItem>> remoteRetryPreviewGroups = new List<List<FillPreviewItem>>();
+                        List<MappingFeedbackGroup> learningGroups = new List<MappingFeedbackGroup>();
+                        List<List<FillPreviewItem>> learningPreviewGroups = new List<List<FillPreviewItem>>();
                         foreach (List<FillPreviewItem> acceptedItems in acceptedGroups)
                         {
-                            bool recordLocal = ShouldRecordAcceptedFillGroupLocally(acceptedItems);
-                            bool retryRemote = ShouldRetryAcceptedFillGroupRemotely(acceptedItems);
-                            if (!recordLocal && !retryRemote) continue;
+                            if (!ShouldWriteAcceptedFillGroupToSql(acceptedItems)) continue;
                             MappingFeedbackGroup accepted = BuildTemplateRightClickFeedbackGroup(
                                 acceptedItems, sourceWorkbookName, sourceWorksheet, conn, 1, 0, 0, "accepted");
                             if (accepted == null) continue;
-                            if (recordLocal)
-                            {
-                                localGroups.Add(accepted);
-                                localPreviewGroups.Add(acceptedItems);
-                            }
-                            else
-                            {
-                                remoteRetryGroups.Add(accepted);
-                                remoteRetryPreviewGroups.Add(acceptedItems);
-                            }
+                            learningGroups.Add(accepted);
+                            learningPreviewGroups.Add(acceptedItems);
                         }
-                        if (localGroups.Count > 0)
+                        if (learningGroups.Count > 0)
                         {
-                            RecordMappingGroupsToStore(localGroups, "apply-accept");
-                            bool remoteDurable = ConsumeLearningDbDurableResult(localGroups);
-                            foreach (List<FillPreviewItem> acceptedItems in localPreviewGroups)
+                            RecordMappingGroupsToLearningDb(learningGroups, "apply-accept");
+                            bool sqlDurable = ConsumeLearningDbDurableResult(learningGroups);
+                            foreach (List<FillPreviewItem> acceptedItems in learningPreviewGroups)
                             {
                                 foreach (FillPreviewItem item in acceptedItems)
                                 {
-                                    item.LocalFeedbackRecorded = true;
-                                    item.RemoteFeedbackDurable = remoteDurable;
+                                    item.LearningFeedbackAttempted = true;
+                                    item.SqlFeedbackDurable = sqlDurable;
                                 }
-                            }
-                        }
-                        if (remoteRetryGroups.Count > 0)
-                        {
-                            bool remoteDurable = RecordBindingEventsToLearningDb("apply-accept", remoteRetryGroups);
-                            ConsumeLearningDbDurableResult(remoteRetryGroups);
-                            if (remoteDurable)
-                            {
-                                foreach (List<FillPreviewItem> acceptedItems in remoteRetryPreviewGroups)
-                                    foreach (FillPreviewItem item in acceptedItems) item.RemoteFeedbackDurable = true;
                             }
                         }
                     }
@@ -1281,15 +1301,10 @@ namespace RecoNet
                 .ToList();
         }
 
-        private static bool ShouldRecordAcceptedFillGroupLocally(List<FillPreviewItem> group)
-        {
-            return group != null && group.Count > 0 && group.All(item => item != null && !item.LocalFeedbackRecorded);
-        }
-
-        private static bool ShouldRetryAcceptedFillGroupRemotely(List<FillPreviewItem> group)
+        private static bool ShouldWriteAcceptedFillGroupToSql(List<FillPreviewItem> group)
         {
             return group != null && group.Count > 0 &&
-                group.All(item => item != null && item.LocalFeedbackRecorded && !item.RemoteFeedbackDurable);
+                group.All(item => item != null && !item.SqlFeedbackDurable);
         }
 
         internal static bool IsInsertGroupFullyConfirmed(int expectedCount, int confirmedAdded)

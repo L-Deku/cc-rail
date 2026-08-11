@@ -841,10 +841,8 @@ namespace RecoNet
                 AgentSelectionSnapshot selection = CaptureAgentSelection(mainForm);
                 AgentCommand command = BuildContextMenuCommand(target, action, value, isTreeMenu, selection.CurrentUnitId);
                 AgentPlan plan;
-                using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
-                {
-                    plan = BuildAgentPlan(conn, selection, new List<AgentCommand> { command });
-                }
+                SqlConnection conn = GetOpenProjectConnection(mainForm);
+                plan = BuildAgentPlan(conn, selection, new List<AgentCommand> { command });
 
                 string warnings = plan.Warnings.Count == 0 ? "" : Environment.NewLine + Environment.NewLine + String.Join(Environment.NewLine, plan.Warnings.ToArray());
                 if (plan.AffectedCount == 0)

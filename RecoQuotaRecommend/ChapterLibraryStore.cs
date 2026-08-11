@@ -27,6 +27,7 @@ namespace RecoQuotaRecommend
         public string EntryName;
         public string Method;             // "2020" / "2024"
         public string MethodNo;           // 项目编制办法文号，用于区分 30号文/101号文/2024 等条目池
+        public string SoftwarePartition;  // 只由当前进程身份产生，未知时禁止条目学习
         public HashSet<string> PoolKeys;  // "kind:CODE"（大写）
 
         public bool Strict
@@ -34,10 +35,20 @@ namespace RecoQuotaRecommend
             get { return !String.IsNullOrEmpty(MatchedEntryCode) && PoolKeys != null && PoolKeys.Count > 0; }
         }
 
-        // 对应框 entry_codes 标签格式：method:条目编号
+        // 条目学习标签必须同时具备软件分区、办法文号和合法条目编号。
         public string Tag
         {
-            get { return Method + ":" + MatchedEntryCode; }
+            get
+            {
+                string partition = (SoftwarePartition ?? "").Trim();
+                string methodNo = LearningPartitionIdentity.NormalizeLearningMethodNo(MethodNo);
+                string entryCode = LearningPartitionIdentity.NormalizeLearningEntryCode(MatchedEntryCode);
+                if (String.IsNullOrEmpty(partition) || String.IsNullOrEmpty(methodNo) || String.IsNullOrEmpty(entryCode))
+                {
+                    return "";
+                }
+                return partition + ":" + methodNo + ":" + entryCode;
+            }
         }
 
         public bool Allows(string targetKind, string code)
@@ -324,6 +335,31 @@ namespace RecoQuotaRecommend
             }
 
             return "2020";
+        }
+
+        private static string ResolveLearningSoftwarePartition()
+        {
+            string processName = "";
+            string moduleFileName = "";
+            try
+            {
+                Process process = Process.GetCurrentProcess();
+                processName = process.ProcessName ?? "";
+                try
+                {
+                    moduleFileName = process.MainModule == null ? "" : (process.MainModule.FileName ?? "");
+                }
+                catch
+                {
+                    moduleFileName = "";
+                }
+            }
+            catch
+            {
+                processName = "";
+                moduleFileName = "";
+            }
+            return LearningPartitionIdentity.ResolveFromProcessIdentity(processName, moduleFileName);
         }
 
         internal static string ResolveMethodKeyForHost(string baseDir, string processIdentity, bool has2020Executable, bool has2024Executable)
@@ -723,6 +759,7 @@ namespace RecoQuotaRecommend
             scope.EntryName = entryNames.TryGetValue(PoolKey(methodNo, matchedCode), out entryName) && !String.IsNullOrEmpty(entryName) ? entryName : (fallbackEntryName ?? "");
             scope.Method = MethodKey;
             scope.MethodNo = methodNo;
+            scope.SoftwarePartition = ResolveLearningSoftwarePartition();
             scope.PoolKeys = pool;
             return scope;
         }
@@ -736,6 +773,7 @@ namespace RecoQuotaRecommend
             scope.EntryName = entryNames.TryGetValue(PoolKey(methodNo, matchedCode), out entryName) && !String.IsNullOrEmpty(entryName) ? entryName : (fallbackEntryName ?? "");
             scope.Method = MethodKey;
             scope.MethodNo = methodNo;
+            scope.SoftwarePartition = ResolveLearningSoftwarePartition();
             HashSet<string> pool;
             scope.PoolKeys = pools.TryGetValue(PoolKey(methodNo, matchedCode), out pool) ? pool : new HashSet<string>(StringComparer.Ordinal);
             return scope;

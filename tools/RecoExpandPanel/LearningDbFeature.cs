@@ -15,8 +15,7 @@ namespace RecoNet
 {
     public partial class FormPanel : Form
     {
-        // 学习库固定在中央服务器,不跟随各软件的项目服务器(2020版连192.168.2.13,学习库统一在.213)。
-        private const string LearningDbServer = "192.168.2.213,1433";
+        // 学习库连接只从当前 Windows 用户的 DPAPI 凭据库读取。
         private const string LearningDbOutboxFileName = "learning-db-outbox.jsonl";
         private const string LearningDbDeadLetterFileName = "learning-db-outbox.dead-letter.jsonl";
         private const string LearningDbOutboxMutexName = "RecoQuotaData.learning-db-outbox.lock";
@@ -35,6 +34,9 @@ namespace RecoNet
         {
             public string BatchId;
             public string Source;
+            public string SoftwarePartition;
+            public string ProcessName;
+            public string ModuleFileName;
             public List<MappingFeedbackGroup> Groups = new List<MappingFeedbackGroup>();
         }
 
@@ -81,8 +83,8 @@ namespace RecoNet
             if (IsLearningDbCircuitBreakingException(ex)) OpenLearningDbCircuit();
         }
 
-        // RecoLearning 是多人共享主学习库：流水与推荐核心聚合在同一事务提交；
-        // 瞬时失败进 active outbox，永久无效批次进 dead-letter，均不影响后续绑定或本机 jsonl 备份。
+        // RecoLearning 是唯一学习存储：流水与推荐核心聚合在同一事务提交。
+        // SQL 失败只返回未持久化状态，不写本机学习文件、outbox 或 dead-letter。
         private static bool RecordBindingEventsToLearningDb(string source, List<MappingFeedbackGroup> groups)
         {
             RememberLearningDbDurableResult(source, groups, false);
@@ -91,57 +93,52 @@ namespace RecoNet
                 return false;
             }
 
-            PrepareLearningGroupsForOutbox(groups);
+            PrepareLearningGroupsForSql(groups);
+            List<MappingFeedbackGroup> unknownPartitionGroups = groups
+                .Where(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
+                    !IsValidLearningSoftwarePartition(group.SoftwarePartition))
+                .ToList();
+            if (unknownPartitionGroups.Count > 0)
+            {
+                Log("Learning was rejected before SQL write because the current software partition is unknown. groups=" +
+                    unknownPartitionGroups.Count.ToString(CultureInfo.InvariantCulture));
+            }
             List<MappingFeedbackGroup> validGroups = groups
                 .Where(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
+                    IsValidLearningSoftwarePartition(group.SoftwarePartition) &&
+                    !String.IsNullOrEmpty(group.MethodNo) &&
                     !String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)) &&
-                    IsLearningFeedbackGroupRecommendable(group))
+                    group.Targets != null && group.Targets.Any(target => target != null &&
+                        !String.IsNullOrWhiteSpace(target.Code)))
                 .ToList();
             int unsupportedMethodCount = groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
-                String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)));
-            int invalidLearningCount = groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
-                !String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)) && !IsLearningFeedbackGroupRecommendable(group));
-            int unsupportedCount = unsupportedMethodCount + invalidLearningCount;
+                IsValidLearningSoftwarePartition(group.SoftwarePartition) &&
+                (String.IsNullOrEmpty(group.MethodNo) || String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method))));
+            int invalidStructureCount = groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
+                IsValidLearningSoftwarePartition(group.SoftwarePartition) &&
+                !String.IsNullOrEmpty(group.MethodNo) &&
+                !String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)) &&
+                (group.Targets == null || !group.Targets.Any(target => target != null &&
+                    !String.IsNullOrWhiteSpace(target.Code))));
+            int unsupportedCount = unknownPartitionGroups.Count + unsupportedMethodCount + invalidStructureCount;
             if (unsupportedCount > 0)
             {
                 Log("Learning DB binding was not queued because " + unsupportedCount.ToString(CultureInfo.InvariantCulture) +
-                    " learning group(s) have an unsupported method, incomplete target identity, or violate the SF entry constraint; local mapping remains available.");
+                    " learning group(s) have an unsupported partition/method or no auditable target.");
             }
             if (validGroups.Count == 0)
             {
                 return false;
             }
 
-            if (!TryReplayPendingLearningDbEvents())
-            {
-                LearningDbOutboxBatch pending = new LearningDbOutboxBatch
-                {
-                    BatchId = Guid.NewGuid().ToString("N"),
-                    Source = source ?? "",
-                    Groups = validGroups
-                };
-                bool queued = TryAppendLearningDbOutbox(pending);
-                bool fullyDurable = queued && unsupportedCount == 0;
-                RememberLearningDbDurableResult(source, groups, fullyDurable);
-                return fullyDurable;
-            }
-
-            LearningDbOutboxBatch batch = new LearningDbOutboxBatch
-            {
-                BatchId = Guid.NewGuid().ToString("N"),
-                Source = source ?? "",
-                Groups = validGroups
-            };
+            LearningDbOutboxBatch batch = CreateLearningDbOutboxBatch(source, validGroups);
             string failureReason;
             LearningDbWriteResult writeResult = TryWriteLearningDbBatch(batch, out failureReason);
             bool durable = writeResult == LearningDbWriteResult.Succeeded;
-            if (writeResult == LearningDbWriteResult.RetryableFailure)
+            if (!durable)
             {
-                durable = TryAppendLearningDbOutbox(batch);
-            }
-            else if (writeResult == LearningDbWriteResult.PermanentFailure)
-            {
-                TryAppendLearningDbDeadLetter(batch, failureReason);
+                Log("Learning DB binding was not persisted; local learning is disabled. result=" +
+                    writeResult.ToString() + " reason=" + NormalizeLearningDbDeadLetterReason(failureReason));
             }
             bool fullyWritten = durable && unsupportedCount == 0;
             RememberLearningDbDurableResult(source, groups, fullyWritten);
@@ -153,9 +150,12 @@ namespace RecoNet
         {
             if (String.IsNullOrEmpty(connectionString)) return;
             if ((groups ?? new List<MappingFeedbackGroup>()).Any(group => group != null &&
-                !String.IsNullOrWhiteSpace(group.QuantityName) && String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method))))
+                !String.IsNullOrWhiteSpace(group.QuantityName) &&
+                (!IsValidLearningSoftwarePartition(group.SoftwarePartition) ||
+                    String.IsNullOrEmpty(group.MethodNo) ||
+                    String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)))))
             {
-                throw new InvalidOperationException("Learning DB method is missing or unsupported; binding remains queued locally.");
+                throw new InvalidOperationException("Learning DB partition or method identity is missing; binding was isolated.");
             }
 
             using (SqlConnection conn = new SqlConnection(connectionString))
@@ -187,10 +187,12 @@ namespace RecoNet
                                 {
                                     cmd.Transaction = transaction;
                                     cmd.CommandTimeout = 5;
-                                    cmd.CommandText = "INSERT INTO dbo.BindingLog (occurred_at, source, method, project_id, entry_code, entry_name, quantity_name, quantity_unit, target_kind, target_code, target_name, target_unit, group_key, event_hash, extra) " +
-                                        "VALUES (SYSDATETIME(), @source, @method, @project, @ec, @en, @qn, @qu, @tk, @tc, @tn, @tu, @gk, @eh, @ex)";
+                                    cmd.CommandText = "INSERT INTO dbo.BindingLog (occurred_at, source, method, software_partition, method_no, project_id, entry_code, entry_name, quantity_name, quantity_unit, target_kind, target_code, target_name, target_unit, group_key, event_hash, extra) " +
+                                        "VALUES (SYSDATETIME(), @source, @method, @software_partition, @method_no, @project, @ec, @en, @qn, @qu, @tk, @tc, @tn, @tu, @gk, @eh, @ex)";
                                     cmd.Parameters.AddWithValue("@source", "plugin:" + (source ?? ""));
                                     cmd.Parameters.AddWithValue("@method", NormalizeLearningDbMethod(group.Method));
+                                    cmd.Parameters.AddWithValue("@software_partition", group.SoftwarePartition);
+                                    cmd.Parameters.AddWithValue("@method_no", group.MethodNo);
                                     cmd.Parameters.AddWithValue("@project", group.ProjectId ?? "");
                                     cmd.Parameters.AddWithValue("@ec", GetMappingFeedbackTargetEntryCode(group, target));
                                     cmd.Parameters.AddWithValue("@en", GetMappingFeedbackTargetEntryName(group, target));
@@ -214,11 +216,17 @@ namespace RecoNet
                                     flat["corrected_count"] = Math.Max(0, group.CorrectedCount).ToString(CultureInfo.InvariantCulture);
                                     flat["rejected_count"] = Math.Max(0, group.RejectedCount).ToString(CultureInfo.InvariantCulture);
                                     if (!String.IsNullOrWhiteSpace(group.UserAction)) flat["user_action"] = group.UserAction;
-                                    if (!String.IsNullOrWhiteSpace(target.FormulaTemplate) && group.FormulaOperands.Count > 0)
+                                    string formulaEntryCode = LearningPartitionIdentity.NormalizeLearningEntryCode(
+                                        GetMappingFeedbackTargetEntryCode(group, target));
+                                    if (!String.IsNullOrWhiteSpace(target.FormulaTemplate) && group.FormulaOperands.Count > 0 &&
+                                        !String.IsNullOrEmpty(formulaEntryCode))
                                     {
                                         flat["formula_rule_hash"] = BuildLearningFormulaRuleHash(group, target);
                                         flat["formula_template"] = target.FormulaTemplate;
                                         flat["formula_target_unit"] = target.Unit ?? "";
+                                        flat["formula_software_partition"] = group.SoftwarePartition ?? "";
+                                        flat["formula_method_no"] = group.MethodNo ?? "";
+                                        flat["formula_entry_code"] = formulaEntryCode;
                                         flat["formula_operand_count"] = group.FormulaOperands.Count.ToString(CultureInfo.InvariantCulture);
                                         for (int operandIndex = 0; operandIndex < group.FormulaOperands.Count; operandIndex++)
                                         {
@@ -381,12 +389,78 @@ namespace RecoNet
             }
         }
 
-        private static void PrepareLearningGroupsForOutbox(List<MappingFeedbackGroup> groups)
+        private static LearningDbOutboxBatch CreateLearningDbOutboxBatch(string source, List<MappingFeedbackGroup> groups)
+        {
+            string processName;
+            string moduleFileName;
+            ReadLearningProcessIdentity(out processName, out moduleFileName);
+            List<MappingFeedbackGroup> safeGroups = groups ?? new List<MappingFeedbackGroup>();
+            List<string> partitions = safeGroups
+                .Where(group => group != null && IsValidLearningSoftwarePartition(group.SoftwarePartition))
+                .Select(group => group.SoftwarePartition)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            return new LearningDbOutboxBatch
+            {
+                BatchId = Guid.NewGuid().ToString("N"),
+                Source = source ?? "",
+                SoftwarePartition = partitions.Count == 1 ? partitions[0] : "",
+                ProcessName = processName,
+                ModuleFileName = moduleFileName,
+                Groups = safeGroups
+            };
+        }
+
+        private static bool IsValidLearningSoftwarePartition(string value)
+        {
+            return String.Equals(value, "2020", StringComparison.OrdinalIgnoreCase) ||
+                String.Equals(value, "2024", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static void ReadLearningProcessIdentity(out string processName, out string moduleFileName)
+        {
+            processName = "";
+            moduleFileName = "";
+            try
+            {
+                System.Diagnostics.Process process = System.Diagnostics.Process.GetCurrentProcess();
+                processName = process.ProcessName ?? "";
+                try
+                {
+                    string path = process.MainModule == null ? "" : (process.MainModule.FileName ?? "");
+                    moduleFileName = Path.GetFileName(path) ?? "";
+                }
+                catch
+                {
+                    moduleFileName = "";
+                }
+            }
+            catch
+            {
+                processName = "";
+                moduleFileName = "";
+            }
+        }
+
+        private static void PrepareLearningGroupsForSql(List<MappingFeedbackGroup> groups)
         {
             foreach (MappingFeedbackGroup group in groups ?? new List<MappingFeedbackGroup>())
             {
                 if (group == null) continue;
-                group.Method = NormalizeLearningDbMethod(group.Method);
+                string rawMethod = group.Method;
+                if (String.IsNullOrWhiteSpace(group.MethodNo))
+                {
+                    group.MethodNo = NormalizeLearningMethodNo(rawMethod);
+                }
+                else
+                {
+                    group.MethodNo = NormalizeLearningMethodNo(group.MethodNo);
+                }
+                if (String.IsNullOrWhiteSpace(group.SoftwarePartition))
+                {
+                    group.SoftwarePartition = ResolveLearningSoftwarePartition();
+                }
+                group.Method = NormalizeLearningDbMethod(rawMethod);
                 List<MappingFeedbackTarget> targets = (group.Targets ?? new List<MappingFeedbackTarget>())
                     .Where(target => target != null && !String.IsNullOrWhiteSpace(target.Code))
                     .ToList();
@@ -416,12 +490,22 @@ namespace RecoNet
         {
             reason = "";
             if (batch == null || batch.Groups == null) return false;
+            int invalidPartitionCount = batch.Groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
+                !IsValidLearningSoftwarePartition(group.SoftwarePartition));
+            int partitionMismatchCount = batch.Groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
+                IsValidLearningSoftwarePartition(group.SoftwarePartition) &&
+                (!IsValidLearningSoftwarePartition(batch.SoftwarePartition) ||
+                    !String.Equals(group.SoftwarePartition, batch.SoftwarePartition, StringComparison.OrdinalIgnoreCase)));
             int invalidMethodCount = batch.Groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
-                String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)));
+                (String.IsNullOrEmpty(group.MethodNo) || String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method))));
             int invalidEvidenceCount = batch.Groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
+                IsValidLearningSoftwarePartition(group.SoftwarePartition) &&
+                !String.IsNullOrEmpty(group.MethodNo) &&
                 !String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)) && !IsLearningFeedbackGroupRecommendable(group));
-            if (invalidMethodCount == 0 && invalidEvidenceCount == 0) return false;
-            reason = "unsupported_learning_group_method_" + invalidMethodCount.ToString(CultureInfo.InvariantCulture) +
+            if (invalidPartitionCount == 0 && partitionMismatchCount == 0 && invalidMethodCount == 0 && invalidEvidenceCount == 0) return false;
+            reason = "unsupported_learning_group_partition_" + invalidPartitionCount.ToString(CultureInfo.InvariantCulture) +
+                "_mismatch_" + partitionMismatchCount.ToString(CultureInfo.InvariantCulture) +
+                "_method_" + invalidMethodCount.ToString(CultureInfo.InvariantCulture) +
                 "_evidence_" + invalidEvidenceCount.ToString(CultureInfo.InvariantCulture);
             return true;
         }
@@ -576,6 +660,9 @@ namespace RecoNet
             row["record_type"] = "learning_db_outbox";
             row["batch_id"] = batch.BatchId ?? "";
             row["source"] = batch.Source ?? "";
+            row["software_partition"] = batch.SoftwarePartition ?? "";
+            row["process_name"] = batch.ProcessName ?? "";
+            row["module_file_name"] = batch.ModuleFileName ?? "";
             row["group_count"] = batch.Groups.Count.ToString(CultureInfo.InvariantCulture);
             for (int groupIndex = 0; groupIndex < batch.Groups.Count; groupIndex++)
             {
@@ -584,6 +671,8 @@ namespace RecoNet
                 row[prefix + "quantity_name"] = group.QuantityName ?? "";
                 row[prefix + "quantity_unit"] = group.QuantityUnit ?? "";
                 row[prefix + "method"] = NormalizeLearningDbMethod(group.Method);
+                row[prefix + "software_partition"] = group.SoftwarePartition ?? "";
+                row[prefix + "method_no"] = group.MethodNo ?? "";
                 row[prefix + "project_id"] = group.ProjectId ?? "";
                 row[prefix + "entry_code"] = group.EntryCode ?? "";
                 row[prefix + "entry_name"] = group.EntryName ?? "";
@@ -629,7 +718,14 @@ namespace RecoNet
             string batchId = GetFlat(row, "batch_id").Trim();
             int groupCount = ReadFlatInt(row, "group_count", 0);
             if (batchId.Length != 32 || !batchId.All(Uri.IsHexDigit) || groupCount <= 0 || groupCount > 10000) return null;
-            LearningDbOutboxBatch batch = new LearningDbOutboxBatch { BatchId = batchId, Source = GetFlat(row, "source") };
+            LearningDbOutboxBatch batch = new LearningDbOutboxBatch
+            {
+                BatchId = batchId,
+                Source = GetFlat(row, "source"),
+                SoftwarePartition = GetFlat(row, "software_partition").Trim(),
+                ProcessName = GetFlat(row, "process_name"),
+                ModuleFileName = GetFlat(row, "module_file_name")
+            };
             for (int groupIndex = 0; groupIndex < groupCount; groupIndex++)
             {
                 string prefix = "g" + groupIndex.ToString(CultureInfo.InvariantCulture) + "_";
@@ -638,6 +734,8 @@ namespace RecoNet
                     QuantityName = GetFlat(row, prefix + "quantity_name"),
                     QuantityUnit = GetFlat(row, prefix + "quantity_unit"),
                     Method = NormalizeLearningDbMethod(GetFlat(row, prefix + "method")),
+                    SoftwarePartition = GetFlat(row, prefix + "software_partition").Trim(),
+                    MethodNo = NormalizeLearningMethodNo(GetFlat(row, prefix + "method_no")),
                     ProjectId = GetFlat(row, prefix + "project_id"),
                     EntryCode = GetFlat(row, prefix + "entry_code"),
                     EntryName = GetFlat(row, prefix + "entry_name"),
@@ -962,9 +1060,10 @@ namespace RecoNet
                     "corrected_count=corrected_count+@corrected, rejected_count=rejected_count+@rejected, " +
                     "weight=CASE WHEN 10*(accepted_count+@accepted)+20*(corrected_count+@corrected)-10*(rejected_count+@rejected)<0 THEN 0 " +
                     "ELSE 10*(accepted_count+@accepted)+20*(corrected_count+@corrected)-10*(rejected_count+@rejected) END, last_used_at=SYSDATETIME() " +
-                    "WHERE signature=@s AND method=@method AND box_id=@box; " +
-                    "IF @@ROWCOUNT=0 INSERT INTO dbo.SignatureBoxMap(signature,method,box_id,weight,accepted_count,corrected_count,rejected_count,last_used_at) " +
-                    "VALUES(@s,@method,@box,@weight,@accepted,@corrected,@rejected,SYSDATETIME());";
+                    "WHERE software_partition=@software_partition AND signature=@s AND box_id=@box; " +
+                    "IF @@ROWCOUNT=0 INSERT INTO dbo.SignatureBoxMap(software_partition,signature,method,box_id,weight,accepted_count,corrected_count,rejected_count,last_used_at) " +
+                    "VALUES(@software_partition,@s,@method,@box,@weight,@accepted,@corrected,@rejected,SYSDATETIME());";
+                cmd.Parameters.AddWithValue("@software_partition", group.SoftwarePartition);
                 cmd.Parameters.AddWithValue("@s", signature);
                 cmd.Parameters.AddWithValue("@method", method);
                 cmd.Parameters.AddWithValue("@box", boxId);
@@ -997,7 +1096,9 @@ namespace RecoNet
                     string targetCode = TrimLearningText(target.Code, 100);
                     string targetUnit = TrimLearningText(NormalizeExcelLinkUnit(target.Unit), 50);
                     string method = NormalizeLearningDbMethod(group.Method);
-                    string formulaEntry = TrimLearningText(GetMappingFeedbackTargetEntryCode(group, target), 100);
+                    string formulaEntry = TrimLearningText(LearningPartitionIdentity.NormalizeLearningEntryCode(
+                        GetMappingFeedbackTargetEntryCode(group, target)), 100);
+                    if (formulaEntry.Length == 0) continue;
                     string ruleHash = BuildLearningFormulaRuleHash(group, target);
                     using (SqlCommand cmd = conn.CreateCommand())
                     {
@@ -1005,8 +1106,8 @@ namespace RecoNet
                         cmd.CommandTimeout = 5;
                         cmd.CommandText =
                             "UPDATE dbo.QuantityFormulaRule WITH (UPDLOCK,HOLDLOCK) SET sample_count=sample_count+1,last_seen=SYSDATETIME() WHERE rule_hash=@hash; " +
-                            "IF @@ROWCOUNT=0 INSERT INTO dbo.QuantityFormulaRule(rule_hash,anchor_signature,target_kind,target_code,target_unit,formula_template,method,entry_code,sample_count,first_seen,last_seen) " +
-                            "VALUES(@hash,@s,@kind,@code,@unit,@formula,@method,@entry,1,SYSDATETIME(),SYSDATETIME());";
+                            "IF @@ROWCOUNT=0 INSERT INTO dbo.QuantityFormulaRule(rule_hash,anchor_signature,target_kind,target_code,target_unit,formula_template,method,software_partition,method_no,entry_code,sample_count,first_seen,last_seen) " +
+                            "VALUES(@hash,@s,@kind,@code,@unit,@formula,@method,@software_partition,@method_no,@entry,1,SYSDATETIME(),SYSDATETIME());";
                         cmd.Parameters.AddWithValue("@hash", ruleHash);
                         cmd.Parameters.AddWithValue("@s", signature);
                         cmd.Parameters.AddWithValue("@kind", targetKind);
@@ -1014,6 +1115,8 @@ namespace RecoNet
                         cmd.Parameters.AddWithValue("@unit", targetUnit);
                         cmd.Parameters.AddWithValue("@formula", formulaTemplate);
                         cmd.Parameters.AddWithValue("@method", method);
+                        cmd.Parameters.AddWithValue("@software_partition", group.SoftwarePartition);
+                        cmd.Parameters.AddWithValue("@method_no", group.MethodNo);
                         cmd.Parameters.AddWithValue("@entry", formulaEntry);
                         cmd.ExecuteNonQuery();
                     }
@@ -1048,7 +1151,8 @@ namespace RecoNet
                     .GroupBy(target => GetMappingFeedbackTargetEntryCode(group, target), StringComparer.OrdinalIgnoreCase)
                     .Select(items => items.First()))
                 {
-                    string entryCode = TrimLearningText(GetMappingFeedbackTargetEntryCode(group, scopeTarget), 100);
+                    string entryCode = TrimLearningText(LearningPartitionIdentity.NormalizeLearningEntryCode(
+                        GetMappingFeedbackTargetEntryCode(group, scopeTarget)), 100);
                     if (!IsSmartClassifiedEntryCode(entryCode)) continue;
                     using (SqlCommand cmd = conn.CreateCommand())
                     {
@@ -1056,9 +1160,11 @@ namespace RecoNet
                         cmd.CommandTimeout = 5;
                         cmd.CommandText =
                             "UPDATE dbo.EngineeringTemplate WITH (UPDLOCK,HOLDLOCK) SET sample_count=sample_count+1,last_seen=SYSDATETIME() " +
-                            "WHERE method=@method AND engineering_type=@type AND entry_code=@entry AND box_id=@box; " +
-                            "IF @@ROWCOUNT=0 INSERT INTO dbo.EngineeringTemplate(method,engineering_type,entry_code,box_id,sample_count,last_seen) " +
-                            "VALUES(@method,@type,@entry,@box,1,SYSDATETIME());";
+                            "WHERE software_partition=@software_partition AND method_no=@method_no AND engineering_type=@type AND entry_code=@entry AND box_id=@box; " +
+                            "IF @@ROWCOUNT=0 INSERT INTO dbo.EngineeringTemplate(software_partition,method_no,method,engineering_type,entry_code,box_id,sample_count,last_seen) " +
+                            "VALUES(@software_partition,@method_no,@method,@type,@entry,@box,1,SYSDATETIME());";
+                        cmd.Parameters.AddWithValue("@software_partition", group.SoftwarePartition);
+                        cmd.Parameters.AddWithValue("@method_no", group.MethodNo);
                         cmd.Parameters.AddWithValue("@method", method);
                         cmd.Parameters.AddWithValue("@type", entryCode.Substring(0, 2));
                         cmd.Parameters.AddWithValue("@entry", entryCode);
@@ -1068,7 +1174,8 @@ namespace RecoNet
                 }
                 foreach (MappingFeedbackTarget target in targets.Where(item => String.Equals(item.Kind ?? "quota", "quota", StringComparison.OrdinalIgnoreCase)))
                 {
-                    string entryCode = TrimLearningText(GetMappingFeedbackTargetEntryCode(group, target), 100);
+                    string entryCode = TrimLearningText(LearningPartitionIdentity.NormalizeLearningEntryCode(
+                        GetMappingFeedbackTargetEntryCode(group, target)), 100);
                     if (entryCode.Length == 0) continue;
                     string entryName = TrimLearningText(GetMappingFeedbackTargetEntryName(group, target), 500);
                     using (SqlCommand cmd = conn.CreateCommand())
@@ -1077,8 +1184,10 @@ namespace RecoNet
                         cmd.CommandTimeout = 5;
                         cmd.CommandText =
                             "UPDATE dbo.SignatureEntryMap WITH (UPDLOCK,HOLDLOCK) SET entry_name=CASE WHEN @entry_name='' THEN entry_name ELSE @entry_name END, " +
-                            "sample_count=sample_count+1,last_used_at=SYSDATETIME() WHERE signature=@s AND target_code=@code AND method=@method AND entry_code=@entry; " +
-                            "IF @@ROWCOUNT=0 INSERT INTO dbo.SignatureEntryMap(signature,target_code,method,entry_code,entry_name,sample_count,last_used_at) VALUES(@s,@code,@method,@entry,@entry_name,1,SYSDATETIME());";
+                            "sample_count=sample_count+1,last_used_at=SYSDATETIME() WHERE software_partition=@software_partition AND method_no=@method_no AND signature=@s AND target_code=@code AND entry_code=@entry; " +
+                            "IF @@ROWCOUNT=0 INSERT INTO dbo.SignatureEntryMap(software_partition,method_no,signature,target_code,method,entry_code,entry_name,sample_count,last_used_at) VALUES(@software_partition,@method_no,@s,@code,@method,@entry,@entry_name,1,SYSDATETIME());";
+                        cmd.Parameters.AddWithValue("@software_partition", group.SoftwarePartition);
+                        cmd.Parameters.AddWithValue("@method_no", group.MethodNo);
                         cmd.Parameters.AddWithValue("@s", signature);
                         cmd.Parameters.AddWithValue("@code", TrimLearningText(target.Code, 100));
                         cmd.Parameters.AddWithValue("@method", method);
@@ -1106,15 +1215,30 @@ namespace RecoNet
             return "";
         }
 
+        private static string NormalizeLearningMethodNo(string rawMethod)
+        {
+            return LearningPartitionIdentity.NormalizeLearningMethodNo(rawMethod);
+        }
+
+        private static string ResolveLearningSoftwarePartition()
+        {
+            string processName;
+            string moduleFileName;
+            ReadLearningProcessIdentity(out processName, out moduleFileName);
+            return LearningPartitionIdentity.ResolveFromProcessIdentity(processName, moduleFileName);
+        }
+
         private static string BuildLearningFormulaRuleHash(MappingFeedbackGroup group, MappingFeedbackTarget target)
         {
             string signature = NormalizeForSignature(group == null ? "" : group.QuantityName) + "|";
             if (signature.Length > 450) signature = signature.Substring(0, 450);
             string kind = target == null || String.IsNullOrWhiteSpace(target.Kind) ? "quota" : target.Kind.Trim().ToLowerInvariant();
+            string entryCode = LearningPartitionIdentity.NormalizeLearningEntryCode(
+                GetMappingFeedbackTargetEntryCode(group, target));
             string raw = signature + "|" + kind + ":" + (target == null ? "" : target.Code ?? "").Trim().ToUpperInvariant() + "|" +
                 NormalizeExcelLinkUnit(target == null ? "" : target.Unit) + "|" + (target == null ? "" : target.FormulaTemplate ?? "") + "|" +
-                (group == null ? "" : NormalizeLearningDbMethod(group.Method)) + "|" +
-                GetMappingFeedbackTargetEntryCode(group, target);
+                (group == null ? "" : group.SoftwarePartition ?? "") + "|" +
+                (group == null ? "" : NormalizeLearningMethodNo(group.MethodNo)) + "|" + entryCode;
             if (group != null)
             {
                 foreach (QuantityFormulaOperandInfo operand in group.FormulaOperands)
@@ -1140,7 +1264,7 @@ namespace RecoNet
         {
             if (learningDbConnectionString == null)
             {
-                learningDbConnectionString = "Server=" + LearningDbServer + ";Database=RecoLearning;User ID=" + AgentDbUser + ";Password=" + AgentDbPassword + ";Connect Timeout=3";
+                learningDbConnectionString = RecoSqlCredentialStore.BuildConnectionString("learning", "RecoLearning", 1433, 3);
             }
 
             return learningDbConnectionString;

@@ -1,18 +1,37 @@
 ﻿# RecoLearning 公共函数:连接、SQL 执行、批量导入、签名归一化。
 $ErrorActionPreference = 'Stop'
-
-$script:RecoServer   = '192.168.2.213,1433'
-$script:RecoUser     = 'reco'
-$script:RecoPassword = 'Des_Reco_2006'
 $script:LearningDb   = 'RecoLearning'
 
+$credentialStoreScript = Join-Path (Split-Path -Parent $PSScriptRoot) 'RecoCredential\RecoCredentialStore.ps1'
+. $credentialStoreScript
+
 function Get-RecoConnectionString {
-  param([string]$Database = $script:LearningDb, [string]$Server = $script:RecoServer)
-  "Server=$Server;Database=$Database;User ID=$($script:RecoUser);Password=$($script:RecoPassword);Connect Timeout=15"
+  param([string]$Database = $script:LearningDb, [string]$Server = '')
+
+  $credential = Get-RecoSqlCredential -Name Learning
+  if ([string]::IsNullOrWhiteSpace($Server)) {
+    $Server = $credential.Server
+  }
+  elseif (-not [string]::Equals($Server, $credential.Server, [StringComparison]::OrdinalIgnoreCase)) {
+    $businessCredential = Get-RecoSqlCredential -Name Business
+    if (-not [string]::Equals($Server, $businessCredential.Server, [StringComparison]::OrdinalIgnoreCase)) {
+      throw 'No local DPAPI SQL credential entry matches the requested server.'
+    }
+    $credential = $businessCredential
+  }
+
+  $builder = New-Object System.Data.SqlClient.SqlConnectionStringBuilder
+  $builder['Data Source'] = $Server
+  $builder['Initial Catalog'] = $Database
+  $builder['User ID'] = $credential.User
+  $builder['Password'] = $credential.Password
+  $builder['Connect Timeout'] = 15
+  $builder['Persist Security Info'] = $false
+  return $builder.ConnectionString
 }
 
 function Invoke-RecoNonQuery {
-  param([Parameter(Mandatory)][string]$Sql, [string]$Database = $script:LearningDb, [hashtable]$Parameters = @{}, [string]$Server = $script:RecoServer)
+  param([Parameter(Mandatory)][string]$Sql, [string]$Database = $script:LearningDb, [hashtable]$Parameters = @{}, [string]$Server = '')
   $conn = New-Object System.Data.SqlClient.SqlConnection (Get-RecoConnectionString -Database $Database -Server $Server)
   try {
     $conn.Open()
@@ -23,7 +42,7 @@ function Invoke-RecoNonQuery {
 }
 
 function Invoke-RecoScalar {
-  param([Parameter(Mandatory)][string]$Sql, [string]$Database = $script:LearningDb, [hashtable]$Parameters = @{}, [string]$Server = $script:RecoServer)
+  param([Parameter(Mandatory)][string]$Sql, [string]$Database = $script:LearningDb, [hashtable]$Parameters = @{}, [string]$Server = '')
   $conn = New-Object System.Data.SqlClient.SqlConnection (Get-RecoConnectionString -Database $Database -Server $Server)
   try {
     $conn.Open()
@@ -34,7 +53,7 @@ function Invoke-RecoScalar {
 }
 
 function Invoke-RecoQuery {
-  param([Parameter(Mandatory)][string]$Sql, [string]$Database = $script:LearningDb, [hashtable]$Parameters = @{}, [string]$Server = $script:RecoServer)
+  param([Parameter(Mandatory)][string]$Sql, [string]$Database = $script:LearningDb, [hashtable]$Parameters = @{}, [string]$Server = '')
   $conn = New-Object System.Data.SqlClient.SqlConnection (Get-RecoConnectionString -Database $Database -Server $Server)
   try {
     $conn.Open()
@@ -125,6 +144,44 @@ function Get-NormalizedLearningUnit {
   $unit = $unit.Replace('千克', 'kg').Replace('公斤', 'kg').Replace('吨', 't')
   $unit = $unit.Replace('立方米', 'm3').Replace('平米', 'm2').Replace('平方米', 'm2').Replace('米', 'm')
   return $unit.ToUpperInvariant()
+}
+
+# 公式哈希与 C# ExcelLinkFeature.NormalizeExcelLinkUnit 保持逐字一致（小写）。
+function Get-NormalizedLearningFormulaUnit {
+  param([string]$Text)
+  return (Get-NormalizedLearningUnit $Text).ToLowerInvariant()
+}
+
+function Get-NormalizedLearningEntryCode {
+  param([string]$Text)
+  $code = ([string]$Text).Trim()
+  foreach ($dash in 0x2010,0x2011,0x2012,0x2013,0x2014,0x2212,0xff0d) {
+    $code = $code.Replace([char]$dash, '-')
+  }
+  if ($code -notmatch '^[0-9]{2,}(?:-[0-9]+)*$') { return '' }
+  return $code
+}
+
+function Get-NormalizedLearningMethodNo {
+  param([string]$Text)
+  $method = ([string]$Text).Trim()
+  if ($method -eq '') { return '' }
+  $compact = $method.Replace(' ', '').Replace(([string][char]0x3000), '').Replace('-', '').Replace(([string][char]0x2014), '')
+  if ($compact.IndexOf('101号文', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+      $compact.IndexOf('101estimate', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { return '101号文估算' }
+  if ($compact.IndexOf('TB10801', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+      $compact.IndexOf('2024', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { return 'TB 10801—2024' }
+  if ($compact.IndexOf('国铁科法', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+      $compact.IndexOf('30号文', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+      $compact.IndexOf('2020', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { return '30号文' }
+  return ''
+}
+
+function Get-NormalizedLearningSoftwarePartition {
+  param([string]$Text)
+  $partition = ([string]$Text).Trim()
+  if ($partition -eq '2020' -or $partition -eq '2024') { return $partition }
+  return ''
 }
 
 function Get-LearningBaseTargetCode {

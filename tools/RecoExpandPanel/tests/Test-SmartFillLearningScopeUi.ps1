@@ -72,6 +72,7 @@ try {
 
     $snapshot = [Activator]::CreateInstance($snapshotType, $true).PSObject.BaseObject
     $snapshotType.GetField('Method', $flags).SetValue($snapshot, '2020')
+    $snapshotType.GetField('MethodNo', $flags).SetValue($snapshot, '30号文')
     $scopeMap = $snapshotType.GetField('ScopeEntriesByBox', $flags).GetValue($snapshot)
     $persistedCodes = New-Object 'System.Collections.Generic.HashSet[string]'
     [void]$persistedCodes.Add('03')
@@ -81,7 +82,7 @@ try {
         $entry = [Activator]::CreateInstance($entryType, $true).PSObject.BaseObject
         $entryType.GetField('BoxId', $flags).SetValue($entry, $BoxId)
         $contexts = $entryType.GetField('LocalContextKeys', $flags).GetValue($entry)
-        [void]$contexts.Add("2020`n$ContextCode")
+        [void]$contexts.Add("30号文`n$ContextCode")
         return $entry
     }
     $persistedEntry = New-SmartEntry 'persisted-box' '04'

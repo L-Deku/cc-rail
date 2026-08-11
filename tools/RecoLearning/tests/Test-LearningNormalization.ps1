@@ -76,26 +76,36 @@ if ($rebuild -notmatch '\$rebuildTransaction\.Rollback\(\)') { throw '聚合演�
 if ($rebuild -notmatch 'Get-Md5Hex \(Get-NormalizedPart \$canonicalName\)') { throw '重建 alias_hash 仍包含原始单位或原始名称' }
 if ($rebuild -notmatch 'Get-ReliableQuantityUnits' -or $rebuild -notmatch 'Get-InferredTrailingQuantityUnit') { throw '重建未处理 quantity_unit 为空的存量尾部单位' }
 if ($rebuild -notmatch '存量尾部单位推断' -or $rebuild -notmatch '潜在归并冲突') { throw 'DryRun 未报告推断数量和潜在冲突' }
-if ($rebuild -notmatch "'signature','box_id','method'" -or $rebuild -notmatch '\$m\.Method') { throw 'SignatureBoxMap 重建数据缺少 method' }
-if ($rebuild -notmatch '\$mapKey = Get-MethodScopedMapKey \$method \$sig \$boxId') { throw '同签名组件框未按 method 隔离聚合' }
-if ($rebuild -notmatch '\$methodSignature = \(Get-LearningMethodPartition \(\[string\]\$g\.Method\)\) \+ "`n" \+ \$sig') { throw 'DryRun 冲突统计未按 2020/2024 办法隔离' }
+if ($rebuild -notmatch "'software_partition','signature','box_id','method'" -or
+    $rebuild -notmatch '\$m\.Partition' -or $rebuild -notmatch '\$m\.Method') {
+  throw 'SignatureBoxMap 重建数据缺少 software_partition 或兼容 method'
+}
+if ($rebuild -notmatch '\$mapKey = \$g\.Partition \+ "`n" \+ \$sig \+ "`n" \+ \$boxId') {
+  throw '同签名组件框未按 software_partition 隔离聚合'
+}
+if ($rebuild -notmatch '\$methodSignature = \$g\.Partition \+ "`n" \+ \$sig') {
+  throw 'DryRun 冲突统计未按软件分区隔离'
+}
 if ($rebuild -notmatch 'Get-LearningTargetIdentityKey' -or
     $rebuild -notmatch 'UnsafeContextTargets' -or
     $rebuild -notmatch '跳过同码多义组件') { throw '聚合重建没有隔离通用辅助代码或报告不安全组件' }
-if ($rebuild -match '跳过纯辅助组件' -or $rebuild -notmatch '跳过身份不完整辅助组件') {
-  throw '聚合重建仍在笼统排除纯辅助组件，或未报告名称单位不完整的身份'
+if ($rebuild -notmatch '\$hasPrimaryTarget' -or $rebuild -notmatch '\$allSf' -or
+    $rebuild -notmatch '跳过纯辅助组件' -or $rebuild -notmatch '跳过身份不完整辅助组件') {
+  throw '聚合重建未恢复“含普通主目标，或纯 SF 设备费”的推荐门禁'
 }
 $sfConstraintBlock = [regex]::Match($rebuild, '(?ms)^function Test-SfEntryConstraint\s*\{.*?^\}')
+$targetSetBlock = [regex]::Match($rebuild, '(?ms)^function Test-AggregateLearningTargetSetRecommendable\s*\{.*?^\}')
 $scopeTargetBlock = [regex]::Match($rebuild, '(?ms)^function Test-EngineeringScopeTarget\s*\{.*?^\}')
 $distinctScopeTargetsBlock = [regex]::Match($rebuild, '(?ms)^function Get-DistinctEngineeringScopeTargets\s*\{.*?^\}')
 $availableBoxIdBlock = [regex]::Match($rebuild, '(?ms)^function Get-AvailableAutoBoxId\s*\{.*?^\}')
 $resolveBoxIdBlock = [regex]::Match($rebuild, '(?ms)^function Resolve-RebuildBoxIdCollisions\s*\{.*?^\}')
-if (-not $sfConstraintBlock.Success -or -not $scopeTargetBlock.Success -or
+if (-not $sfConstraintBlock.Success -or -not $targetSetBlock.Success -or -not $scopeTargetBlock.Success -or
     -not $distinctScopeTargetsBlock.Success -or
     -not $availableBoxIdBlock.Success -or -not $resolveBoxIdBlock.Success) {
   throw '重建缺少 SF 双向约束、目标级工程范围分类或 box_id 冲突解析'
 }
 . ([ScriptBlock]::Create($sfConstraintBlock.Value))
+. ([ScriptBlock]::Create($targetSetBlock.Value))
 . ([ScriptBlock]::Create($scopeTargetBlock.Value))
 . ([ScriptBlock]::Create($distinctScopeTargetsBlock.Value))
 . ([ScriptBlock]::Create($availableBoxIdBlock.Value))
@@ -110,6 +120,16 @@ $invalidSf = @{ Targets = @{ sf = @{ Kind='quota'; Code='SF'; EntryCode='0801'; 
 if (-not (Test-SfEntryConstraint $validMixed) -or
     (Test-SfEntryConstraint $invalidOrdinary) -or (Test-SfEntryConstraint $invalidSf)) {
   throw '全量重建未正确执行 SF 双向条目约束'
+}
+$pureAuxTargets = @(@{ Kind='quota'; Code='ZLF' })
+$mixedTargets = @(@{ Kind='quota'; Code='EY-299' }, @{ Kind='quota'; Code='ZLF' })
+$pureSfTargets = @(@{ Kind='quota'; Code='SF' })
+$materialSfTargets = @(@{ Kind='material'; Code='SF' })
+if ((Test-AggregateLearningTargetSetRecommendable $pureAuxTargets) -or
+    -not (Test-AggregateLearningTargetSetRecommendable $mixedTargets) -or
+    -not (Test-AggregateLearningTargetSetRecommendable $pureSfTargets) -or
+    (Test-AggregateLearningTargetSetRecommendable $materialSfTargets)) {
+  throw '全量重建未正确执行“普通主目标或 quota:SF”目标集合门禁'
 }
 foreach ($case in @(
   @(@{ Kind='quota'; Code='EY-299' }, $true),
@@ -142,15 +162,17 @@ if ((Resolve-RebuildBoxIdCollisions $collisionBoxes) -ne 1 -or
 }
 if ([regex]::Matches($rebuild, '\$aggregateGroupKeys\.Contains\(\[string\]\$row\.group_key\)').Count -ne 2 -or
     $rebuild -match '\$g\.EntryCode' -or
-    ([regex]::Matches($rebuild, 'Get-DistinctEngineeringScopeTargets \$g\.Targets\.Values')).Count -ne 2 -or
+    ([regex]::Matches($rebuild, 'Get-DistinctEngineeringScopeTargets \$g\.Targets\.Values')).Count -ne 1 -or
+    $rebuild -notmatch 'SheetTemplateRow 含条目却没有办法号，本次切换只清空且不再回填' -or
     $rebuild -notmatch '跳过违反 SF 双向条目约束组件') {
   throw '公式/SignatureEntryMap 未排除违规组，或 EngineeringTemplate/SheetTemplateRow 仍使用组级条目'
 }
 
 $import = Get-Content -LiteralPath (Join-Path $learningRoot 'Import-JsonlLibraries.ps1') -Raw -Encoding UTF8
-if ($import -notmatch '\[switch\]\$ImportBindingHistory' -or $import -notmatch '\[string\]\$SourceId') { throw '历史 JSONL 导入未改成显式一次性操作' }
-if ($import -notmatch '\$alreadyCommand' -or $import -notmatch 'WHERE source IN') { throw '历史 JSONL 导入缺少来源级防重复保护' }
-if ($import -notmatch 'BeginTransaction\(\[System\.Data\.IsolationLevel\]::Serializable\)' -or
-    ([regex]::Matches($import, 'Invoke-RecoBulkCopyInTransaction')).Count -lt 2) { throw '两类历史流水没有在同一事务内迁移' }
+if ($import -notmatch '\[switch\]\$ImportBindingHistory' -or
+    $import -notmatch '旧流水导入已永久停用' -or
+    $import -match '\$historyConnection' -or $import -match "'dbo\.BindingLog'") {
+  throw '历史 JSONL 流水导入未在 SQL 访问前永久禁用，或仍保留可恢复的写入实现'
+}
 
 Write-Host 'Test-LearningNormalization: PASS'

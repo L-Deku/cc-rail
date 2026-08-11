@@ -6,6 +6,8 @@ CREATE TABLE dbo.BindingLog (
   imported_at   DATETIME2(0) NOT NULL DEFAULT SYSDATETIME(),
   source        NVARCHAR(50)  NOT NULL,
   method        NVARCHAR(50)  NOT NULL DEFAULT(''),
+  software_partition NVARCHAR(10) NOT NULL,
+  method_no     NVARCHAR(100) NOT NULL,
   project_id    NVARCHAR(200) NOT NULL DEFAULT(''),
   entry_code    NVARCHAR(100) NOT NULL DEFAULT(''),
   entry_name    NVARCHAR(500) NOT NULL DEFAULT(''),
@@ -19,6 +21,10 @@ CREATE TABLE dbo.BindingLog (
   event_hash    CHAR(32)      NOT NULL,
   extra         NVARCHAR(MAX) NULL
 );
+IF COL_LENGTH('dbo.BindingLog','software_partition') IS NULL
+  ALTER TABLE dbo.BindingLog ADD software_partition NVARCHAR(10) NULL;
+IF COL_LENGTH('dbo.BindingLog','method_no') IS NULL
+  ALTER TABLE dbo.BindingLog ADD method_no NVARCHAR(100) NULL;
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UX_BindingLog_event_hash')
   CREATE UNIQUE INDEX UX_BindingLog_event_hash ON dbo.BindingLog(event_hash);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_BindingLog_target_code')
@@ -33,6 +39,14 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_BindingLog_recommend_sou
   CREATE INDEX IX_BindingLog_recommend_source
     ON dbo.BindingLog(method, source, target_kind, id)
     INCLUDE(project_id, target_code);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_BindingLog_partition_entry')
+  CREATE INDEX IX_BindingLog_partition_entry
+    ON dbo.BindingLog(software_partition, method_no, target_kind, entry_code, target_code)
+    INCLUDE(entry_name);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_BindingLog_partition_source')
+  CREATE INDEX IX_BindingLog_partition_source
+    ON dbo.BindingLog(software_partition, source, target_kind, id)
+    INCLUDE(project_id, target_code, method_no);
 
 IF OBJECT_ID('dbo.QuantityAlias') IS NULL
 CREATE TABLE dbo.QuantityAlias (
@@ -69,6 +83,7 @@ CREATE TABLE dbo.QuotaBoxTarget (
 
 IF OBJECT_ID('dbo.SignatureBoxMap') IS NULL
 CREATE TABLE dbo.SignatureBoxMap (
+  software_partition NVARCHAR(10) NOT NULL,
   signature       NVARCHAR(450) NOT NULL,
   method          NVARCHAR(50) NOT NULL DEFAULT(''),
   box_id          NVARCHAR(64) NOT NULL,
@@ -77,32 +92,16 @@ CREATE TABLE dbo.SignatureBoxMap (
   corrected_count INT NOT NULL DEFAULT(0),
   rejected_count  INT NOT NULL DEFAULT(0),
   last_used_at    DATETIME2(0) NULL,
-  CONSTRAINT PK_SignatureBoxMap PRIMARY KEY (signature, method, box_id)
+  CONSTRAINT PK_SignatureBoxMap PRIMARY KEY (software_partition, signature, box_id)
 );
+IF COL_LENGTH('dbo.SignatureBoxMap','software_partition') IS NULL
+  ALTER TABLE dbo.SignatureBoxMap ADD software_partition NVARCHAR(10) NULL;
 IF COL_LENGTH('dbo.SignatureBoxMap','method') IS NULL
-  ALTER TABLE dbo.SignatureBoxMap ADD method NVARCHAR(50) NOT NULL
-    CONSTRAINT DF_SignatureBoxMap_method DEFAULT('');
-IF NOT EXISTS (
-  SELECT 1
-  FROM sys.key_constraints kc
-  JOIN sys.index_columns ic ON ic.object_id=kc.parent_object_id AND ic.index_id=kc.unique_index_id
-  JOIN sys.columns c ON c.object_id=ic.object_id AND c.column_id=ic.column_id
-  WHERE kc.parent_object_id=OBJECT_ID('dbo.SignatureBoxMap') AND kc.type='PK' AND c.name='method'
-)
-BEGIN
-  DECLARE @SignatureBoxMapPk SYSNAME;
-  SELECT @SignatureBoxMapPk=kc.name
-  FROM sys.key_constraints kc
-  WHERE kc.parent_object_id=OBJECT_ID('dbo.SignatureBoxMap') AND kc.type='PK';
-  IF @SignatureBoxMapPk IS NOT NULL
-  BEGIN
-    DECLARE @DropSignatureBoxMapPk NVARCHAR(MAX);
-    SET @DropSignatureBoxMapPk=N'ALTER TABLE dbo.SignatureBoxMap DROP CONSTRAINT ' + QUOTENAME(@SignatureBoxMapPk);
-    EXEC sys.sp_executesql @DropSignatureBoxMapPk;
-  END;
-  ALTER TABLE dbo.SignatureBoxMap
-    ADD CONSTRAINT PK_SignatureBoxMap PRIMARY KEY (signature, method, box_id);
-END;
+  ALTER TABLE dbo.SignatureBoxMap ADD method NVARCHAR(50) NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_SignatureBoxMap_partition')
+  CREATE INDEX IX_SignatureBoxMap_partition
+    ON dbo.SignatureBoxMap(software_partition, signature, box_id)
+    INCLUDE(method, weight, accepted_count, corrected_count, rejected_count, last_used_at);
 
 IF OBJECT_ID('dbo.QuantityFormulaRule') IS NULL
 CREATE TABLE dbo.QuantityFormulaRule (
@@ -113,11 +112,17 @@ CREATE TABLE dbo.QuantityFormulaRule (
   target_unit      NVARCHAR(50) NOT NULL,
   formula_template NVARCHAR(2000) NOT NULL,
   method           NVARCHAR(50) NOT NULL DEFAULT(''),
+  software_partition NVARCHAR(10) NOT NULL,
+  method_no        NVARCHAR(100) NOT NULL,
   entry_code       NVARCHAR(100) NOT NULL DEFAULT(''),
   sample_count     INT NOT NULL DEFAULT(0),
   first_seen       DATETIME2(0) NULL,
   last_seen        DATETIME2(0) NULL
 );
+IF COL_LENGTH('dbo.QuantityFormulaRule','software_partition') IS NULL
+  ALTER TABLE dbo.QuantityFormulaRule ADD software_partition NVARCHAR(10) NULL;
+IF COL_LENGTH('dbo.QuantityFormulaRule','method_no') IS NULL
+  ALTER TABLE dbo.QuantityFormulaRule ADD method_no NVARCHAR(100) NULL;
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_QuantityFormulaRule_lookup')
   CREATE INDEX IX_QuantityFormulaRule_lookup
     ON dbo.QuantityFormulaRule(anchor_signature, target_code, target_unit, method);
@@ -125,6 +130,10 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_QuantityFormulaRule_meth
   CREATE INDEX IX_QuantityFormulaRule_method
     ON dbo.QuantityFormulaRule(method, target_code)
     INCLUDE(anchor_signature, target_kind, target_unit, formula_template, entry_code, sample_count, last_seen);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_QuantityFormulaRule_partition')
+  CREATE INDEX IX_QuantityFormulaRule_partition
+    ON dbo.QuantityFormulaRule(software_partition, method_no, anchor_signature, target_code, target_unit)
+    INCLUDE(target_kind, formula_template, entry_code, sample_count, last_seen);
 
 IF OBJECT_ID('dbo.QuantityFormulaOperand') IS NULL
 CREATE TABLE dbo.QuantityFormulaOperand (
@@ -187,6 +196,8 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_SheetTemplateRow_sheet')
 
 IF OBJECT_ID('dbo.SignatureEntryMap') IS NULL
 CREATE TABLE dbo.SignatureEntryMap (
+  software_partition NVARCHAR(10) NOT NULL,
+  method_no     NVARCHAR(100) NOT NULL,
   signature    NVARCHAR(450) NOT NULL,
   target_code  NVARCHAR(100) NOT NULL,
   method       NVARCHAR(50) NOT NULL DEFAULT(''),
@@ -194,20 +205,38 @@ CREATE TABLE dbo.SignatureEntryMap (
   entry_name   NVARCHAR(500) NOT NULL DEFAULT(''),
   sample_count INT NOT NULL DEFAULT(0),
   last_used_at DATETIME2(0) NULL,
-  CONSTRAINT PK_SignatureEntryMap PRIMARY KEY (signature, target_code, method, entry_code)
+  CONSTRAINT PK_SignatureEntryMap PRIMARY KEY (software_partition, method_no, signature, target_code, entry_code)
 );
+IF COL_LENGTH('dbo.SignatureEntryMap','software_partition') IS NULL
+  ALTER TABLE dbo.SignatureEntryMap ADD software_partition NVARCHAR(10) NULL;
+IF COL_LENGTH('dbo.SignatureEntryMap','method_no') IS NULL
+  ALTER TABLE dbo.SignatureEntryMap ADD method_no NVARCHAR(100) NULL;
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_SignatureEntryMap_method')
   CREATE INDEX IX_SignatureEntryMap_method
     ON dbo.SignatureEntryMap(method, target_code)
     INCLUDE(signature, entry_code, entry_name, sample_count, last_used_at);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_SignatureEntryMap_partition')
+  CREATE INDEX IX_SignatureEntryMap_partition
+    ON dbo.SignatureEntryMap(software_partition, method_no, target_code)
+    INCLUDE(signature, entry_code, entry_name, sample_count, last_used_at);
 
 IF OBJECT_ID('dbo.EngineeringTemplate') IS NULL
 CREATE TABLE dbo.EngineeringTemplate (
+  software_partition NVARCHAR(10) NOT NULL,
+  method_no        NVARCHAR(100) NOT NULL,
   method           NVARCHAR(50) NOT NULL,
   engineering_type NVARCHAR(50) NOT NULL,
   entry_code       NVARCHAR(100) NOT NULL,
   box_id           NVARCHAR(64) NOT NULL,
   sample_count     INT NOT NULL DEFAULT(0),
   last_seen        DATETIME2(0) NULL,
-  CONSTRAINT PK_EngineeringTemplate PRIMARY KEY (method, engineering_type, entry_code, box_id)
+  CONSTRAINT PK_EngineeringTemplate PRIMARY KEY (software_partition, method_no, engineering_type, entry_code, box_id)
 );
+IF COL_LENGTH('dbo.EngineeringTemplate','software_partition') IS NULL
+  ALTER TABLE dbo.EngineeringTemplate ADD software_partition NVARCHAR(10) NULL;
+IF COL_LENGTH('dbo.EngineeringTemplate','method_no') IS NULL
+  ALTER TABLE dbo.EngineeringTemplate ADD method_no NVARCHAR(100) NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_EngineeringTemplate_partition')
+  CREATE INDEX IX_EngineeringTemplate_partition
+    ON dbo.EngineeringTemplate(software_partition, method_no, engineering_type, entry_code, box_id)
+    INCLUDE(method, sample_count, last_seen);

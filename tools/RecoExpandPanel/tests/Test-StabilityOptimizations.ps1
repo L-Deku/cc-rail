@@ -30,15 +30,17 @@ $autoMatch = Read-Source 'tools\RecoExpandPanel\AutoMatchFeature.cs'
 $formPanel = Read-Source 'tools\RecoExpandPanel\FormPanel.cs'
 $agentExecutor = Read-Source 'tools\RecoExpandPanel\AgentExecutor.cs'
 $chapterTool = Read-Source 'tools\ChapterQuotaLibrary\ChapterQuotaLibrary.cs'
+$localMappingStore = Read-Source 'RecoShared\LocalMappingFileStore.cs'
 
-Assert-Contains $mappingStore 'private static bool TryWithMappingBoxesLock(Action action, int timeoutMilliseconds)' 'MappingStore has no testable lock-timeout guard.'
-Assert-Contains $mappingStore 'if (!TryWithMappingBoxesLock(delegate' 'MappingStore still writes after a mutex timeout.'
-Assert-Contains $mappingStore 'File.Replace(temp, filePath, backup, true);' 'MappingStore does not atomically replace the mapping file with a backup.'
-Assert-NotContains $mappingStore "File.Delete(path);`r`n            }`r`n            File.Move(temp, path);" 'MappingStore still deletes the live file before moving the replacement.'
-
-Assert-Contains $excelLink 'private static bool TryWithMappingBoxesLock(Action action, int timeoutMilliseconds)' 'RecoExpandPanel mapping feedback has no lock-timeout guard.'
-Assert-Contains $excelLink 'WriteAllLinesAtomic(path, rows.Select(ToFlatJson).ToArray(), Encoding.UTF8);' 'RecoExpandPanel mapping feedback is not written atomically.'
-Assert-Contains $chapterTool 'throw new TimeoutException("Timed out waiting for mapping-boxes lock.");' 'ChapterQuotaLibrary still continues after a mapping lock timeout.'
+Assert-Contains $mappingStore 'LocalMappingFileStore.Save(path, softwarePartition, sourceOperation, 5000' 'MappingStore does not use the shared mapping-file writer.'
+Assert-Contains $excelLink 'LocalMappingFileStore.Save(path, partition, sourceOperation, 5000' 'RecoExpandPanel mapping feedback does not use the shared mapping-file writer.'
+Assert-NotContains $mappingStore 'TryWithMappingBoxesLock' 'MappingStore reintroduced a private competing mapping-file lock path.'
+Assert-NotContains $excelLink 'private static bool TryWithMappingBoxesLock' 'RecoExpandPanel reintroduced a private competing mapping-file lock path.'
+Assert-Contains $localMappingStore 'internal const string MutexName = "RecoQuotaData.mapping-boxes.lock";' 'Shared mapping-file mutex name is missing.'
+Assert-Contains $localMappingStore 'acquired = mutex.WaitOne(timeoutMilliseconds);' 'Shared mapping-file lock-timeout guard is missing.'
+Assert-Contains $localMappingStore 'File.Replace(temp, path, null, true);' 'Shared mapping-file writer does not atomically replace the live file.'
+Assert-NotContains $localMappingStore 'File.Delete(path)' 'Shared mapping-file writer deletes the live file before replacement.'
+Assert-Contains $chapterTool 'throw new TimeoutException("TagMappingBoxes' 'ChapterQuotaLibrary still continues after a mapping lock timeout.'
 
 Assert-Contains $excelLink 'private static WeakReference CachedSpreadsheetApplication' 'Excel/WPS application cache still keeps a strong global COM reference.'
 Assert-NotContains $excelLink 'private static object CachedSpreadsheetApplication;' 'Strong Excel/WPS application cache was reintroduced.'
@@ -73,12 +75,10 @@ Assert-Contains $referencePool 'private static readonly object ReferenceDataCach
 Assert-Contains $formPanel 'private const int InstalledPollIntervalMs = 15000;' 'Installed menu polling was not reduced to 15 seconds.'
 Assert-Contains $formPanel 'installTimer.Interval = InstalledPollIntervalMs;' 'The installer timer never switches to the steady-state interval.'
 Assert-Contains $formPanel 'mainForm.FormClosed += InstalledMainFormClosed;' 'The installer timer is not tied to the host form lifetime.'
-Assert-Contains $agentExecutor 'private static readonly HashSet<string> AgentCloneConnectionFailures' 'Known clone-connection failures are not cached.'
-Assert-Contains $agentExecutor 'AgentCloneConnectionFailures.Add(connectionKey);' 'A successful fallback does not cache the failed clone identity.'
-$fallbackOpen = $agentExecutor.IndexOf('fallbackConn.Open();', [StringComparison]::Ordinal)
-$cacheFailure = $agentExecutor.IndexOf('AgentCloneConnectionFailures.Add(connectionKey);', [StringComparison]::Ordinal)
-if ($fallbackOpen -lt 0 -or $cacheFailure -lt $fallbackOpen) {
-    throw 'Clone failure is cached before the fallback connection succeeds.'
+Assert-Contains $agentExecutor 'private static SqlConnection GetOpenProjectConnection(Form mainForm)' 'Read-only UI paths cannot reuse the open host project connection.'
+Assert-Contains $agentExecutor 'EnsureOpen(conn);' 'Closed host project connections are not safely reopened on the same connection.'
+if ($agentExecutor -match 'AgentDbPassword|fallbackConn\.Open\(\)|User ID=|Password=') {
+    throw 'An insecure project-connection fallback was reintroduced.'
 }
 
 Write-Host 'PASS: storage safety, shared snapshots, and steady-state retry guards are present.'

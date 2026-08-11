@@ -42,6 +42,7 @@ Desktop.ini
 
 # ChapterQuotaLibrary scan outputs (regenerable; raw dumps can exceed GitHub size limits)
 /tools/ChapterQuotaLibrary/reports/
+/tools/RecoLearning/migration-state/
 
 # Decompiled or extracted temporary sources
 /extracted-src/

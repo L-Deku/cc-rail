@@ -38,6 +38,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 
 - 每次构建或部署插件后，如果 `release/同事插件分层发布/` 已存在，必须同步更新对应功能的首次安装包和 `90-后续更新文件`，重新生成 `文件清单-SHA256.txt`，并验证发布包 DLL 与 `RecoQuotaRecommend/bin/` 源 DLL 哈希一致；这一步只更新工作区内的发布包，不得同步“同事电脑模拟目录”。仅更新 `RecoExpandPanel.dll` 时不得重建或复制 `RecoQuotaData`、其他插件 DLL 或同事数据；给已安装插件的同事发送时，只发送 `90-后续更新文件/综合扩展更新/RecoExpandPanel.dll`。
 - 每次修改插件并部署后，必须同步刷新发布包 `release/同事插件分层发布`（`pwsh -File tools/BuildColleaguePluginRelease.ps1 -Force`），使发布包始终等于当前最新构建；发布包与同事模拟目录是两回事，刷新发布包时绝不触碰同事模拟目录。
+- 核对或备份发布包 DLL 时，先用 `rg --files -uu release/同事插件分层发布` 枚举当前实际路径，不得硬编码或猜测历史分层目录名。
 - 当用户明确说准备给同事发布，或询问“同步最新功能需要把发布包的哪些文件发给同事”时，先对比发布包与同事模拟目录的版本/哈希，列出应发文件；只有在用户明确同意后，才把这些文件同步到 `D:\AI文件\同事模拟目录`，并验证它与当次实际发送文件的哈希一致；未经明确同意不得复制 `RecoQuotaData` 或其他同事数据。同事模拟目录只有在“用户真的把文件发给同事”这一刻才更新，这样它才真实反映同事手里的版本。
 - 运行构建部署前先确认目标软件主程序已关闭；`RejjNet2020.exe`、`ReJJGSNet2024.exe` 等进程占用插件 DLL 时，`Copy-Item` 会因文件被占用而部署失败。
 - 构建用于部署或发布的 `RecoExpandPanel.dll` 前，如果 `tools/RecoExpandPanel/` 还存在本任务范围外的未提交修改，必须从当前已确认提交生成干净源码快照后编译；不得把并行工作或用户未确认的工作树改动混入发布 DLL，也不得还原这些未提交修改。
@@ -60,7 +61,10 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - PowerShell 直接调用 `csc.exe` 时，先把输出和引用文件路径赋给变量，再传 `/out:$变量`、`/reference:$变量`；不要写 `/out:(Join-Path ...)` 或 `/reference:(Join-Path ...)`，否则 `csc` 会收到空路径参数。
 - Windows PowerShell 5 中不得用 `Group-Object -Property <键名>` 对哈希表键值去重；其属性适配可能把不同键值并入空组。重建目标集合时应显式用索引取值和 `HashSet` 去重，并在 Windows PowerShell 5 下做多目标行为测试。
 - SQL Server 结构迁移需要动态删除约束时，不要在 `EXEC(...)` 参数中直接拼接 `REPLACE`/`QUOTENAME` 等函数；先组装到 `NVARCHAR(MAX)` 变量，再用 `sys.sp_executesql` 执行，并重跑幂等 schema 脚本验证。
+- Windows PowerShell 5 中用 `[IO.File]::Replace` 原子更新已有状态文件时，不要把备份路径传 `$null`；应使用同目录唯一临时旧版路径，提交后清理，并用“首次写入 + 已有文件替换 + 无临时残留”运行态测试验证。备份已成功而状态落盘失败的恢复流程必须重新验证服务器侧备份且禁止覆盖已有备份。
 - `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 默认加载 `RecoQuotaRecommend/bin/RecoExpandPanel.dll`，不会自动编译当前源码；做源码级红绿回归时，应先把 `tools/RecoExpandPanel/` 当前全部 C# 源文件编译到工作区验证目录并设置 `RECO_EXPAND_DLL`，避免把旧 DLL 的结果误判为新代码结果。
+- `build.ps1 -BuildOnly` 输出目录按白名单只含两个插件 DLL 和清单，不携带 NPOI 运行依赖；反射测试新 `RecoExpandPanel.dll` 前应在工作区 `artifacts/test-runtime/` 创建隔离测试目录，仅复制该 DLL 与既有 NPOI 依赖。测试依赖不得复制到运行目录或发布包。
+- BuildOnly 清单中的源码哈希必须来自实际传给编译器的只读快照，不得在编译后重新哈希可能已被并行修改的工作树原文件；`source_commit` 只表示基线 HEAD，dirty 工作树必须另行显式标记。
 - `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 在非交互 WinForms 环境可能卡在“定额候选下拉与组件组界面确认”之后的滚动视口用例；连续停在该位置时应按“综合回归未完成”报告，终止并核对本次测试启动的精确进程，不得把前半段 PASS 当作全部通过，也不要反复无上限重跑。
 - 读取 UTF-8 附件或中文文本时，如 PowerShell `Get-Content` 输出乱码，先设置 `[Console]::OutputEncoding`，并优先用 `[System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes(...))` 按字节解码验证内容。
 - PowerShell 部署/验证脚本需要格式化多段 `foreach` 输出时，优先先收集到数组或 `List[object]` 再统一 `Format-Table`；不要把脚本块闭合后直接接管道，容易触发 `An empty pipe element is not allowed` 解析错误。
@@ -70,6 +74,8 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - GitHub 推送报 `Failed to connect ... via 127.0.0.1` 时，先分别检查 Git `http.proxy`/`https.proxy` 与 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 环境变量；若本地代理端口失效或不一致，先在单次命令中临时清空环境代理并用 `git -c http.proxy= -c https.proxy=` 做 `ls-remote` 直连验证；不要未经用户确认修改全局代理配置。
 - Git 暂存范围包含中文或其他非 ASCII 路径时，使用 `git -c core.quotepath=false diff --cached --name-only` 获取可比较的真实路径；不要直接比较默认的八进制转义输出。
 - PowerShell 接收原生命令输出后需要使用 `.Count` 或 `[0]` 校验时，应写成 `[string[]]$items = @(...)`；单行输出若保留为普通字符串，`[0]` 只会得到首字符，可能造成错误的范围校验失败。
+- Windows PowerShell 5 中通过 `if/else` 表达式返回集合并赋值时，单元素结果也会被自动拆成标量；后续依赖 `.Count` 或乘法计数的变量应先声明为 `[object[]]`，再在分支内用 `@(...)` 赋值。
+- Windows PowerShell 5 把 `System.Collections.Generic.List[object]` 放入哈希表/JSON 对象时，不要用 `@($list)` 包装，可能报 `Argument types do not match`；应显式调用 `$list.ToArray()`，并在 PS5 下运行真实序列化测试。
 - Windows 上用 `git archive` + `tar` 生成干净构建快照时，如果仓库包含大量中文文件名，应把归档范围限制为实际参与构建的源码子树（如 `tools/RecoExpandPanel`），并核对源码文件数量；不要无条件归档整个仓库，避免 `tar` 因中文路径解码失败。
 - 修改已含中文字符串的 C# 源码时，避免用 PowerShell `Set-Content` 默认编码整文件重写；优先用补丁方式，必要时用 `.NET UTF8Encoding(false)` 并把新增中文字符串写成 `\u` 转义，防止产生无关编码差异。
 - 新增或修复绑定学习字段时，必须按“数据源 -> 预览对象 -> `ExcelQuotaLink` XML -> `mapping-boxes.jsonl` -> `BindingLog`/聚合表 -> 推荐读取”逐段核对；Excel 工程量单位与定额目标单位要分别做回归，不能因预览对象已有字段就认定持久化链已传递。
@@ -84,6 +90,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 绑定学习的聚合签名只使用归一化工程量名称（兼容 `名称|`），Excel 工程量单位仅作流水审计；推荐数量必须用当前 Excel 单位和当前运行版本定额单位现场换算，不得学习或复用原绑定表达式中的 `/1000`、`*1.05` 等运算。多单元格正向加项只拆工程量别名，各别名指向原表达式的完整组件框；组件内目标共用同一套编制办法，但稳定条目必须按目标分别保存，同一原始表达式不得因目标条目不同而拆散组件。
 - 跨量纲业务换算不得简化成历史单元格地址或一次性结果；应保存 `V0/V1...` 参数公式及每个参数的名称、单位和名称级签名。推荐时只用当前表同章节、邻近行内精确且唯一的参数重新计算；缺参数、同名歧义或单位不兼容时必须取消自动勾选。`F10/1000+F11/1000` 仍按独立正向别名学习，不得因此生成共享公式或跨行合计。
 - C# 5 代码中不要在 `||`/`&&` 短路条件里依赖 `out` 参数一定赋值；用于错误文案的 `out` 变量先给默认值，避免 `CS0165`。
+- 插件访问当前项目数据库时，不得从宿主已脱敏的 `ConnectionString` 克隆新连接，不得恢复备用账号、保存密码或依赖 `Persist Security Info`。UI 线程路径只借用宿主当前 `SqlConnection`，不得 `using`、`Dispose`、`Close` 或 `ChangeDatabase`；后台任务只把短数据库阶段同步调度到 UI 线程，网络请求继续留在后台。预览、执行、撤销和重做必须同时保存并核对连接对象引用与不含密码的 `DataSource|Database` 身份，项目切换后拒绝旧计划。
 - 用 Windows PowerShell 5 反射调用 WinForms 私有构造器做冒烟测试时，先设 `$ErrorActionPreference = 'Stop'`，并把 `New-Object` 返回控件的 `.PSObject.BaseObject` 传给反射 API；泛型 `List<T>`、`HashSet<T>` 等参数也要拆包，否则类型包装错误可能只产生非终止错误并让命令假通过。反射方法只接收一个泛型集合参数时，不要直接用 `[object[]]@($list)`，应先创建长度为 1 的 `object[]` 再将 `.PSObject.BaseObject` 赋给第 0 项，避免 PowerShell 把集合展开成多个参数。反射读取 `List<T>` 后若经辅助函数返回并继续使用 `.Count`/索引，辅助函数应使用 `Write-Output -NoEnumerate`，避免单元素集合被自动展开成标量。
 - 2024 软件预算项目输入 2020 概算/估算定额时，首要检查 `项目设置 -> 定额选择` 是否勾选了迁移书号，或数据库 `项目信息.标准定额应用` 是否包含对应书号。未勾选时会出现“定额编号无效或费用类型不匹配”、计算单价为 0 或“无法找到定额消耗数据”等现象；勾选后 2024 原生辅助查询、输入和计算即可使用迁移定额。
 - 2020 概算/估算定额迁移到 2024 后，正式方案不需要给 2024 客户端部署兼容插件或 Harmony/Prefix 钩子。不得把钩子部署到 `RecoNet.DEBase.FindDe` 作为正式方案；实测 `FindDe_Patch1` 会影响原预算查询/输入并触发运行时异常。每次发布前必须回归验证 `LY_2024`、`DY_2024` 等原预算定额的查询、输入和计算。
@@ -95,24 +102,16 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 
 ## 数据存储规则
 
-- 第一版主链路使用本地文件，不依赖 Supabase。
-- 全量索引缓存位置：
-  - `铁路基本建设工程投资控制系统2020网络版V0503021201/RecoQuotaData/quota-index.jsonl`
-  - `铁路基本建设工程投资控制系统2020网络版V0503021201/RecoQuotaData/material-index.jsonl`
-  - `铁路基本建设工程投资控制系统2020网络版V0503021201/RecoQuotaData/mapping-boxes.jsonl`
-- `quota-index.jsonl` 存预算定额索引。
-- `material-index.jsonl` 存材料索引。
-- `mapping-boxes.jsonl` 存人工扶正后的“工程量表达 -> 一组定额/材料”组件框。
-- 保留旧 `learning.jsonl` 兼容和备份，不要擅自删除。
-- 不要直接写入铁路投资控制系统业务数据库；当前流程仍通过剪贴板粘贴。
+- 推荐关系、绑定组件和换算公式只允许存入并从 `RecoLearning` SQL 学习库读取；不得恢复 `mapping-boxes.jsonl`、`learning.jsonl`、pending overlay、outbox、dead-letter 或其他本地学习/配对回退。
+- `quota-index*.jsonl` 与 `material-index*.jsonl` 仅是定额/材料名称、单位等索引，不是学习关系库；可以保留用于元数据补齐或普通候选检索，但不得据此恢复本地绑定配对。
+- 代理不得直接执行 SQL 修改铁路投资控制系统业务数据库。用户在软件界面主动点击插件写入功能并完成确认后，插件可以通过安全借用宿主当前项目连接或软件原生写入机制修改当前项目；代理不得代点。
+- 已完成的 D0–D4、原数据库迁移、既有 DLL 部署和双软件分区数据生成均视为冻结证据；后续代码修复不得顺带重跑迁移、重建聚合或重新生成既有迁移数据，除非用户针对新的维护窗口再次明确授权。
 
 ## 检索规则
 
-- 推荐优先级：
-  1. 先查 `mapping-boxes` 人工扶正学习库。
-  2. 未命中时查 `quota-index` 全量定额索引。
-  3. 仍未命中时可参考旧学习样本，但不能让旧样本覆盖人工扶正框。
-  4. 没有可靠结果时返回空定额，等待人工扶正。
+- 推荐组件和可信换算公式先按当前 `software_partition`、办法、条目及目标身份查询 `RecoLearning`；SQL 未命中或不可用时不得回退本地学习文件。
+- `quota-index`/`material-index` 可用于目标编号已确定后的名称、单位补齐及普通检索，但不能生成或替代 SQL 学习组件关系。
+- 没有可靠 SQL 关系或候选时返回空定额，等待人工扶正或既有 SQL 接受回流。
 - 普通关键词检索只返回 1 条最优定额。
 - 普通关键词检索不能返回材料；材料只能通过人工扶正后的组件框出现。
 - 推荐展示以定额编号为主，同时展示定额名称、单位和换算后数量。

@@ -7,7 +7,7 @@ if ([String]::IsNullOrWhiteSpace($env:RECO_EXPAND_DLL) -or [String]::IsNullOrWhi
 
 $expandAssembly = [System.Reflection.Assembly]::LoadFrom($env:RECO_EXPAND_DLL)
 $quotaAssembly = [System.Reflection.Assembly]::LoadFrom($env:RECO_QUOTA_DLL)
-$flags = [System.Reflection.BindingFlags]'NonPublic,Static,Public'
+$flags = [System.Reflection.BindingFlags]'NonPublic,Static,Public,Instance'
 
 Add-Type -TypeDefinition @'
 using System;
@@ -37,48 +37,46 @@ public static class NamedMutexProbe
 }
 '@
 
-function Assert-LockTimeoutDoesNotRun($type, [string]$label) {
-    $method = $type.GetMethod('TryWithMappingBoxesLock', $flags)
+function Assert-SharedLockTimeoutDoesNotWrite($assembly, [string]$label, [string]$path) {
+    $type = $assembly.GetType('LocalMappingFileStore', $true)
+    $method = $type.GetMethod('Save', $flags)
     if ($null -eq $method) {
-        throw "$label lock helper was not found."
+        throw "$label shared mapping save helper was not found."
     }
 
+    $before = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
     $thread = [NamedMutexProbe]::Hold('RecoQuotaData.mapping-boxes.lock', 400)
     if (-not [NamedMutexProbe]::Ready.WaitOne(2000)) {
         throw "$label mutex holder did not start."
     }
 
-    $script:lockActionRan = $false
-    $action = [Action]{ $script:lockActionRan = $true }
-    $result = [bool]$method.Invoke($null, @($action, 50))
+    $arguments = New-Object object[] 5
+    $arguments[0] = $path
+    $arguments[1] = '2024'
+    $arguments[2] = 'storage-safety-test'
+    $arguments[3] = 50
+    $arguments[4] = $null
+    $result = $method.Invoke($null, $arguments)
     $thread.Join()
-    if ($result -or $script:lockActionRan) {
-        throw "$label executed its write action after a lock timeout."
+    if ($null -eq $result) {
+        throw "$label shared mapping save returned null: $($method.ToString())."
+    }
+    $status = [string]$result.GetType().GetField('Status', $flags).GetValue($result)
+    $after = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+    if ($status -ne 'LockTimeout' -or $after -ne $before) {
+        throw "$label did not preserve the file after a shared-lock timeout: status=$status."
     }
 }
 
-$mappingType = $quotaAssembly.GetType('RecoQuotaRecommend.MappingStore', $true)
 $formType = $expandAssembly.GetType('RecoNet.FormPanel', $true)
-Assert-LockTimeoutDoesNotRun $mappingType 'MappingStore'
-Assert-LockTimeoutDoesNotRun $formType 'RecoExpandPanel'
 
 $work = Join-Path $env:TEMP ('reco-storage-test-' + [Guid]::NewGuid().ToString('N'))
 [System.IO.Directory]::CreateDirectory($work) | Out-Null
 try {
     $path = Join-Path $work 'mapping-boxes.jsonl'
     [System.IO.File]::WriteAllText($path, 'old', [System.Text.Encoding]::UTF8)
-    $atomicWrite = $formType.GetMethod('WriteAllLinesAtomic', $flags)
-    $writeArgs = New-Object object[] 3
-    $writeArgs[0] = [string]$path
-    $writeArgs[1] = [string[]]@('new')
-    $writeArgs[2] = [System.Text.Encoding]::UTF8
-    $atomicWrite.Invoke($null, $writeArgs) | Out-Null
-    if (([System.IO.File]::ReadAllText($path)).Trim() -ne 'new') {
-        throw 'Atomic mapping write did not publish the new file.'
-    }
-    if (-not [System.IO.File]::Exists($path + '.bak') -or ([System.IO.File]::ReadAllText($path + '.bak')).Trim() -ne 'old') {
-        throw 'Atomic mapping write did not preserve the previous file as .bak.'
-    }
+    Assert-SharedLockTimeoutDoesNotWrite $quotaAssembly 'MappingStore' $path
+    Assert-SharedLockTimeoutDoesNotWrite $expandAssembly 'RecoExpandPanel' $path
 
     foreach ($pair in @(
         @($formType, 'RecoExpandPanel'),
@@ -102,4 +100,4 @@ finally {
     }
 }
 
-Write-Host 'PASS: lock timeout, atomic replacement backup, and log rotation.'
+Write-Host 'PASS: shared lock timeout preserves mapping file, and log rotation remains active.'

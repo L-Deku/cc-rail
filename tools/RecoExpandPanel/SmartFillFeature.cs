@@ -17,7 +17,7 @@ namespace RecoNet
 
         // ============ 智能铺量(学习库)漏斗匹配引擎 ============
         // 漏斗:①名称级签名 ②模糊候选(仅进下拉,不自动采纳) ③手挂。
-        // 数据源:RecoLearning(SQL);连不上时回退 mapping-boxes.jsonl(无条目知识)。
+        // 数据源只允许 RecoLearning(SQL)；SQL 不可用时停止配对并返回明确提示。
 
         private sealed class SmartBoxTarget
         {
@@ -31,7 +31,6 @@ namespace RecoNet
             public int AcceptedCount;
             public int CorrectedCount;
             public int RejectedCount;
-            public bool PendingLocal;
             public DateTime LastUsedAt;
             public List<SmartBoxTarget> Targets = new List<SmartBoxTarget>();
             public bool CurrentMethodMapping;
@@ -58,6 +57,7 @@ namespace RecoNet
             public bool HasCurrentMethodMapping;
             public bool PrefixMatch;
             public bool CurrentTargetsValid;
+            public bool EntryCandidatesTruncated;
             public List<SmartTargetEntryResolution> TargetEntries = new List<SmartTargetEntryResolution>();
         }
 
@@ -69,6 +69,7 @@ namespace RecoNet
             public long EntrySeq;
             public bool FromCurrentContext;
             public string Issue;
+            public int EvidenceScore;
         }
 
         private sealed class SmartLearningScope
@@ -113,7 +114,6 @@ namespace RecoNet
             public string EntryCode;
             public int SampleCount;
             public DateTime LastSeen;
-            public bool PendingLocal;
             public List<SmartFormulaOperand> Operands = new List<SmartFormulaOperand>();
         }
 
@@ -127,6 +127,9 @@ namespace RecoNet
         {
             public bool FromSql;
             public string Method = "";
+            public string SoftwarePartition = "";
+            public string MethodNo = "";
+            public SmartLearningScope SelectedScope = SmartLearningScope.CreateAll();
             public Dictionary<string, List<SmartMapEntry>> BySignature =
                 new Dictionary<string, List<SmartMapEntry>>(StringComparer.OrdinalIgnoreCase);
             public Dictionary<string, List<SmartMapEntry>> ByNameOnly =
@@ -288,11 +291,6 @@ namespace RecoNet
             if (!String.IsNullOrWhiteSpace(unit)) existing.Unit = unit;
         }
 
-        private static string BuildSmartLocalSignature(Dictionary<string, string> row)
-        {
-            return BuildSmartQuantitySignature(GetFlat(row, "quantity_name"), GetFlat(row, "quantity_unit"));
-        }
-
         private static string BuildSmartQuantitySignature(string quantityName, string quantityUnit)
         {
             string name = StripTrailingQuantityUnit(quantityName, quantityUnit);
@@ -314,106 +312,12 @@ namespace RecoNet
             return prefix.Length > 0 && suffix.Length > 0 && LooksLikeExcelLinkUnit(suffix) ? prefix : name;
         }
 
-        private static string BuildSmartLocalContextKey(string method, string entryCode)
-        {
-            string normalizedMethod = NormalizeSmartProjectMethod(method);
-            string normalizedEntry = (entryCode ?? "").Trim();
-            return normalizedMethod.Length == 0 || normalizedEntry.Length == 0 ? "" : normalizedMethod + "\n" + normalizedEntry;
-        }
-
-        private static void AddSmartLocalContext(SmartMapEntry entry, Dictionary<string, string> row)
-        {
-            if (entry == null || row == null) return;
-            string method = GetSmartLocalMethod(row);
-            string entryCode = GetFlat(row, "entry_code");
-            if (String.IsNullOrWhiteSpace(entryCode)) entryCode = GetFlat(row, "formula_entry_code");
-            string key = BuildSmartLocalContextKey(method, entryCode);
-            if (key.Length == 0) return;
-            entry.LocalContextKeys.Add(key);
-            string targetKey = BuildLearningTargetIdentityKey(GetFlat(row, "target_kind"), GetFlat(row, "target_code"),
-                GetFlat(row, "target_name"), GetFlat(row, "target_unit"));
-            if (String.IsNullOrWhiteSpace(targetKey)) return;
-            HashSet<string> targetContexts;
-            if (!entry.LocalContextKeysByTarget.TryGetValue(targetKey, out targetContexts))
-            {
-                targetContexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                entry.LocalContextKeysByTarget[targetKey] = targetContexts;
-            }
-            targetContexts.Add(key);
-        }
-
-        private static string GetSmartLocalMethod(Dictionary<string, string> row)
-        {
-            if (row == null) return "";
-            string method = GetFlat(row, "method");
-            if (String.IsNullOrWhiteSpace(method)) method = GetFlat(row, "formula_method");
-            return NormalizeSmartProjectMethod(method);
-        }
-
-        private static List<Dictionary<string, string>> SelectSmartLocalRowsForMethod(
-            IEnumerable<Dictionary<string, string>> rows, string method)
-        {
-            string currentMethod = NormalizeSmartProjectMethod(method);
-            List<Dictionary<string, string>> compatible = (rows ?? Enumerable.Empty<Dictionary<string, string>>())
-                .Where(row =>
-                {
-                    if (ReadFlatInt(row, "weight", 1) <= 0) return false;
-                    string rowMethod = GetSmartLocalMethod(row);
-                    return rowMethod.Length == 0 || String.Equals(rowMethod, currentMethod, StringComparison.OrdinalIgnoreCase);
-                }).ToList();
-            List<Dictionary<string, string>> exact = compatible.Where(row =>
-                !String.IsNullOrWhiteSpace(currentMethod) &&
-                String.Equals(GetSmartLocalMethod(row), currentMethod, StringComparison.OrdinalIgnoreCase)).ToList();
-            return exact.Count > 0 ? exact : compatible.Where(row => GetSmartLocalMethod(row).Length == 0).ToList();
-        }
-
         private static string ResolveSmartSqlSignature(string storedSignature, Dictionary<string, string> legacyAliases)
         {
             string mapped;
             if (legacyAliases != null && legacyAliases.TryGetValue(storedSignature ?? "", out mapped)) return mapped;
             string normalized = NormalizeSmartLearningSignature(storedSignature);
             return legacyAliases != null && legacyAliases.TryGetValue(normalized, out mapped) ? mapped : normalized;
-        }
-
-        private static void AddSmartLocalFormulaRule(SmartLearningSnapshot snapshot, Dictionary<string, string> row, string signature, bool pendingLocal)
-        {
-            string template = GetFlat(row, "formula_template");
-            int operandCount = ReadFlatInt(row, "formula_operand_count", 0);
-            if (String.IsNullOrWhiteSpace(template) || operandCount <= 0) return;
-            int sampleCount = Math.Max(1, ReadFlatInt(row, "accepted_count", 1));
-            DateTime lastSeen;
-            if (!DateTime.TryParse(GetFlat(row, "last_used_at"), out lastSeen)) lastSeen = DateTime.MinValue;
-            string kind = GetFlat(row, "target_kind");
-            string code = GetFlat(row, "target_code");
-            string targetUnit = GetFlat(row, "formula_target_unit");
-            string method = GetFlat(row, "formula_method");
-            string entryCode = GetFlat(row, "formula_entry_code");
-            string ruleRaw = signature + "|" + (String.IsNullOrWhiteSpace(kind) ? "quota" : kind) + ":" + code.ToUpperInvariant() + "|" +
-                NormalizeExcelLinkUnit(targetUnit) + "|" + template + "|" + method + "|" + entryCode;
-            List<SmartFormulaOperand> operands = new List<SmartFormulaOperand>();
-            for (int operandIndex = 0; operandIndex < operandCount; operandIndex++)
-            {
-                string prefix = "formula_operand_" + operandIndex.ToString(CultureInfo.InvariantCulture) + "_";
-                SmartFormulaOperand operand = new SmartFormulaOperand
-                {
-                    Index = operandIndex,
-                    Signature = NormalizeSmartLearningSignature(GetFlat(row, prefix + "signature")),
-                    Name = GetFlat(row, prefix + "name"),
-                    Unit = NormalizeExcelLinkUnit(GetFlat(row, prefix + "unit"))
-                };
-                if (String.IsNullOrWhiteSpace(operand.Signature.Trim('|'))) return;
-                operands.Add(operand);
-                ruleRaw += "|" + operand.Signature + "@" + operand.Unit;
-            }
-            string ruleHash = GetFlat(row, "formula_rule_hash");
-            if (String.IsNullOrWhiteSpace(ruleHash)) ruleHash = BuildLearningMd5(ruleRaw);
-            SmartFormulaRule rule = AddSmartFormulaRule(snapshot, ruleHash, signature, kind, code, targetUnit,
-                template, method, entryCode, sampleCount, lastSeen);
-            if (rule != null)
-            {
-                if (rule.Operands.Count == 0) rule.Operands.AddRange(operands);
-                if (pendingLocal) rule.PendingLocal = true;
-            }
         }
 
         // 保留项目信息.编制办法文号的原始办法身份；学习与参考库分区由 ResolveSmartMethodRoute 分别解析。
@@ -484,22 +388,25 @@ namespace RecoNet
             bool learningDbAccessStarted = false;
             try
             {
-                using (SqlConnection projectConn = AgentCreateWorkConnection(mainForm))
-                {
-                    method = SmartResolveProjectMethod(projectConn);
-                    route = ResolveSmartMethodRoute(method);
-                    Dictionary<string, long> ignored = LoadSmartProjectEntries(projectConn, out projectNames);
-                }
+                SqlConnection projectConn = GetOpenProjectConnection(mainForm);
+                method = SmartResolveProjectMethod(projectConn);
+                route = ResolveSmartMethodRoute(method);
+                Dictionary<string, long> ignored = LoadSmartProjectEntries(projectConn, out projectNames);
                 learningDbAccessStarted = true;
                 using (SqlConnection conn = new SqlConnection(GetLearningDbConnectionString()))
                 {
                     conn.Open();
+                    string softwarePartition = ResolveLearningSoftwarePartition();
+                    string normalizedMethodNo = NormalizeLearningMethodNo(route.MethodNo);
+                    if (!IsValidLearningSoftwarePartition(softwarePartition) || String.IsNullOrEmpty(normalizedMethodNo))
+                        throw new InvalidOperationException("学习分区或办法号无法识别");
                     HashSet<string> entryCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     using (SqlCommand cmd = conn.CreateCommand())
                     {
                         cmd.CommandTimeout = 15;
-                        cmd.CommandText = "SELECT DISTINCT entry_code FROM dbo.EngineeringTemplate WHERE method=@method AND entry_code<>''";
-                        cmd.Parameters.AddWithValue("@method", route.LearningMethod);
+                        cmd.CommandText = "SELECT DISTINCT entry_code FROM dbo.EngineeringTemplate WHERE software_partition=@software_partition AND method_no=@method_no AND entry_code<>''";
+                        cmd.Parameters.AddWithValue("@software_partition", softwarePartition);
+                        cmd.Parameters.AddWithValue("@method_no", normalizedMethodNo);
                         using (SqlDataReader reader = cmd.ExecuteReader())
                         {
                             while (reader.Read())
@@ -572,15 +479,16 @@ namespace RecoNet
             string methodNo, out string note)
         {
             note = null;
-            SmartLearningSnapshot snapshot = new SmartLearningSnapshot { Method = NormalizeSmartProjectMethod(learningMethod) };
-            try
+            SmartLearningSnapshot snapshot = new SmartLearningSnapshot
             {
-                // 推荐页每次打开都先尝试重放本机待同步批次；SQL 快照随后实时读取最新聚合。
-                ReplayPendingLearningDbEvents();
-            }
-            catch (Exception ex)
+                Method = NormalizeSmartProjectMethod(learningMethod),
+                SoftwarePartition = ResolveLearningSoftwarePartition(),
+                MethodNo = NormalizeLearningMethodNo(methodNo)
+            };
+            if (!IsValidLearningSoftwarePartition(snapshot.SoftwarePartition) || String.IsNullOrEmpty(snapshot.MethodNo))
             {
-                Log("Smart fill replay pending learning events failed: " + ex.Message);
+                note = "当前软件分区或编制办法无法识别，已禁止读取学习关系。";
+                return snapshot;
             }
             try
             {
@@ -619,9 +527,9 @@ namespace RecoNet
                             "SELECT m.signature, m.box_id, m.method, m.weight, m.accepted_count, m.corrected_count, m.rejected_count, " +
                             "t.target_kind, t.target_code, t.target_name, t.target_unit, m.last_used_at " +
                             "FROM dbo.SignatureBoxMap m JOIN dbo.QuotaBoxTarget t ON t.box_id = m.box_id " +
-                            "WHERE m.weight > 0 AND (m.method=@map_method OR m.method='') " +
-                            "ORDER BY CASE WHEN m.method=@map_method THEN 0 ELSE 1 END";
-                        cmd.Parameters.AddWithValue("@map_method", snapshot.Method ?? "");
+                            "WHERE m.weight > 0 AND m.software_partition=@software_partition " +
+                            "ORDER BY m.weight DESC, m.box_id";
+                        cmd.Parameters.AddWithValue("@software_partition", snapshot.SoftwarePartition);
                         using (SqlDataReader reader = cmd.ExecuteReader())
                         {
                             while (reader.Read())
@@ -629,8 +537,7 @@ namespace RecoNet
                                 string signature = ResolveSmartSqlSignature(reader.GetString(0), legacySignatureAliases);
                                 string boxId = reader.GetString(1);
                                 string mappingMethod = reader.IsDBNull(2) ? "" : NormalizeSmartProjectMethod(reader.GetString(2));
-                                bool currentMethodMapping = !String.IsNullOrWhiteSpace(snapshot.Method) &&
-                                    String.Equals(mappingMethod, snapshot.Method, StringComparison.OrdinalIgnoreCase);
+                                bool currentMethodMapping = true;
                                 string key = signature + "\n" + boxId;
                                 SmartMapEntry entry;
                                 if (!byKey.TryGetValue(key, out entry))
@@ -684,8 +591,9 @@ namespace RecoNet
                     {
                         cmd.CommandTimeout = 15;
                         cmd.CommandText =
-                            "SELECT box_id,entry_code FROM dbo.EngineeringTemplate WHERE method=@scope_method";
-                        cmd.Parameters.AddWithValue("@scope_method", snapshot.Method ?? "");
+                            "SELECT box_id,entry_code FROM dbo.EngineeringTemplate WHERE software_partition=@software_partition AND method_no=@method_no";
+                        cmd.Parameters.AddWithValue("@software_partition", snapshot.SoftwarePartition);
+                        cmd.Parameters.AddWithValue("@method_no", snapshot.MethodNo);
                         using (SqlDataReader reader = cmd.ExecuteReader())
                         {
                             while (reader.Read())
@@ -732,8 +640,9 @@ namespace RecoNet
                                 cmd.CommandTimeout = 15;
                                 cmd.CommandText =
                                     "SELECT rule_hash,anchor_signature,target_kind,target_code,target_unit,formula_template,method,entry_code,sample_count,last_seen " +
-                                    "FROM dbo.QuantityFormulaRule WHERE method=@method OR method=''";
-                                cmd.Parameters.AddWithValue("@method", snapshot.Method ?? "");
+                                    "FROM dbo.QuantityFormulaRule WHERE software_partition=@software_partition AND method_no=@method_no";
+                                cmd.Parameters.AddWithValue("@software_partition", snapshot.SoftwarePartition);
+                                cmd.Parameters.AddWithValue("@method_no", snapshot.MethodNo);
                                 using (SqlDataReader reader = cmd.ExecuteReader())
                                 {
                                     while (reader.Read())
@@ -751,8 +660,9 @@ namespace RecoNet
                                 cmd.CommandText =
                                     "SELECT o.rule_hash,o.operand_index,o.operand_signature,o.operand_name,o.operand_unit " +
                                     "FROM dbo.QuantityFormulaOperand o JOIN dbo.QuantityFormulaRule r ON r.rule_hash=o.rule_hash " +
-                                    "WHERE r.method=@method OR r.method='' ORDER BY o.rule_hash,o.operand_index";
-                                cmd.Parameters.AddWithValue("@method", snapshot.Method ?? "");
+                                    "WHERE r.software_partition=@software_partition AND r.method_no=@method_no ORDER BY o.rule_hash,o.operand_index";
+                                cmd.Parameters.AddWithValue("@software_partition", snapshot.SoftwarePartition);
+                                cmd.Parameters.AddWithValue("@method_no", snapshot.MethodNo);
                                 using (SqlDataReader reader = cmd.ExecuteReader())
                                 {
                                     while (reader.Read())
@@ -825,8 +735,9 @@ namespace RecoNet
                             cmd.CommandTimeout = 15;
                             cmd.CommandText =
                                 "SELECT signature, target_code, method, entry_code, entry_name, sample_count FROM dbo.SignatureEntryMap " +
-                                "WHERE method = @m3 OR method = ''";
-                            cmd.Parameters.AddWithValue("@m3", snapshot.Method);
+                                "WHERE software_partition=@software_partition AND method_no=@method_no";
+                            cmd.Parameters.AddWithValue("@software_partition", snapshot.SoftwarePartition);
+                            cmd.Parameters.AddWithValue("@method_no", snapshot.MethodNo);
                             using (SqlDataReader reader = cmd.ExecuteReader())
                             {
                                 while (reader.Read())
@@ -843,7 +754,7 @@ namespace RecoNet
                                         EntryCode = reader.GetString(3),
                                         EntryName = reader.GetString(4),
                                         ProjectCount = 10000 + reader.GetInt32(5),
-                                        CurrentMethodEvidence = String.Equals(reader.GetString(2), snapshot.Method, StringComparison.OrdinalIgnoreCase)
+                                        CurrentMethodEvidence = true
                                     });
                                 }
                             }
@@ -863,8 +774,10 @@ namespace RecoNet
                             cmd.CommandTimeout = 15;
                             cmd.CommandText =
                                 "SELECT target_code, project_id, extra FROM dbo.BindingLog " +
-                                "WHERE source = 'import:excel-links' AND project_id <> '' AND target_kind = 'quota' AND method = @m2 ORDER BY id";
-                            cmd.Parameters.AddWithValue("@m2", snapshot.Method);
+                                "WHERE source = 'import:excel-links' AND project_id <> '' AND target_kind = 'quota' " +
+                                "AND software_partition=@software_partition AND method_no=@method_no ORDER BY id";
+                            cmd.Parameters.AddWithValue("@software_partition", snapshot.SoftwarePartition);
+                            cmd.Parameters.AddWithValue("@method_no", snapshot.MethodNo);
                             using (SqlDataReader reader = cmd.ExecuteReader())
                             {
                                 while (reader.Read())
@@ -885,9 +798,10 @@ namespace RecoNet
                             cmd.CommandTimeout = 15;
                             cmd.CommandText =
                                 "SELECT target_code, entry_code, MAX(entry_name) AS entry_name, COUNT(*) AS n FROM dbo.BindingLog " +
-                                "WHERE entry_code <> '' AND target_kind = 'quota' AND (method = @method OR method = '') " +
+                                "WHERE entry_code <> '' AND target_kind = 'quota' AND software_partition=@software_partition AND method_no=@method_no " +
                                 "GROUP BY target_code, entry_code";
-                            cmd.Parameters.AddWithValue("@method", snapshot.Method);
+                            cmd.Parameters.AddWithValue("@software_partition", snapshot.SoftwarePartition);
+                            cmd.Parameters.AddWithValue("@method_no", snapshot.MethodNo);
                             using (SqlDataReader reader = cmd.ExecuteReader())
                             {
                                 while (reader.Read())
@@ -916,8 +830,6 @@ namespace RecoNet
                     }
                 }
 
-                MergePendingLocalMappingsIntoSmartSnapshot(snapshot, LoadPendingLearningMappingKeys());
-
                 foreach (List<SmartMapEntry> list in snapshot.BySignature.Values)
                 {
                     list.Sort(delegate(SmartMapEntry a, SmartMapEntry b) { return b.Weight.CompareTo(a.Weight); });
@@ -937,60 +849,8 @@ namespace RecoNet
             catch (Exception ex)
             {
                 ObserveLearningDbFailure(ex);
-                Log("Smart fill SQL snapshot failed, fallback to jsonl: " + ex.Message);
-            }
-
-            // —— jsonl 回退:借用 mapping-boxes,转成同构快照(无条目知识)。 ——
-            try
-            {
-                List<Dictionary<string, string>> boxRows = LoadMappingBoxRows();
-                foreach (IGrouping<string, Dictionary<string, string>> boxGroup in boxRows
-                    .Where(row => !String.IsNullOrWhiteSpace(GetFlat(row, "box_id")))
-                    .GroupBy(row => GetFlat(row, "box_id"), StringComparer.OrdinalIgnoreCase))
-                {
-                    foreach (IGrouping<string, Dictionary<string, string>> signatureGroup in boxGroup
-                        .GroupBy(row => BuildSmartLocalSignature(row), StringComparer.OrdinalIgnoreCase))
-                    {
-                        List<Dictionary<string, string>> sample = SelectSmartLocalRowsForMethod(signatureGroup, snapshot.Method);
-                        if (sample.Count == 0) continue;
-                        string signature = signatureGroup.Key;
-                        SmartMapEntry entry = new SmartMapEntry
-                        {
-                            BoxId = boxGroup.Key,
-                            Weight = sample.Max(row => ReadFlatInt(row, "weight", 0)),
-                            AcceptedCount = sample.Max(row => ReadFlatInt(row, "accepted_count", 0)),
-                            CorrectedCount = sample.Max(row => ReadFlatInt(row, "corrected_count", 0)),
-                            RejectedCount = sample.Max(row => ReadFlatInt(row, "rejected_count", 0)),
-                            CurrentMethodMapping = sample.Any(row => String.Equals(GetSmartLocalMethod(row), snapshot.Method, StringComparison.OrdinalIgnoreCase) &&
-                                !String.IsNullOrWhiteSpace(snapshot.Method))
-                        };
-                        foreach (Dictionary<string, string> row in sample)
-                        {
-                            UpsertSmartBoxTarget(entry, GetFlat(row, "target_kind"), GetFlat(row, "target_code"),
-                                GetFlat(row, "target_name"), GetFlat(row, "target_unit"));
-                            AddSmartLocalContext(entry, row);
-                            AddSmartLocalFormulaRule(snapshot, row, signature, false);
-                        }
-                        List<SmartMapEntry> list;
-                        if (!snapshot.BySignature.TryGetValue(signature, out list)) { list = new List<SmartMapEntry>(); snapshot.BySignature[signature] = list; }
-                        list.Add(entry);
-                        string nameSeg = SmartNameSegment(signature);
-                        if (!snapshot.ByNameOnly.TryGetValue(nameSeg, out list)) { list = new List<SmartMapEntry>(); snapshot.ByNameOnly[nameSeg] = list; }
-                        list.Add(entry);
-                    }
-                }
-                foreach (string nameSeg in snapshot.ByNameOnly.Keys)
-                {
-                    snapshot.NameFeatures.Add(new KeyValuePair<string, MatchTextFeatures>(nameSeg, BuildMatchTextFeatures(nameSeg)));
-                }
-                snapshot.FromSql = false;
-                note = "学习库(SQL)不可用,已回退本地 mapping-boxes；仅带当前办法/条目字段的新关系可自动定位。";
-                return snapshot;
-            }
-            catch (Exception ex)
-            {
-                Log("Smart fill jsonl fallback failed: " + ex.Message);
-                note = "学习库与本地映射均不可用:" + ex.Message;
+                Log("Smart fill SQL snapshot failed; local learning is disabled: " + ex.Message);
+                note = "学习库(SQL)不可用，已禁止本地配对：" + ex.Message;
                 return snapshot;
             }
         }
@@ -998,80 +858,6 @@ namespace RecoNet
         private static bool ShouldWarnSmartLibraryPartitionMissing(int basePartitionCount)
         {
             return basePartitionCount == 0;
-        }
-
-        // SQL 主库优先；本机只叠加 outbox 中仍待同步的“名称签名+组件框”，不比较跨机器时间。
-        private static void MergePendingLocalMappingsIntoSmartSnapshot(SmartLearningSnapshot snapshot, HashSet<string> pendingKeys)
-        {
-            if (snapshot == null || pendingKeys == null || pendingKeys.Count == 0) return;
-            try
-            {
-                List<Dictionary<string, string>> boxRows = LoadMappingBoxRows();
-                foreach (IGrouping<string, Dictionary<string, string>> boxGroup in boxRows
-                    .Where(row => !String.IsNullOrWhiteSpace(GetFlat(row, "box_id")))
-                    .GroupBy(row => GetFlat(row, "box_id"), StringComparer.OrdinalIgnoreCase))
-                {
-                    foreach (IGrouping<string, Dictionary<string, string>> signatureGroup in boxGroup
-                        .GroupBy(row => BuildSmartLocalSignature(row), StringComparer.OrdinalIgnoreCase))
-                    {
-                        List<Dictionary<string, string>> sample = SelectSmartLocalRowsForMethod(signatureGroup, snapshot.Method);
-                        if (sample.Count == 0) continue;
-                        string signature = signatureGroup.Key;
-                        string pendingKey = signature + "\n" + boxGroup.Key;
-                        if (!pendingKeys.Contains(pendingKey)) continue;
-
-                        List<SmartMapEntry> list;
-                        if (!snapshot.BySignature.TryGetValue(signature, out list))
-                        {
-                            list = new List<SmartMapEntry>();
-                            snapshot.BySignature[signature] = list;
-                        }
-                        SmartMapEntry existing = list.FirstOrDefault(entry => String.Equals(entry.BoxId, boxGroup.Key, StringComparison.OrdinalIgnoreCase));
-                        int localWeight = sample.Max(row => ReadFlatInt(row, "weight", 0));
-                        SmartMapEntry localEntry = ApplyPendingLocalSmartMapEntry(existing, boxGroup.Key, localWeight);
-                        localEntry.AcceptedCount = Math.Max(localEntry.AcceptedCount,
-                            sample.Max(row => ReadFlatInt(row, "accepted_count", 0)));
-                        localEntry.CorrectedCount = Math.Max(localEntry.CorrectedCount,
-                            sample.Max(row => ReadFlatInt(row, "corrected_count", 0)));
-                        localEntry.RejectedCount = Math.Max(localEntry.RejectedCount,
-                            sample.Max(row => ReadFlatInt(row, "rejected_count", 0)));
-                        localEntry.CurrentMethodMapping = sample.Any(row =>
-                            String.Equals(GetSmartLocalMethod(row), snapshot.Method, StringComparison.OrdinalIgnoreCase) &&
-                            !String.IsNullOrWhiteSpace(snapshot.Method));
-                        localEntry.Targets = new List<SmartBoxTarget>();
-                        foreach (Dictionary<string, string> row in sample)
-                        {
-                            UpsertSmartBoxTarget(localEntry, GetFlat(row, "target_kind"), GetFlat(row, "target_code"),
-                                GetFlat(row, "target_name"), GetFlat(row, "target_unit"));
-                            AddSmartLocalContext(localEntry, row);
-                            AddSmartLocalFormulaRule(snapshot, row, signature, true);
-                        }
-                        if (localEntry.Targets.Count == 0) continue;
-                        if (existing == null) list.Add(localEntry);
-
-                        string nameSeg = SmartNameSegment(signature);
-                        List<SmartMapEntry> nameList;
-                        if (!snapshot.ByNameOnly.TryGetValue(nameSeg, out nameList))
-                        {
-                            nameList = new List<SmartMapEntry>();
-                            snapshot.ByNameOnly[nameSeg] = nameList;
-                        }
-                        if (!nameList.Contains(localEntry)) nameList.Add(localEntry);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log("Smart fill pending local overlay failed: " + ex.Message);
-            }
-        }
-
-        private static SmartMapEntry ApplyPendingLocalSmartMapEntry(SmartMapEntry existing, string boxId, int localWeight)
-        {
-            SmartMapEntry entry = existing ?? new SmartMapEntry { BoxId = boxId };
-            entry.Weight = existing == null ? localWeight : Math.Max(existing.Weight, localWeight);
-            entry.PendingLocal = true;
-            return entry;
         }
 
         // 推荐数量只使用当前 Excel 单位和当前运行版本的定额元数据；SQL target_unit 仅作历史描述。
@@ -1142,7 +928,12 @@ namespace RecoNet
 
             try
             {
-                string path = Path.Combine(FindRecoQuotaDataDir(), "quota-index.jsonl");
+                string dataDir = FindRecoQuotaDataDir();
+                string partitionPath = Path.Combine(dataDir,
+                    String.Equals(snapshot.SoftwarePartition, "2020", StringComparison.OrdinalIgnoreCase)
+                        ? "quota-index-2020.jsonl"
+                        : "quota-index-2024.jsonl");
+                string path = File.Exists(partitionPath) ? partitionPath : Path.Combine(dataDir, "quota-index.jsonl");
                 foreach (KeyValuePair<string, ProjectQuota> pair in LoadCachedSmartQuotaIndex(path))
                 {
                     string code = pair.Key;
@@ -1189,7 +980,7 @@ namespace RecoNet
             List<SmartBoxTarget> targets = entry == null
                 ? new List<SmartBoxTarget>()
                 : entry.Targets.Where(target => target != null && !String.IsNullOrWhiteSpace(target.Code)).ToList();
-            if (targets.Count == 0) return false;
+            if (!IsSmartTargetSetRecommendable(targets)) return false;
             foreach (SmartBoxTarget target in targets)
             {
                 if (!String.Equals(target.Kind ?? "quota", "quota", StringComparison.OrdinalIgnoreCase)) return false;
@@ -1200,6 +991,18 @@ namespace RecoNet
                     String.IsNullOrWhiteSpace(currentQuota.Unit)) return false;
             }
             return true;
+        }
+
+        private static bool IsSmartTargetSetRecommendable(IEnumerable<SmartBoxTarget> targets)
+        {
+            List<SmartBoxTarget> list = (targets ?? Enumerable.Empty<SmartBoxTarget>())
+                .Where(target => target != null && !String.IsNullOrWhiteSpace(target.Code)).ToList();
+            if (list.Count == 0) return false;
+            return list.Any(target => IsPrimaryLearningTarget(target.Kind, target.Code)) ||
+                list.All(target =>
+                    String.Equals(String.IsNullOrWhiteSpace(target.Kind) ? "quota" : target.Kind.Trim(), "quota",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    GetLearningBaseTargetCode(target.Code) == "SF");
         }
 
         // 条目证据必须按目标解析；组件框只负责在全部目标解析完成后做整组判定。
@@ -1251,7 +1054,8 @@ namespace RecoNet
                 if (!snapshot.EntryBySignatureQuota.TryGetValue(sigKey + "\n" + (target.Code ?? ""), out stats)) continue;
                 foreach (SmartEntryStat stat in stats)
                 {
-                    if (stat == null || !projectEntries.ContainsKey(stat.EntryCode)) continue;
+                    if (stat == null || !projectEntries.ContainsKey(stat.EntryCode) ||
+                        !SmartEntryCodeMatchesScope(stat.EntryCode, snapshot.SelectedScope)) continue;
                     string resolvedName = ResolveSmartEntryName(snapshot, stat.EntryCode, stat.EntryName);
                     if (GetLearningBaseTargetCode(target.Code) != "SF" &&
                         resolvedName.IndexOf("设备购置费", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -1278,7 +1082,7 @@ namespace RecoNet
                 localContexts = mappingEntry.LocalContextKeys;
             if (GetLearningBaseTargetCode(target.Code) != "SF" && localContexts != null)
             {
-                string methodPrefix = (snapshot.Method ?? "").Trim() + "\n";
+                string methodPrefix = (snapshot.MethodNo ?? "").Trim() + "\n";
                 sawEquipmentEntryForNonSf = sawEquipmentEntryForNonSf || localContexts.Any(key =>
                     key.StartsWith(methodPrefix, StringComparison.OrdinalIgnoreCase) &&
                     projectEntries.ContainsKey(key.Substring(methodPrefix.Length)) &&
@@ -1322,7 +1126,8 @@ namespace RecoNet
                 List<SmartEntryStat> compatible = new List<SmartEntryStat>();
                 foreach (SmartEntryStat stat in quotaStats)
                 {
-                    if (stat == null || !projectEntries.ContainsKey(stat.EntryCode)) continue;
+                    if (stat == null || !projectEntries.ContainsKey(stat.EntryCode) ||
+                        !SmartEntryCodeMatchesScope(stat.EntryCode, snapshot.SelectedScope)) continue;
                     string resolvedName = ResolveSmartEntryName(snapshot, stat.EntryCode, stat.EntryName);
                     if (GetLearningBaseTargetCode(target.Code) != "SF" &&
                         resolvedName.IndexOf("设备购置费", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -1340,6 +1145,170 @@ namespace RecoNet
                     ? "设备购置费条目只能写入 SF，当前目标禁止写入"
                     : "学习库未定位到目标项目里的条目");
             return result;
+        }
+
+        private static void AddSmartTargetEntryCandidate(Dictionary<string, SmartTargetEntryResolution> candidates,
+            SmartLearningSnapshot snapshot, Dictionary<string, long> projectEntries, SmartBoxTarget target,
+            string entryCode, string learnedName, bool fromCurrentContext, int evidenceScore)
+        {
+            string normalizedEntry = LearningPartitionIdentity.NormalizeLearningEntryCode(entryCode);
+            if (normalizedEntry.Length == 0 || !projectEntries.ContainsKey(normalizedEntry) ||
+                !SmartEntryCodeMatchesScope(normalizedEntry, snapshot.SelectedScope)) return;
+            string resolvedName = ResolveSmartEntryName(snapshot, normalizedEntry, learnedName);
+            if (!IsSmartTargetEntryCompatible(target, resolvedName)) return;
+            SmartTargetEntryResolution existing;
+            if (candidates.TryGetValue(normalizedEntry, out existing) && existing.EvidenceScore >= evidenceScore) return;
+            candidates[normalizedEntry] = new SmartTargetEntryResolution
+            {
+                Target = target,
+                EntryCode = normalizedEntry,
+                EntryName = resolvedName,
+                EntrySeq = projectEntries[normalizedEntry],
+                FromCurrentContext = fromCurrentContext,
+                Issue = "",
+                EvidenceScore = evidenceScore
+            };
+        }
+
+        private static List<SmartTargetEntryResolution> ResolveSmartTargetEntryCandidates(
+            SmartLearningSnapshot snapshot, Dictionary<string, long> projectEntries, SmartMapEntry mappingEntry,
+            SmartBoxTarget target, string signature, HashSet<string> preferredPrefixes)
+        {
+            Dictionary<string, SmartTargetEntryResolution> candidates =
+                new Dictionary<string, SmartTargetEntryResolution>(StringComparer.OrdinalIgnoreCase);
+            if (target == null || String.IsNullOrWhiteSpace(target.Code))
+            {
+                return new List<SmartTargetEntryResolution> { new SmartTargetEntryResolution
+                {
+                    Target = target, EntryCode = "", EntryName = "", Issue = "目标编号为空"
+                } };
+            }
+
+            string[] signatureKeys = new[] { signature ?? "", SmartNameSegment(signature ?? "") + "|" };
+            foreach (string signatureKey in signatureKeys)
+            {
+                List<SmartEntryStat> stats;
+                if (!snapshot.EntryBySignatureQuota.TryGetValue(signatureKey + "\n" + (target.Code ?? ""), out stats)) continue;
+                foreach (SmartEntryStat stat in stats ?? new List<SmartEntryStat>())
+                {
+                    if (stat == null) continue;
+                    AddSmartTargetEntryCandidate(candidates, snapshot, projectEntries, target, stat.EntryCode,
+                        stat.EntryName, stat.CurrentMethodEvidence,
+                        (stat.CurrentMethodEvidence ? 40000 : 20000) + Math.Max(0, stat.ProjectCount));
+                }
+            }
+
+            string targetIdentity = BuildLearningTargetIdentityKey(target.Kind, target.Code, target.Name, target.Unit);
+            HashSet<string> localContexts = null;
+            if (mappingEntry != null && mappingEntry.LocalContextKeysByTarget != null)
+                mappingEntry.LocalContextKeysByTarget.TryGetValue(targetIdentity, out localContexts);
+            if ((localContexts == null || localContexts.Count == 0) && mappingEntry != null &&
+                mappingEntry.Targets != null && mappingEntry.Targets.Count == 1)
+                localContexts = mappingEntry.LocalContextKeys;
+            string methodPrefix = (snapshot.MethodNo ?? "").Trim() + "\n";
+            foreach (string context in localContexts ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!context.StartsWith(methodPrefix, StringComparison.OrdinalIgnoreCase)) continue;
+                AddSmartTargetEntryCandidate(candidates, snapshot, projectEntries, target,
+                    context.Substring(methodPrefix.Length), "", true, 60000);
+            }
+
+            List<SmartEntryStat> quotaStats;
+            if (String.Equals(target.Kind ?? "quota", "quota", StringComparison.OrdinalIgnoreCase) &&
+                snapshot.EntryByQuota.TryGetValue(target.Code ?? "", out quotaStats))
+            {
+                foreach (SmartEntryStat stat in quotaStats ?? new List<SmartEntryStat>())
+                {
+                    if (stat == null) continue;
+                    AddSmartTargetEntryCandidate(candidates, snapshot, projectEntries, target, stat.EntryCode,
+                        stat.EntryName, false, 1000 + Math.Max(0, stat.ProjectCount));
+                }
+            }
+
+            List<SmartTargetEntryResolution> ordered = candidates.Values
+                .OrderByDescending(item => item.EvidenceScore)
+                .ThenBy(item => item.EntryCode, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            bool usePreferredPrefixes = GetLearningBaseTargetCode(target.Code) != "SH";
+            if (usePreferredPrefixes && preferredPrefixes != null && preferredPrefixes.Count > 0)
+            {
+                List<SmartTargetEntryResolution> preferred = ordered.Where(item => item.EntryCode.Length >= 2 &&
+                    preferredPrefixes.Contains(item.EntryCode.Substring(0, 2))).ToList();
+                if (preferred.Count > 0) ordered = preferred;
+            }
+            if (ordered.Count > 1)
+            {
+                foreach (SmartTargetEntryResolution item in ordered) item.Issue = "目标条目证据不唯一，请选择";
+            }
+            if (ordered.Count > 0) return ordered;
+            return new List<SmartTargetEntryResolution> { new SmartTargetEntryResolution
+            {
+                Target = target,
+                EntryCode = "",
+                EntryName = "",
+                Issue = GetLearningBaseTargetCode(target.Code) == "SF"
+                    ? "SF 必须写入设备购置费条目，当前项目未找到该条目"
+                    : "学习库未定位到目标项目里的条目"
+            } };
+        }
+
+        private static SmartTargetEntryResolution CloneSmartTargetEntryResolution(SmartTargetEntryResolution source)
+        {
+            return source == null ? null : new SmartTargetEntryResolution
+            {
+                Target = source.Target,
+                EntryCode = source.EntryCode,
+                EntryName = source.EntryName,
+                EntrySeq = source.EntrySeq,
+                FromCurrentContext = source.FromCurrentContext,
+                Issue = source.Issue,
+                EvidenceScore = source.EvidenceScore
+            };
+        }
+
+        private static List<List<SmartTargetEntryResolution>> ResolveSmartTargetEntryCombinations(
+            SmartLearningSnapshot snapshot, Dictionary<string, long> projectEntries, SmartMapEntry mappingEntry,
+            string signature, HashSet<string> preferredPrefixes, out bool truncated)
+        {
+            const int MaxEntryCombinations = 16;
+            truncated = false;
+            List<List<SmartTargetEntryResolution>> combinations =
+                new List<List<SmartTargetEntryResolution>> { new List<SmartTargetEntryResolution>() };
+            foreach (SmartBoxTarget target in OrderSmartTargets(mappingEntry == null ? null : mappingEntry.Targets))
+            {
+                List<SmartTargetEntryResolution> options = ResolveSmartTargetEntryCandidates(snapshot, projectEntries,
+                    mappingEntry, target, signature, preferredPrefixes);
+                List<List<SmartTargetEntryResolution>> next = new List<List<SmartTargetEntryResolution>>();
+                foreach (List<SmartTargetEntryResolution> combination in combinations)
+                {
+                    foreach (SmartTargetEntryResolution option in options)
+                    {
+                        if (next.Count >= MaxEntryCombinations) { truncated = true; break; }
+                        List<SmartTargetEntryResolution> expanded = combination.Select(CloneSmartTargetEntryResolution).ToList();
+                        expanded.Add(CloneSmartTargetEntryResolution(option));
+                        next.Add(expanded);
+                    }
+                    if (next.Count >= MaxEntryCombinations && options.Count > 1) break;
+                }
+                combinations = next;
+                if (combinations.Count == 0) break;
+            }
+
+            foreach (List<SmartTargetEntryResolution> combination in combinations)
+            {
+                SmartTargetEntryResolution primary = combination.FirstOrDefault(item => item != null && item.Target != null &&
+                    IsPrimaryLearningTarget(item.Target.Kind, item.Target.Code) && !String.IsNullOrWhiteSpace(item.EntryCode));
+                if (primary == null) continue;
+                foreach (SmartTargetEntryResolution follower in combination.Where(item => item != null && item.Target != null &&
+                    String.IsNullOrWhiteSpace(item.EntryCode) && IsSmartFollowerTarget(item.Target)))
+                {
+                    follower.EntryCode = primary.EntryCode;
+                    follower.EntryName = primary.EntryName;
+                    follower.EntrySeq = primary.EntrySeq;
+                    follower.Issue = "";
+                }
+            }
+            return combinations;
         }
 
         private static SmartTargetEntryResolution CreateSmartTargetEntryResolution(SmartLearningSnapshot snapshot,
@@ -1375,11 +1344,12 @@ namespace RecoNet
             Dictionary<string, long> projectEntries, SmartBoxTarget target, IEnumerable<string> contexts,
             HashSet<string> preferredPrefixes, bool usePreferredPrefixes)
         {
-            string methodPrefix = (snapshot.Method ?? "").Trim() + "\n";
+            string methodPrefix = (snapshot.MethodNo ?? "").Trim() + "\n";
             List<string> result = (contexts ?? Enumerable.Empty<string>())
                 .Where(key => key.StartsWith(methodPrefix, StringComparison.OrdinalIgnoreCase))
                 .Select(key => key.Substring(methodPrefix.Length))
                 .Where(code => projectEntries.ContainsKey(code) &&
+                    SmartEntryCodeMatchesScope(code, snapshot.SelectedScope) &&
                     IsSmartTargetEntryCompatible(target, ResolveSmartEntryName(snapshot, code, "")))
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             if (!usePreferredPrefixes || preferredPrefixes == null || preferredPrefixes.Count == 0) return result;
@@ -1437,19 +1407,14 @@ namespace RecoNet
             return columns;
         }
 
-        // 跨库整行复制:按学习库溯源从来源项目库拉取源定额行(依次尝试本项目服务器与两台已知服务器)。
+        // 跨库整行复制:只允许使用 DPAPI 凭据库中明确登记的业务/学习端点做只读溯源。
         private static Dictionary<string, object> LoadCrossDbQuotaRow(SqlConnection targetConn, FillPreviewItem item, HashSet<string> targetColumns)
         {
-            List<string> servers = new List<string>();
-            try { if (!String.IsNullOrEmpty(targetConn.DataSource)) servers.Add(targetConn.DataSource); } catch { }
-            if (!servers.Contains(LearningDbServer)) servers.Add(LearningDbServer);
-            if (!servers.Contains("192.168.2.13,1433")) servers.Add("192.168.2.13,1433");
-
-            foreach (string server in servers)
+            foreach (string credentialName in new[] { "business", "learning" })
             {
                 try
                 {
-                    string connectionString = "Server=" + server + ";Database=" + item.SourceDb + ";User ID=" + AgentDbUser + ";Password=" + AgentDbPassword + ";Connect Timeout=3";
+                    string connectionString = RecoSqlCredentialStore.BuildConnectionString(credentialName, item.SourceDb, 1433, 3);
                     using (SqlConnection src = new SqlConnection(connectionString))
                     {
                         src.Open();
@@ -1477,7 +1442,8 @@ namespace RecoNet
                 }
                 catch (Exception ex)
                 {
-                    Log("Cross-db quota row load failed on " + server + "/" + item.SourceDb + ": " + ex.Message);
+                    Log("Cross-db quota row load failed. endpoint=" + credentialName +
+                        " database=" + item.SourceDb + " error=" + ex.GetType().Name);
                 }
             }
             return null;
@@ -1490,37 +1456,42 @@ namespace RecoNet
             List<SmartMapCandidateScore> scores = new List<SmartMapCandidateScore>();
             foreach (SmartMapEntry hit in hits ?? new List<SmartMapEntry>())
             {
-                List<SmartTargetEntryResolution> targetEntries = ResolveSmartTargetEntries(snapshot, projectEntries, hit,
-                    signature, preferredPrefixes);
-                SmartTargetEntryResolution representative = targetEntries.FirstOrDefault(item => item != null && item.Target != null &&
-                    IsPrimaryLearningTarget(item.Target.Kind, item.Target.Code) && !String.IsNullOrWhiteSpace(item.EntryCode)) ??
-                    targetEntries.FirstOrDefault(item => item != null && !String.IsNullOrWhiteSpace(item.EntryCode));
-                string entryCode = representative == null ? "" : representative.EntryCode ?? "";
-                string entryName = representative == null ? "" : representative.EntryName ?? "";
-                long entrySeq = representative == null ? 0 : representative.EntrySeq;
-                bool hasEntry = targetEntries.Count > 0 && targetEntries.All(item => item != null && !String.IsNullOrWhiteSpace(item.EntryCode));
-                bool fromContext = hasEntry && targetEntries.All(item => item.FromCurrentContext);
-                bool prefixMatch = hasEntry && entryCode.Length >= 2 && preferredPrefixes != null && preferredPrefixes.Count > 0 &&
-                    preferredPrefixes.Contains(entryCode.Substring(0, 2));
-                string currentContextPrefix = (snapshot.Method ?? "").Trim() + "\n";
-                bool currentMethodMapping = hit.CurrentMethodMapping || (hit.LocalContextKeys != null &&
-                    !String.IsNullOrWhiteSpace(snapshot.Method) && hit.LocalContextKeys.Any(key =>
-                        key.StartsWith(currentContextPrefix, StringComparison.OrdinalIgnoreCase)));
-                bool targetsValid = IsSmartMapEntryUsableInCurrentProject(hit, entryName, currentQuotaByCode);
+                bool targetsValid = IsSmartMapEntryUsableInCurrentProject(hit, "", currentQuotaByCode);
                 if (!targetsValid) continue;
-                scores.Add(new SmartMapCandidateScore
+                bool truncated;
+                List<List<SmartTargetEntryResolution>> combinations = ResolveSmartTargetEntryCombinations(snapshot,
+                    projectEntries, hit, signature, preferredPrefixes, out truncated);
+                foreach (List<SmartTargetEntryResolution> targetEntries in combinations)
                 {
-                    Entry = hit,
-                    EntryCode = entryCode,
-                    EntryName = entryName,
-                    EntrySeq = entrySeq,
-                    HasEntry = hasEntry,
-                    HasCurrentContext = fromContext,
-                    HasCurrentMethodMapping = currentMethodMapping,
-                    PrefixMatch = prefixMatch,
-                    CurrentTargetsValid = targetsValid,
-                    TargetEntries = targetEntries
-                });
+                    SmartTargetEntryResolution representative = targetEntries.FirstOrDefault(item => item != null && item.Target != null &&
+                        IsPrimaryLearningTarget(item.Target.Kind, item.Target.Code) && !String.IsNullOrWhiteSpace(item.EntryCode)) ??
+                        targetEntries.FirstOrDefault(item => item != null && !String.IsNullOrWhiteSpace(item.EntryCode));
+                    string entryCode = representative == null ? "" : representative.EntryCode ?? "";
+                    string entryName = representative == null ? "" : representative.EntryName ?? "";
+                    long entrySeq = representative == null ? 0 : representative.EntrySeq;
+                    bool hasEntry = targetEntries.Count > 0 && targetEntries.All(item => item != null && !String.IsNullOrWhiteSpace(item.EntryCode));
+                    bool fromContext = hasEntry && targetEntries.All(item => item.FromCurrentContext);
+                    bool prefixMatch = hasEntry && entryCode.Length >= 2 && preferredPrefixes != null && preferredPrefixes.Count > 0 &&
+                        preferredPrefixes.Contains(entryCode.Substring(0, 2));
+                    string currentContextPrefix = (snapshot.MethodNo ?? "").Trim() + "\n";
+                    bool currentMethodMapping = hit.CurrentMethodMapping || (hit.LocalContextKeys != null &&
+                        !String.IsNullOrWhiteSpace(snapshot.MethodNo) && hit.LocalContextKeys.Any(key =>
+                            key.StartsWith(currentContextPrefix, StringComparison.OrdinalIgnoreCase)));
+                    scores.Add(new SmartMapCandidateScore
+                    {
+                        Entry = hit,
+                        EntryCode = entryCode,
+                        EntryName = entryName,
+                        EntrySeq = entrySeq,
+                        HasEntry = hasEntry,
+                        HasCurrentContext = fromContext,
+                        HasCurrentMethodMapping = currentMethodMapping,
+                        PrefixMatch = prefixMatch,
+                        CurrentTargetsValid = targetsValid,
+                        EntryCandidatesTruncated = truncated,
+                        TargetEntries = targetEntries
+                    });
+                }
             }
             return OrderSmartMapCandidateScores(scores);
         }
@@ -1528,7 +1499,6 @@ namespace RecoNet
         private static List<SmartMapCandidateScore> OrderSmartMapCandidateScores(IEnumerable<SmartMapCandidateScore> scores)
         {
             return (scores ?? Enumerable.Empty<SmartMapCandidateScore>()).OrderByDescending(score => score.CurrentTargetsValid)
-                .ThenByDescending(score => score.Entry != null && score.Entry.PendingLocal)
                 .ThenByDescending(score => score.HasCurrentMethodMapping)
                 .ThenByDescending(score => score.HasCurrentContext)
                 .ThenByDescending(score => score.PrefixMatch)
@@ -1543,7 +1513,7 @@ namespace RecoNet
         {
             if (scores == null || scores.Count == 0) return false;
             SmartMapCandidateScore top = scores[0];
-            if (!top.CurrentTargetsValid || !top.HasEntry || !top.HasCurrentContext) return false;
+            if (!top.CurrentTargetsValid || !top.HasEntry || !top.HasCurrentContext || top.EntryCandidatesTruncated) return false;
             if (!top.HasCurrentMethodMapping && !IsSingleQuotaTargetBox(top.Entry)) return false;
             if (scores.Count == 1) return true;
 
@@ -1569,7 +1539,7 @@ namespace RecoNet
         private static bool IsSingleQuotaTargetBox(SmartMapEntry entry)
         {
             return entry != null && entry.Targets != null && entry.Targets.Count == 1 &&
-                String.Equals(entry.Targets[0].Kind ?? "", "quota", StringComparison.OrdinalIgnoreCase);
+                IsPrimaryLearningTarget(entry.Targets[0].Kind, entry.Targets[0].Code);
         }
 
         private static IEnumerable<SmartBoxTarget> OrderSmartTargets(IEnumerable<SmartBoxTarget> targets)
@@ -1620,8 +1590,8 @@ namespace RecoNet
                     foreach (string key in entry.LocalContextKeys)
                     {
                         int separator = (key ?? "").IndexOf('\n');
-                        string method = separator >= 0 ? key.Substring(0, separator) : "";
-                        if (!String.Equals(method, snapshot == null ? "" : snapshot.Method ?? "",
+                        string localMethodNo = separator >= 0 ? key.Substring(0, separator) : "";
+                        if (!String.Equals(localMethodNo, snapshot == null ? "" : snapshot.MethodNo ?? "",
                             StringComparison.OrdinalIgnoreCase)) continue;
                         string code = separator >= 0 ? key.Substring(separator + 1) : "";
                         if (!IsSmartClassifiedEntryCode(code)) continue;
@@ -1655,6 +1625,16 @@ namespace RecoNet
                 parts.Add(code + "（" + entryName + " " + resolution.EntryCode.Trim() + "）");
             }
             return parts.Count == 0 ? "空组件" : String.Join(" + ", parts.ToArray());
+        }
+
+        private static string BuildSmartEntryCombinationKey(SmartMapCandidateScore score)
+        {
+            string raw = String.Join("|", (score == null ? new List<SmartTargetEntryResolution>() : score.TargetEntries)
+                .Where(item => item != null && item.Target != null)
+                .Select(item => BuildLearningTargetIdentityKey(item.Target.Kind, item.Target.Code, item.Target.Name, item.Target.Unit) +
+                    "=" + (item.EntryCode ?? ""))
+                .ToArray());
+            return BuildLearningMd5(raw).Substring(0, 12);
         }
 
         private static List<NameQuotaCandidateGroup> DeduplicateSmartCandidatesByLabel(
@@ -1691,9 +1671,14 @@ namespace RecoNet
                 AppendSmartItems(candidateItems, row, targetRows, score.Entry, snapshot, projectEntries, currentQuotaByCode,
                     score.TargetEntries, true, baseNote + "，候选：" + label, signature, preferredPrefixes, null);
                 if (candidateItems.Count == 0) continue;
+                if (score.EntryCandidatesTruncated)
+                {
+                    foreach (FillPreviewItem candidateItem in candidateItems)
+                        candidateItem.AlignNote = AppendPreviewNote(candidateItem.AlignNote, "候选已截断为前16组");
+                }
                 candidates.Add(new NameQuotaCandidateGroup
                 {
-                    Key = "smart:" + (score.Entry.BoxId ?? ""),
+                    Key = "smart:" + (score.Entry.BoxId ?? "") + "#" + BuildSmartEntryCombinationKey(score),
                     Label = label,
                     Items = candidateItems
                 });
@@ -1710,7 +1695,10 @@ namespace RecoNet
             active[0].NameQuotaCandidates = candidates;
             active[0].SelectedNameQuotaCandidateKey = candidates[0].Key;
             active[0].AlignNote = AppendPreviewNote(active[0].AlignNote,
-                candidates.Count > 1 ? "组件候选接近或上下文不唯一，请确认完整组件" : "缺少唯一的当前办法/条目证据，请确认组件");
+                candidates.Any(candidate => candidate != null && candidate.Items != null &&
+                    candidate.Items.Any(item => (item.AlignNote ?? "").IndexOf("候选已截断", StringComparison.OrdinalIgnoreCase) >= 0))
+                    ? "条目候选已截断为前16组，请确认完整组件"
+                    : (candidates.Count > 1 ? "组件候选接近或上下文不唯一，请确认完整组件" : "缺少唯一的当前办法/条目证据，请确认组件"));
             items.AddRange(active);
             return true;
         }
@@ -1724,11 +1712,19 @@ namespace RecoNet
             MatchTextFeatures rowFeatures = BuildMatchTextFeatures(nameSignature);
             foreach (KeyValuePair<string, MatchTextFeatures> pair in nameFeatures)
             {
+                if (!HaveCompatibleSmartSpecificationNumbers(nameSignature, pair.Key)) continue;
                 int score = MatchNameScore(rowFeatures, pair.Value);
                 if (score > 0) scored.Add(new KeyValuePair<int, string>(score, pair.Key));
             }
             scored.Sort(delegate(KeyValuePair<int, string> a, KeyValuePair<int, string> b) { return b.Key.CompareTo(a.Key); });
             return scored;
+        }
+
+        private static bool HaveCompatibleSmartSpecificationNumbers(string leftSignature, string rightSignature)
+        {
+            List<string> left = ExtractMatchNumbers(leftSignature ?? "");
+            List<string> right = ExtractMatchNumbers(rightSignature ?? "");
+            return left.Count == 0 || right.Count == 0 || left.SequenceEqual(right, StringComparer.OrdinalIgnoreCase);
         }
 
         private static List<NameQuotaCandidateGroup> BuildSmartFuzzyCandidateGroups(
@@ -1748,11 +1744,11 @@ namespace RecoNet
                 matchedNames++;
                 List<SmartMapCandidateScore> candidateScores = RankSmartMapEntries(snapshot, candHits, signature,
                     preferredPrefixes, projectEntries, currentQuotaByCode);
-                foreach (SmartMapCandidateScore candidateScore in candidateScores.Take(3))
+                foreach (SmartMapCandidateScore candidateScore in candidateScores.Take(16))
                 {
                     NameQuotaCandidateGroup group = new NameQuotaCandidateGroup
                     {
-                        Key = cand.Value + "|" + candidateScore.Entry.BoxId,
+                        Key = cand.Value + "|" + candidateScore.Entry.BoxId + "#" + BuildSmartEntryCombinationKey(candidateScore),
                         Label = "≈" + cand.Value + "(" + cand.Key.ToString(CultureInfo.InvariantCulture) + "分)：" +
                             BuildSmartCandidateLabel(snapshot, candidateScore)
                     };
@@ -1760,6 +1756,11 @@ namespace RecoNet
                     AppendSmartItems(groupItems, row, targetRows, candidateScore.Entry, snapshot, projectEntries,
                         currentQuotaByCode, candidateScore.TargetEntries, true, "模糊候选，" + sourceNote + ":" + group.Label,
                         signature, preferredPrefixes, null);
+                    if (candidateScore.EntryCandidatesTruncated)
+                    {
+                        foreach (FillPreviewItem groupItem in groupItems)
+                            groupItem.AlignNote = AppendPreviewNote(groupItem.AlignNote, "候选已截断为前16组");
+                    }
                     group.Items = groupItems;
                     if (groupItems.Count > 0) result.Add(group);
                 }
@@ -1908,17 +1909,12 @@ namespace RecoNet
         private static List<SmartFormulaRule> SelectContextualSmartFormulaRules(SmartLearningSnapshot snapshot,
             List<SmartFormulaRule> rules, string entryCode)
         {
-            List<SmartFormulaRule> contextual = rules.Where(rule =>
+            if (snapshot == null || rules == null || String.IsNullOrWhiteSpace(entryCode))
+                return new List<SmartFormulaRule>();
+            return rules.Where(rule =>
                 String.Equals(rule.Method ?? "", snapshot.Method ?? "", StringComparison.OrdinalIgnoreCase) &&
                 !String.IsNullOrWhiteSpace(rule.EntryCode) &&
                 String.Equals(rule.EntryCode ?? "", entryCode ?? "", StringComparison.OrdinalIgnoreCase)).ToList();
-            if (contextual.Count == 0)
-            {
-                contextual = rules.Where(rule => String.IsNullOrWhiteSpace(rule.EntryCode) &&
-                    (String.IsNullOrWhiteSpace(rule.Method) ||
-                     String.Equals(rule.Method ?? "", snapshot.Method ?? "", StringComparison.OrdinalIgnoreCase))).ToList();
-            }
-            return contextual;
         }
 
         private static bool HasContextualDerivedSmartFormula(SmartLearningSnapshot snapshot, string formulaKey, string entryCode)
@@ -1980,7 +1976,6 @@ namespace RecoNet
                 }
             }
             valid = valid.OrderByDescending(item => String.Equals(item.Rule.Method ?? "", snapshot.Method ?? "", StringComparison.OrdinalIgnoreCase))
-                .ThenByDescending(item => item.Rule.PendingLocal)
                 .ThenByDescending(item => item.Rule.SampleCount).ThenByDescending(item => item.Rule.LastSeen).ToList();
             if (valid.Count == 0)
             {
@@ -1989,7 +1984,6 @@ namespace RecoNet
             }
             if (valid.Count > 1 &&
                 String.Equals(valid[0].Rule.Method ?? "", valid[1].Rule.Method ?? "", StringComparison.OrdinalIgnoreCase) &&
-                valid[0].Rule.PendingLocal == valid[1].Rule.PendingLocal &&
                 valid[0].Rule.SampleCount == valid[1].Rule.SampleCount &&
                 !String.Equals(valid[0].Rule.RuleHash, valid[1].Rule.RuleHash, StringComparison.OrdinalIgnoreCase))
             {
@@ -2063,29 +2057,26 @@ namespace RecoNet
                 else
                 {
                     string formulaKey = BuildSmartFormulaKey(signature, target.Kind, target.Code);
-                    bool hasFormula = snapshot.FormulaByKey.ContainsKey(formulaKey);
+                    List<SmartFormulaRule> formulaRules;
+                    bool hasFormula = snapshot.FormulaByKey.TryGetValue(formulaKey, out formulaRules) &&
+                        SelectContextualSmartFormulaRules(snapshot, formulaRules, entryCode).Count > 0;
                     SmartFormulaRule formulaRule = null;
                     string formulaQuantity = "";
                     string formulaIssue = "";
                     string standardSuffix;
-                    bool requiresDerivedFormula = hasFormula &&
-                        HasContextualDerivedSmartFormula(snapshot, formulaKey, entryCode);
                     bool formulaResolved = false;
                     bool standardResolved = false;
-                    if (requiresDerivedFormula)
+                    if (hasFormula)
                     {
-                        formulaResolved = TryResolveDerivedSmartFormula(snapshot, targetRows, row, target, currentQuotaUnit,
+                        formulaResolved = TryResolveSmartFormula(snapshot, targetRows, row, target, currentQuotaUnit,
                             entryCode, signature, out formulaRule, out formulaQuantity, out formulaIssue);
                     }
                     else if (TryBuildExcelLinkUnitScaleSuffix(row.Unit, currentQuotaUnit, out standardSuffix))
                     {
                         item.QuantityText = (row.QuantityText ?? "") + standardSuffix;
+                        item.AlignNote = AppendPreviewNote(item.AlignNote,
+                            "\u6807\u51c6\u6362\u7b97 " + (String.IsNullOrEmpty(standardSuffix) ? "1:1" : standardSuffix));
                         standardResolved = true;
-                    }
-                    else if (hasFormula)
-                    {
-                        formulaResolved = TryResolveSmartFormula(snapshot, targetRows, row, target, currentQuotaUnit, entryCode,
-                            signature, out formulaRule, out formulaQuantity, out formulaIssue);
                     }
 
                     if (formulaResolved)
@@ -2105,9 +2096,20 @@ namespace RecoNet
                         item.QuantityText = row.QuantityText;
                         item.Selected = false;
                         item.NeedExactNameConfirmation = true;
-                        item.Status = "待确认换算";
-                        item.AlignNote = AppendPreviewNote(item.AlignNote,
-                            String.IsNullOrWhiteSpace(formulaIssue) ? ("单位 " + row.Unit + "→" + currentQuotaUnit + " 无可靠换算公式") : formulaIssue);
+                        string confirmedCountSuffix;
+                        if (!hasFormula && TryBuildConfirmedCountUnitScaleSuffix(row.Unit, currentQuotaUnit, out confirmedCountSuffix))
+                        {
+                            item.Status = "\u5f85\u786e\u8ba4\u8ba1\u6570\u5355\u4f4d1:1";
+                            item.AlignNote = AppendPreviewNote(item.AlignNote,
+                                "\u8ba1\u6570\u57fa\u7840\u5355\u4f4d\u9700\u4eba\u5de5\u786e\u8ba4，\u786e\u8ba4\u540e\u5e94\u7528\u6570\u91cf\u7ea7" +
+                                (String.IsNullOrEmpty(confirmedCountSuffix) ? " 1:1" : " " + confirmedCountSuffix));
+                        }
+                        else
+                        {
+                            item.Status = hasFormula ? "\u516c\u5f0f\u53c2\u6570\u7f3a\u5931\u6216\u6b67\u4e49" : "\u7f3a\u8de8\u91cf\u7eb2\u6362\u7b97\u7cfb\u6570";
+                            item.AlignNote = AppendPreviewNote(item.AlignNote,
+                                String.IsNullOrWhiteSpace(formulaIssue) ? ("\u5355\u4f4d " + row.Unit + "→" + currentQuotaUnit + " \u65e0\u53ef\u9760\u6362\u7b97\u516c\u5f0f") : formulaIssue);
+                        }
                     }
                 }
 
@@ -2150,7 +2152,7 @@ namespace RecoNet
                 {
                     groupItem.Selected = false;
                     groupItem.NeedExactNameConfirmation = true;
-                    groupItem.AlignNote = AppendPreviewNote(groupItem.AlignNote, "组件组存在单位、条目或公式风险，整组禁止自动写入");
+                    groupItem.AlignNote = AppendPreviewNote(groupItem.AlignNote, "组件组需要确认或存在阻断，确认前整组不写入");
                 }
             }
             items.AddRange(groupItems);
@@ -2188,21 +2190,22 @@ namespace RecoNet
             Dictionary<string, string> projectEntryNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             try
             {
-                using (SqlConnection conn = AgentCreateWorkConnection(mainForm))
-                {
-                    method = SmartResolveProjectMethod(conn);
-                    route = ResolveSmartMethodRoute(method);
-                    projectEntries = LoadSmartProjectEntries(conn, out projectEntryNames);
-                }
+                SqlConnection conn = GetOpenProjectConnection(mainForm);
+                method = SmartResolveProjectMethod(conn);
+                route = ResolveSmartMethodRoute(method);
+                projectEntries = LoadSmartProjectEntries(conn, out projectEntryNames);
             }
             catch (Exception ex)
             {
                 Log("Smart fill project context failed: " + ex.Message);
+                warning = "无法读取当前项目编制办法，已停止推荐：" + ex.Message;
+                return new List<FillPreviewItem>();
             }
 
             string snapshotNote;
             SmartLearningSnapshot snapshot = LoadSmartLearningSnapshot(route.LearningMethod,
                 route.LibraryMethod, route.MethodNo, out snapshotNote);
+            snapshot.SelectedScope = selectedScope;
             snapshot.ProjectEntryNameByCode = projectEntryNames;
             if (snapshot.BySignature.Count == 0)
             {
@@ -2255,23 +2258,7 @@ namespace RecoNet
                     }
                 }
 
-                if (!matched && scoped)
-                {
-                    if (exactHits != null && exactHits.Count > 0)
-                    {
-                        matched = AppendRankedSmartMatch(items, row, targetRows, exactHits, snapshot, projectEntries, currentQuotaByCode,
-                            "名称学习命中，全库兜底", nameLevelSig, preferredPrefixes, prefixVotes);
-                        if (matched) hitExact++;
-                    }
-                    if (!matched && nameHits != null && nameHits.Count > 0)
-                    {
-                        matched = AppendRankedSmartMatch(items, row, targetRows, nameHits, snapshot, projectEntries, currentQuotaByCode,
-                            "名称兼容命中，全库兜底", nameLevelSig, preferredPrefixes, prefixVotes);
-                        if (matched) hitNameOnly++;
-                    }
-                }
-
-                // 模糊层:只有范围内/全库的精确和同名都未命中时才打分。
+                // 模糊层只在当前选择范围内打分；范围内未命中直接转人工。
                 List<KeyValuePair<int, string>> scored = BuildSmartFuzzyScoresIfUnmatched(matched, nameSig, snapshot.NameFeatures);
                 List<NameQuotaCandidateGroup> fuzzyCandidates = new List<NameQuotaCandidateGroup>();
                 string fuzzySourceNote = "";
@@ -2280,13 +2267,6 @@ namespace RecoNet
                     fuzzyCandidates = BuildSmartFuzzyCandidateGroups(scored, selectedScope, scopedSource, snapshot,
                         nameLevelSig, preferredPrefixes, projectEntries, currentQuotaByCode, row, targetRows);
                     if (fuzzyCandidates.Count > 0) fuzzySourceNote = scopedSource;
-                }
-                if (!matched && fuzzyCandidates.Count == 0 && scoped)
-                {
-                    SmartLearningScope allScope = SmartLearningScope.CreateAll();
-                    fuzzyCandidates = BuildSmartFuzzyCandidateGroups(scored, allScope, "全库兜底", snapshot,
-                        nameLevelSig, preferredPrefixes, projectEntries, currentQuotaByCode, row, targetRows);
-                    if (fuzzyCandidates.Count > 0) fuzzySourceNote = "全库兜底";
                 }
                 if (matched) continue;
 
@@ -2328,8 +2308,7 @@ namespace RecoNet
             }
             }
 
-            string sourceLabel = snapshot.FromSql ? "学习库(SQL)" : "本地映射(jsonl回退)";
-            warning = sourceLabel + ":精确 " + hitExact.ToString(CultureInfo.InvariantCulture) +
+            warning = "学习库(SQL):精确 " + hitExact.ToString(CultureInfo.InvariantCulture) +
                 " 行,同名 " + hitNameOnly.ToString(CultureInfo.InvariantCulture) +
                 " 行,模糊候选 " + fuzzyRows.ToString(CultureInfo.InvariantCulture) +
                 " 行,待手挂 " + manualRows.ToString(CultureInfo.InvariantCulture) + " 行。" +
