@@ -1456,22 +1456,24 @@ namespace RecoNet
             try
             {
                 FillTemplate t = LoadFillTemplate(templateName);
-                if (t == null || !String.Equals(t.MatchBy, "name", StringComparison.OrdinalIgnoreCase)) return;
-                foreach (IGrouping<int, FillPreviewItem> group in (written ?? new List<FillPreviewItem>())
-                    .Where(item => item != null && item.IsNameDriven && !String.IsNullOrWhiteSpace(item.QuotaCode))
-                    .GroupBy(item => item.TargetRow))
+                // 推荐定额模式没有本地模板；模板回写可跳过，但 SQL 学习仍必须继续。
+                if (t != null && String.Equals(t.MatchBy, "name", StringComparison.OrdinalIgnoreCase))
                 {
-                    List<FillPreviewItem> oldGroup = (replaced ?? new List<FillPreviewItem>())
-                        .Where(item => item != null && item.TargetRow == group.Key)
-                        .ToList();
-                    ReplaceTemplateWithManualBinding(t, group.ToList(), oldGroup);
+                    foreach (IGrouping<int, FillPreviewItem> group in (written ?? new List<FillPreviewItem>())
+                        .Where(item => item != null && item.IsNameDriven && !String.IsNullOrWhiteSpace(item.QuotaCode))
+                        .GroupBy(item => item.TargetRow))
+                    {
+                        List<FillPreviewItem> oldGroup = (replaced ?? new List<FillPreviewItem>())
+                            .Where(item => item != null && item.TargetRow == group.Key)
+                            .ToList();
+                        ReplaceTemplateWithManualBinding(t, group.ToList(), oldGroup);
+                    }
+                    SaveFillTemplate(t);
                 }
-                SaveFillTemplate(t);
             }
             catch (Exception ex)
             {
                 Log("FeedbackNameMatches template writeback failed: " + ex.Message);
-                return;
             }
 
             RecordNameMatchesToLearningDb(mappingGroups);

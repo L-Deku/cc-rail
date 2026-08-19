@@ -354,20 +354,16 @@ namespace RecoNet
                     if (e.RowIndex > start) e.AdvancedBorderStyle.Top = DataGridViewAdvancedCellBorderStyle.None;
                     if (e.RowIndex < end) e.AdvancedBorderStyle.Bottom = DataGridViewAdvancedCellBorderStyle.None;
                     e.PaintBackground(e.ClipBounds, true);
-                    int paintRow = end;
-                    while (paintRow >= start && !grid.Rows[paintRow].Displayed) paintRow--;
-                    if (e.RowIndex == paintRow)
+                    Rectangle union = GetVisibleMergedTargetNameBounds(grid, e.ColumnIndex, start, end);
+                    string text = Convert.ToString(grid.Rows[start].Cells[e.ColumnIndex].Value);
+                    if (!union.IsEmpty && !String.IsNullOrEmpty(text))
                     {
-                        Rectangle union = GetVisibleMergedTargetNameBounds(grid, e.ColumnIndex, start, end);
-                        string text = Convert.ToString(grid.Rows[start].Cells[e.ColumnIndex].Value);
-                        if (!union.IsEmpty && !String.IsNullOrEmpty(text))
-                        {
-                            bool selected = (e.State & DataGridViewElementStates.Selected) != 0;
-                            Color foreColor = selected ? e.CellStyle.SelectionForeColor : e.CellStyle.ForeColor;
-                            // 靠左 + 垂直居中,与普通行的左对齐保持一致。
-                            TextRenderer.DrawText(e.Graphics, text, e.CellStyle.Font, union, foreColor,
-                                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
-                        }
+                        bool selected = (e.State & DataGridViewElementStates.Selected) != 0;
+                        Color foreColor = selected ? e.CellStyle.SelectionForeColor : e.CellStyle.ForeColor;
+                        // 每个成员行都重绘自己与合并区域相交的部分。点击只使首行失效时，
+                        // 不再依赖末行顺带重绘整块，避免合并文字在点击中或点击后消失。
+                        DrawMergedTargetNameTextForCell(e.Graphics, text, e.CellStyle.Font,
+                            union, e.CellBounds, foreColor);
                     }
                     e.Handled = true;
                 };
@@ -1766,6 +1762,29 @@ namespace RecoNet
                 }
                 result.Intersect(dataBounds);
                 return result;
+            }
+
+            private static void DrawMergedTargetNameTextForCell(Graphics graphics, string text, Font font,
+                Rectangle mergedBounds, Rectangle cellBounds, Color foreColor)
+            {
+                if (graphics == null || font == null || String.IsNullOrEmpty(text) ||
+                    mergedBounds.IsEmpty || cellBounds.IsEmpty) return;
+                Rectangle clip = Rectangle.Intersect(mergedBounds, cellBounds);
+                if (clip.IsEmpty) return;
+
+                System.Drawing.Drawing2D.GraphicsState state = graphics.Save();
+                try
+                {
+                    graphics.IntersectClip(clip);
+                    // 靠左 + 垂直居中,与普通行的左对齐保持一致。
+                    TextRenderer.DrawText(graphics, text, font, mergedBounds, foreColor,
+                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
+                        TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
+                }
+                finally
+                {
+                    graphics.Restore(state);
+                }
             }
 
             // —— 条目树 ——

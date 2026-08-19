@@ -312,6 +312,29 @@ if ($null -eq $candidateType -or $null -eq $confirmExact -or $null -eq $confirmC
     throw '缺少重复名称候选或确认入口'
 }
 
+$manualLearningItems = [Activator]::CreateInstance($itemListType)
+$manualLearningItem = New-PreviewItem 35 0 '推荐定额无模板学习回归'
+$itemType.GetField('TargetFullName', $flags).SetValue($manualLearningItem, '推荐定额无模板学习回归')
+$itemType.GetField('TargetUnit', $flags).SetValue($manualLearningItem, 'm')
+$itemType.GetField('QuotaCode', $flags).SetValue($manualLearningItem, 'TEST-Q')
+$itemType.GetField('SourceName', $flags).SetValue($manualLearningItem, '测试定额')
+$itemType.GetField('Unit', $flags).SetValue($manualLearningItem, 'm')
+$manualLearningItems.Add($manualLearningItem)
+$feedbackNameMatches = $type.GetMethod('FeedbackNameMatches', $flags)
+if ($null -eq $feedbackNameMatches) { throw '缺少名字驱动人工绑定反馈入口' }
+$manualLearningArgs = [object[]]::new(6)
+$manualLearningArgs[0] = ''
+$manualLearningArgs[1] = $manualLearningItems.PSObject.BaseObject
+$manualLearningArgs[2] = 'test.xlsx'
+$manualLearningArgs[3] = 'Sheet1'
+$manualLearningArgs[4] = $null
+$manualLearningArgs[5] = $null
+[void]$feedbackNameMatches.Invoke($null, $manualLearningArgs)
+if (-not $manualLearningItem.LearningFeedbackAttempted) {
+    throw '推荐定额无本地模板时不得提前跳过 SQL 学习反馈'
+}
+Write-Host 'PASS 推荐定额无本地模板仍进入 SQL 学习反馈链'
+
 $singleItems = [Activator]::CreateInstance($itemListType)
 $singleItems.Add((New-PreviewItem 40 0 '钢管 SC20 m'))
 $singleItems.Add((New-PreviewItem 40 1 ''))
@@ -783,6 +806,37 @@ try {
         if ($mergedBounds.IsEmpty -or $mergedBounds.Top -lt $scrollGrid.ColumnHeadersHeight -or
             $mergedBounds.Bottom -gt $scrollGrid.ClientSize.Height) {
             throw '合并工程量名绘制区域越过表头或可见数据区'
+        }
+        $drawMerged = $panelType.GetMethod('DrawMergedTargetNameTextForCell', $flags)
+        if ($null -eq $drawMerged) { throw '缺少合并工程量名逐成员行绘制入口' }
+        $paintBitmap = New-Object System.Drawing.Bitmap 140, 40
+        $paintGraphics = [System.Drawing.Graphics]::FromImage($paintBitmap)
+        try {
+            $paintGraphics.Clear([System.Drawing.Color]::White)
+            $mergedPaintBounds = New-Object System.Drawing.Rectangle 0, 0, 140, 40
+            foreach ($cellPaintBounds in @(
+                (New-Object System.Drawing.Rectangle 0, 0, 140, 20),
+                (New-Object System.Drawing.Rectangle 0, 20, 140, 20))) {
+                [void]$drawMerged.Invoke($null, @(
+                    $paintGraphics.PSObject.BaseObject, '合并工程量第一行显示',
+                    [System.Drawing.SystemFonts]::DefaultFont, $mergedPaintBounds,
+                    $cellPaintBounds, [System.Drawing.Color]::Black))
+            }
+            $topInk = 0
+            $bottomInk = 0
+            for ($x = 0; $x -lt $paintBitmap.Width; $x++) {
+                for ($y = 0; $y -lt $paintBitmap.Height; $y++) {
+                    if ($paintBitmap.GetPixel($x, $y).ToArgb() -eq [System.Drawing.Color]::White.ToArgb()) { continue }
+                    if ($y -lt 20) { $topInk++ } else { $bottomInk++ }
+                }
+            }
+            if ($topInk -eq 0 -or $bottomInk -eq 0) {
+                throw '合并工程量名必须由首行和后续行分别重绘各自可见部分'
+            }
+        }
+        finally {
+            $paintGraphics.Dispose()
+            $paintBitmap.Dispose()
         }
         Write-Host 'PASS 勾选和候选切换仅局部刷新并保持滚动视口'
     }
