@@ -78,15 +78,13 @@ try {
     [void]$persistedCodes.Add('03')
     $scopeMap.Add('persisted-box', $persistedCodes)
 
-    function New-SmartEntry([string]$BoxId, [string]$ContextCode) {
+    function New-SmartEntry([string]$BoxId) {
         $entry = [Activator]::CreateInstance($entryType, $true).PSObject.BaseObject
         $entryType.GetField('BoxId', $flags).SetValue($entry, $BoxId)
-        $contexts = $entryType.GetField('LocalContextKeys', $flags).GetValue($entry)
-        [void]$contexts.Add("30号文`n$ContextCode")
         return $entry
     }
-    $persistedEntry = New-SmartEntry 'persisted-box' '04'
-    $localOnlyEntry = New-SmartEntry 'local-only-box' '05'
+    $persistedEntry = New-SmartEntry 'persisted-box'
+    $localOnlyEntry = New-SmartEntry 'local-only-box'
     $listType = [System.Collections.Generic.List``1].MakeGenericType($entryType)
     $hits = [Activator]::CreateInstance($listType).PSObject.BaseObject
     [void]$hits.Add($persistedEntry)
@@ -115,9 +113,8 @@ try {
     [string[]]$firstEntryIds = @(Get-FilteredBoxIds (Invoke-ScopeFilter $entryScope))
     [string[]]$secondEntryIds = @(Get-FilteredBoxIds (Invoke-ScopeFilter $entryScope))
     [string[]]$unclassifiedIds = @(Get-FilteredBoxIds (Invoke-ScopeFilter (New-Scope 'Unclassified' '')))
-    if ($firstEntryIds.Count -ne 1 -or $firstEntryIds[0] -ne 'local-only-box' -or
-        $secondEntryIds.Count -ne 1 -or $secondEntryIds[0] -ne 'local-only-box') {
-        throw '本机上下文的范围过滤结果在连续调用后发生了变化'
+    if ($firstEntryIds.Count -ne 0 -or $secondEntryIds.Count -ne 0) {
+        throw '不得用本机临时上下文把未持久化组件塞进专业范围'
     }
     if ($unclassifiedIds.Count -ne 1 -or $unclassifiedIds[0] -ne 'local-only-box') {
         throw '只有本机上下文、无 EngineeringTemplate 证据的组件未保持未归类'
@@ -126,6 +123,43 @@ try {
         $persistedCodes.Count -ne 1 -or -not $persistedCodes.Contains('03') -or
         $persistedCodes.Contains('04') -or $scopeMap.ContainsKey('local-only-box')) {
         throw '范围过滤就地修改了 SmartLearningSnapshot'
+    }
+
+    $previewType = $type.GetNestedType('FillPreviewItem', [System.Reflection.BindingFlags]'Public,NonPublic')
+    $currentEntryType = $panelType.GetNestedType('CurrentSmartEntry', [System.Reflection.BindingFlags]'Public,NonPublic')
+    $previewListType = [Collections.Generic.List``1].MakeGenericType($previewType)
+    $previewItems = [Activator]::CreateInstance($previewListType).PSObject.BaseObject
+    $previewItem = [Activator]::CreateInstance($previewType).PSObject.BaseObject
+    foreach ($pair in @{ IsNameDriven=$true; TemplateName='推荐定额'; TargetRow=7; GroupOrder=0;
+        TargetName='测试工程量'; TargetUnit='项'; TargetQuantityText='1'; QuantityText='1';
+        QuotaCode='EY-299'; SourceName='安装定额'; Unit='台'; Status='缺跨量纲换算系数'; Selected=$false }.GetEnumerator()) {
+        $previewType.GetField($pair.Key, $flags).SetValue($previewItem, $pair.Value)
+    }
+    [void]$previewItems.Add($previewItem)
+    $panelType.GetField('preview', $flags).SetValue($panel, $previewItems)
+    $panelType.GetField('currentEntryWritable', $flags).SetValue($panel, $true)
+    $currentEntry = [Activator]::CreateInstance($currentEntryType, $true).PSObject.BaseObject
+    $currentEntryType.GetField('EntryName', $flags).SetValue($currentEntry, '设备购置费')
+    $panelType.GetField('currentSmartEntry', $flags).SetValue($panel, $currentEntry)
+    $refreshSf = $panelType.GetMethod('RefreshSmartSfEntryState', $flags)
+    [void]$refreshSf.Invoke($panel, $null)
+    if (-not [bool]$previewType.GetField('SfEntryBlocked', $flags).GetValue($previewItem) -or
+        [string]$previewType.GetField('Status', $flags).GetValue($previewItem) -ne '缺跨量纲换算系数') {
+        throw 'SF 双向条目冲突未动态阻断整组，或污染了预览固有 Status'
+    }
+    $currentEntryType.GetField('EntryName', $flags).SetValue($currentEntry, '安装工程费')
+    [void]$refreshSf.Invoke($panel, $null)
+    if ([bool]$previewType.GetField('SfEntryBlocked', $flags).GetValue($previewItem) -or
+        [string]$previewType.GetField('Status', $flags).GetValue($previewItem) -ne '缺跨量纲换算系数') {
+        throw '切回普通条目后 SF 动态阻断未清除，或误改了单位/公式状态'
+    }
+
+    $previewType.GetField('Status', $flags).SetValue($previewItem, '')
+    $fillGrid = $panelType.GetMethod('FillGrid', $flags)
+    [void]$fillGrid.Invoke($panel, $null)
+    $grid = $panelType.GetField('grid', $flags).GetValue($panel)
+    if ($grid.Rows.Count -ne 1 -or $grid.SelectedRows.Count -ne 0) {
+        throw '初次预览填表后必须为 0 个用户选中组'
     }
     Write-Host 'Test-SmartFillLearningScopeUi: PASS'
 }

@@ -1364,13 +1364,19 @@ namespace RecoNet
             {
                 mappingGroup.Targets.Add(new MappingFeedbackTarget
                 {
-                    Kind = "quota",
+                    Kind = String.IsNullOrWhiteSpace(item.TargetKind) ? "quota" : item.TargetKind,
                     Code = item.QuotaCode,
                     Name = item.SourceName,
                     Unit = item.Unit,
                     EntryCode = !String.IsNullOrWhiteSpace(item.ChosenItemNo) ? item.ChosenItemNo : item.ItemNo,
                     EntryName = !String.IsNullOrWhiteSpace(item.ChosenItemName) ? item.ChosenItemName : mappingGroup.EntryName,
-                    FormulaTemplate = acceptedCount + correctedCount > 0 ? item.FormulaTemplate : ""
+                    FormulaTemplate = acceptedCount + correctedCount > 0 ? item.FormulaTemplate : "",
+                    QuotaSequence = item.WrittenQuotaSequence > 0 ? item.WrittenQuotaSequence : item.ChosenQuotaSeq,
+                    SourceEndpointIdentity = item.WrittenQuotaSequence > 0
+                        ? GetProjectConnectionIdentity(projectConn)
+                        : item.SourceEndpointIdentity,
+                    UnitPrice = item.LearnedUnitPrice,
+                    EntrySource = item.EntrySource ?? ""
                 });
             }
             return mappingGroup;

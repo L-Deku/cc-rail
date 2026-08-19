@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 $testDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sourceDir = Split-Path -Parent $testDir
@@ -17,7 +17,7 @@ if ($snapshot.Contains('LoadMappingBoxRows(')) { throw 'SmartFill still reads lo
 if ($snapshot.Contains('MergePendingLocalMappingsIntoSmartSnapshot(')) { throw 'SmartFill still overlays pending local mappings onto the SQL snapshot.' }
 if ($snapshot.Contains('fallback to jsonl') -or $snapshot.Contains('jsonl fallback')) { throw 'SmartFill still advertises a local jsonl fallback.' }
 
-$scopes = Get-Section $smart 'private static List<SmartLearningScope> LoadSmartLearningScopes' 'private static bool IsSmartClassifiedEntryCode'
+$scopes = Get-Section $smart 'private static SmartScopeLoadResult LoadSmartLearningScopes' 'private static bool IsSmartClassifiedEntryCode'
 if ($scopes.Contains('AgentCreateWorkConnection(mainForm)')) { throw 'SmartFill scope loading still clones the host project connection.' }
 if (-not $scopes.Contains('GetOpenProjectConnection(mainForm)')) { throw 'SmartFill scope loading does not reuse the open host project connection.' }
 

@@ -72,6 +72,18 @@ namespace RecoNet
             public string Signature;
         }
 
+        public sealed class FillSourceCandidate
+        {
+            public long BindingId;
+            public string EndpointIdentity;
+            public string DatabaseName;
+            public long QuotaSequence;
+            public string TargetKind;
+            public string TargetCode;
+            public string TargetName;
+            public string TargetUnit;
+        }
+
         // 预览/写入用的一条结果
         public sealed class FillPreviewItem
         {
@@ -79,6 +91,7 @@ namespace RecoNet
             public string TemplateName;
             public string ItemNo;
             public string QuotaCode;
+            public string TargetKind;
             public string Unit;
             public string Adjust;
             public string SourceName;
@@ -103,9 +116,17 @@ namespace RecoNet
             public bool IsLibraryQuota;    // 手挂选中的是库内定额(项目无此编号)，写入走原生粘贴管线
             public string SourceDb;        // 跨库复制来源库(学习库溯源到的历史项目库)；空=无
             public long SourceDbQuotaSeq;  // 来源库中的定额序号(跨库整行复制用)
+            public string SourceEndpointIdentity;
+            public List<FillSourceCandidate> SourceCandidates;
+            public decimal LearnedUnitPrice;
             public long ChosenItemSeq;     // 用户显式选择的放入条目(条目序号)；0=未选(沿用邻居锚点)
             public string ChosenItemNo;    // 对应条目编号(显示/粘贴导航用)
             public string ChosenItemName;  // 对应条目名称(目标级学习回流用)
+            public string EntrySource;
+            public bool SfRedirect;
+            public bool SfEntryBlocked;
+            public string SfEntryBlockReason;
+            public long WrittenQuotaSequence;
             public bool NeedExactNameConfirmation; // 精确同名已带出定额，但仍需用户确认
             public bool LearningFeedbackAttempted; // 当前预览已尝试写入 SQL 学习库
             public bool SqlFeedbackDurable;        // SQL 事务已提交
@@ -1031,21 +1052,19 @@ namespace RecoNet
             List<FillPreviewItem> group = (items ?? Enumerable.Empty<FillPreviewItem>())
                 .Where(item => item != null).ToList();
             if (group.Count == 0 || group.Any(item => !item.IsNameDriven || !item.Selected ||
-                !String.IsNullOrWhiteSpace(item.Status))) return false;
+                !String.IsNullOrWhiteSpace(item.Status) || item.SfEntryBlocked)) return false;
             List<FillPreviewItem> recommended = group.Where(item =>
                 String.Equals(item.TemplateName, "推荐定额", StringComparison.Ordinal)).ToList();
             if (recommended.Count > 0)
             {
-                bool hasPrimaryTarget = recommended.Any(item => IsPrimaryLearningTarget("quota", item.QuotaCode));
-                bool pureSfEquipment = recommended.All(item => GetLearningBaseTargetCode(item.QuotaCode) == "SF" &&
-                    (item.ChosenItemName ?? "").IndexOf("设备购置费", StringComparison.OrdinalIgnoreCase) >= 0);
-                if (!hasPrimaryTarget && !pureSfEquipment) return false;
                 foreach (FillPreviewItem item in recommended)
                 {
                     bool sf = GetLearningBaseTargetCode(item.QuotaCode) == "SF";
                     bool equipmentEntry = (item.ChosenItemName ?? "").IndexOf("设备购置费",
                         StringComparison.OrdinalIgnoreCase) >= 0;
                     if (sf != equipmentEntry) return false;
+                    if (IsContextSensitiveLearningCode(item.QuotaCode) &&
+                        (String.IsNullOrWhiteSpace(item.SourceName) || String.IsNullOrWhiteSpace(item.Unit))) return false;
                 }
             }
 
@@ -1061,6 +1080,593 @@ namespace RecoNet
                 if (!hasSource) return false;
             }
             return true;
+        }
+
+        private enum SmartFillWriteLayer
+        {
+            L1,
+            L2,
+            L3
+        }
+
+        private enum NativeInsertState
+        {
+            NotStarted,
+            Submitted,
+            Confirming,
+            Confirmed,
+            PartiallyConfirmed,
+            Failed,
+            Compensating,
+            Compensated,
+            CompensationFailed,
+            Indeterminate
+        }
+
+        private sealed class PreparedSmartFillItem
+        {
+            public FillPreviewItem Item;
+            public SmartFillWriteLayer Layer;
+            public Dictionary<string, object> SourceRow;
+        }
+
+        private sealed class SmartNativeInsertRecord
+        {
+            public NativeInsertState State = NativeInsertState.NotStarted;
+            public List<PreparedSmartFillItem> Items = new List<PreparedSmartFillItem>();
+            public int ExpectedCount;
+            public List<long> ConfirmedIds = new List<long>();
+            public List<long> RemainingIds = new List<long>();
+            public List<long> UnownedIds = new List<long>();
+            public long TargetItemSeq;
+            public SqlConnection ProjectConnection;
+            public string ProjectConnectionIdentity = "";
+            public DateTime StartedAt;
+            public DateTime FinishedAt;
+            public string Message = "";
+        }
+
+        private static bool HasSmartFillRequiredSourceColumns(Dictionary<string, object> row)
+        {
+            if (row == null) return false;
+            string[] required = new[]
+            {
+                "定额编号", "工程或费用项目名称", "单位", "总概算序号", "条目序号", "顺号",
+                "工程数量输入", "工程数量", "单价", "基价", "工费", "料费", "机费", "人工费",
+                "材料费", "机械费", "设备费", "主材费", "价差", "定额调整", "单重", "合重"
+            };
+            return required.All(row.ContainsKey);
+        }
+
+        private static bool IsSmartFillSourceIdentityMatch(FillPreviewItem item, Dictionary<string, object> row)
+        {
+            if (item == null || !HasSmartFillRequiredSourceColumns(row)) return false;
+            string expected = BuildLearningTargetIdentityKey(item.TargetKind, item.QuotaCode, item.SourceName, item.Unit);
+            string actual = BuildLearningTargetIdentityKey(item.TargetKind,
+                Convert.ToString(row["定额编号"]), Convert.ToString(row["工程或费用项目名称"]), Convert.ToString(row["单位"]));
+            return String.Equals(expected, actual, StringComparison.OrdinalIgnoreCase) &&
+                String.Equals(NormalizeForSignature(item.SourceName),
+                    NormalizeForSignature(Convert.ToString(row["工程或费用项目名称"])), StringComparison.OrdinalIgnoreCase) &&
+                String.Equals(NormalizeForSignature(item.Unit),
+                    NormalizeForSignature(Convert.ToString(row["单位"])), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static Dictionary<string, object> LoadSmartFillStructuralRow(SqlConnection conn, long targetUnitSeq,
+            long targetEntrySeq)
+        {
+            using (SqlCommand cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "select top 1 * from 定额输入 where 总概算序号=@unit and 条目序号=@entry order by 定额序号";
+                cmd.Parameters.AddWithValue("@unit", targetUnitSeq);
+                cmd.Parameters.AddWithValue("@entry", targetEntrySeq);
+                using (SqlDataAdapter adapter = new SqlDataAdapter(cmd))
+                {
+                    DataTable table = new DataTable();
+                    adapter.Fill(table);
+                    if (table.Rows.Count == 0)
+                    {
+                        cmd.Parameters.Clear();
+                        cmd.CommandText = "select top 1 * from 定额输入 where 总概算序号=@unit order by 定额序号";
+                        cmd.Parameters.AddWithValue("@unit", targetUnitSeq);
+                        table.Clear();
+                        adapter.Fill(table);
+                    }
+                    if (table.Rows.Count == 0)
+                    {
+                        cmd.Parameters.Clear();
+                        cmd.CommandText = "select top 1 * from 定额输入 order by 定额序号";
+                        table.Clear();
+                        adapter.Fill(table);
+                    }
+                    if (table.Rows.Count == 0) return null;
+                    Dictionary<string, object> row = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+                    foreach (DataColumn column in table.Columns) row[column.ColumnName] = table.Rows[0][column];
+                    return row;
+                }
+            }
+        }
+
+        private static Dictionary<string, object> BuildSmartFillL2Row(Dictionary<string, object> structuralRow,
+            FillPreviewItem item)
+        {
+            if (structuralRow == null || item == null) return null;
+            Dictionary<string, object> row = new Dictionary<string, object>(structuralRow, StringComparer.OrdinalIgnoreCase);
+            SetIfPresent(row, "定额编号", item.QuotaCode ?? "");
+            SetIfPresent(row, "工程或费用项目名称", item.SourceName ?? "");
+            SetIfPresent(row, "单位", item.Unit ?? "");
+            SetIfPresent(row, "定额调整", "");
+            SetIfPresent(row, "工程数量输入", item.QuantityText ?? "");
+            decimal quantity;
+            string quantityError;
+            SetIfPresent(row, "工程数量", TryEvaluateDecimal(item.QuantityText, out quantity, out quantityError) ? (object)quantity : DBNull.Value);
+            foreach (string name in new[] { "基价", "工费", "料费", "机费", "人工费", "材料费", "机械费", "设备费", "主材费", "价差", "合价", "单重", "合重" })
+                SetIfPresent(row, name, 0m);
+            SetIfPresent(row, "单价", item.LearnedUnitPrice);
+            row.Remove("定额序号");
+            return row;
+        }
+
+        private static bool IsSmartNativeQuantityMatch(FillPreviewItem item, Dictionary<string, object> row)
+        {
+            if (item == null || row == null) return false;
+            decimal expected;
+            string expectedError;
+            if (!TryEvaluateDecimal(item.QuantityText, out expected, out expectedError)) return false;
+            foreach (string field in new[] { "工程数量", "工程数量输入" })
+            {
+                object raw;
+                decimal actual;
+                string actualError;
+                if (row.TryGetValue(field, out raw) && raw != null && raw != DBNull.Value &&
+                    TryEvaluateDecimal(Convert.ToString(raw, CultureInfo.InvariantCulture), out actual, out actualError) &&
+                    Math.Abs(actual - expected) <= 0.000001m) return true;
+            }
+            return false;
+        }
+
+        private static bool IsSmartNativePlannedShell(FillPreviewItem item, Dictionary<string, object> row)
+        {
+            if (item == null || row == null || !row.ContainsKey("定额编号")) return false;
+            return String.Equals(GetLearningBaseTargetCode(Convert.ToString(row["定额编号"])),
+                    GetLearningBaseTargetCode(item.QuotaCode), StringComparison.OrdinalIgnoreCase) &&
+                IsSmartNativeQuantityMatch(item, row);
+        }
+
+        private static NativeInsertState ClassifySmartNativeRows(SmartNativeInsertRecord record,
+            Dictionary<long, Dictionary<string, object>> rows, out List<long> ownedIds, out List<long> unownedIds)
+        {
+            ownedIds = new List<long>();
+            unownedIds = new List<long>();
+            if (record == null || record.Items == null || record.Items.Count == 0) return NativeInsertState.Failed;
+            List<PreparedSmartFillItem> unmatched = record.Items.ToList();
+            bool fullIdentity = true;
+            foreach (KeyValuePair<long, Dictionary<string, object>> pair in (rows ??
+                new Dictionary<long, Dictionary<string, object>>()).OrderBy(value => value.Key))
+            {
+                int match = unmatched.FindIndex(plan => IsSmartFillSourceIdentityMatch(plan.Item, pair.Value) &&
+                    IsSmartNativeQuantityMatch(plan.Item, pair.Value));
+                if (match < 0)
+                {
+                    match = unmatched.FindIndex(plan => IsSmartNativePlannedShell(plan.Item, pair.Value));
+                    if (match >= 0) fullIdentity = false;
+                }
+                if (match < 0)
+                {
+                    unownedIds.Add(pair.Key);
+                    continue;
+                }
+                ownedIds.Add(pair.Key);
+                unmatched.RemoveAt(match);
+            }
+            if (ownedIds.Count == record.ExpectedCount && unmatched.Count == 0 && unownedIds.Count == 0 && fullIdentity)
+                return NativeInsertState.Confirmed;
+            if (unownedIds.Count > 0 || !fullIdentity) return NativeInsertState.Indeterminate;
+            if (ownedIds.Count > 0) return NativeInsertState.PartiallyConfirmed;
+            return NativeInsertState.Failed;
+        }
+
+        private static void AssignSmartNativeRows(SmartNativeInsertRecord record,
+            Dictionary<long, Dictionary<string, object>> rows)
+        {
+            if (record == null || rows == null) return;
+            List<PreparedSmartFillItem> unmatched = record.Items.ToList();
+            foreach (KeyValuePair<long, Dictionary<string, object>> pair in rows.OrderBy(value => value.Key))
+            {
+                int match = unmatched.FindIndex(plan => IsSmartFillSourceIdentityMatch(plan.Item, pair.Value) &&
+                    IsSmartNativeQuantityMatch(plan.Item, pair.Value));
+                if (match < 0) continue;
+                PreparedSmartFillItem matchedPlan = unmatched[match];
+                matchedPlan.Item.WrittenQuotaSequence = pair.Key;
+                decimal nativePrice;
+                if (pair.Value.ContainsKey("单价") && Decimal.TryParse(Convert.ToString(pair.Value["单价"]),
+                    NumberStyles.Float, CultureInfo.InvariantCulture, out nativePrice)) matchedPlan.Item.LearnedUnitPrice = nativePrice;
+                unmatched.RemoveAt(match);
+            }
+        }
+
+        private static SmartNativeInsertRecord ExecuteSmartNativeInsertGroup(Form mainForm, SqlConnection conn,
+            string connectionIdentity, IGrouping<string, PreparedSmartFillItem> nativeGroup)
+        {
+            SmartNativeInsertRecord record = new SmartNativeInsertRecord
+            {
+                Items = nativeGroup.ToList(),
+                ExpectedCount = nativeGroup.Count(),
+                TargetItemSeq = nativeGroup.Select(plan => plan.Item.ChosenItemSeq).FirstOrDefault(),
+                ProjectConnection = conn,
+                ProjectConnectionIdentity = connectionIdentity ?? "",
+                StartedAt = DateTime.Now
+            };
+            HashSet<long> before = LoadAgentItemQuotaIds(conn, nativeGroup.Key);
+            if (!TryNavigateToAgentItem(mainForm, conn, nativeGroup.Key))
+            {
+                record.State = NativeInsertState.Failed;
+                record.Message = "未能在左侧树上定位目标条目";
+                record.FinishedAt = DateTime.Now;
+                return record;
+            }
+            WaitAgentUiIdle(800);
+            DataGridView grid = GetField<DataGridView>(mainForm, "dataGridViewDE");
+            if (grid == null)
+            {
+                record.State = NativeInsertState.Failed;
+                record.Message = "没有找到定额输入表格";
+                record.FinishedAt = DateTime.Now;
+                return record;
+            }
+
+            StringBuilder text = new StringBuilder();
+            foreach (PreparedSmartFillItem plan in record.Items)
+            {
+                text.Append(CleanAgentCell(plan.Item.QuotaCode)).Append('\t').Append('\t').Append('\t')
+                    .Append(CleanAgentCell(plan.Item.QuantityText)).Append("\r\n");
+            }
+            try
+            {
+                grid.Focus();
+                MoveAgentGridToNewRow(grid);
+                Clipboard.SetText(text.ToString());
+                if (!TryInvokeAgentPasteMenu(mainForm)) SendKeys.SendWait("^v");
+                record.State = NativeInsertState.Submitted;
+            }
+            catch (Exception ex)
+            {
+                record.State = NativeInsertState.Failed;
+                record.Message = "原生粘贴失败：" + ex.Message;
+                record.FinishedAt = DateTime.Now;
+                return record;
+            }
+
+            DateTime deadline = DateTime.Now.AddSeconds(10);
+            string lastSignature = "";
+            int stableCount = 0;
+            Dictionary<long, Dictionary<string, object>> latestRows = new Dictionary<long, Dictionary<string, object>>();
+            NativeInsertState latestState = NativeInsertState.Failed;
+            while (DateTime.Now < deadline)
+            {
+                record.State = NativeInsertState.Confirming;
+                WaitAgentUiIdle(250);
+                SqlConnection current;
+                try { current = GetOpenProjectConnection(mainForm); }
+                catch (Exception ex)
+                {
+                    record.State = NativeInsertState.Indeterminate;
+                    record.Message = "确认期间无法继续借用原项目连接：" + ex.Message;
+                    break;
+                }
+                if (!Object.ReferenceEquals(current, record.ProjectConnection) ||
+                    !String.Equals(GetProjectConnectionIdentity(current), record.ProjectConnectionIdentity,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    record.State = NativeInsertState.Indeterminate;
+                    record.Message = "确认期间项目身份已变化";
+                    break;
+                }
+
+                HashSet<long> after = LoadAgentItemQuotaIds(conn, nativeGroup.Key);
+                List<long> added = after.Where(id => !before.Contains(id)).OrderBy(id => id).ToList();
+                latestRows = new Dictionary<long, Dictionary<string, object>>();
+                foreach (long id in added)
+                {
+                    Dictionary<string, object> row = LoadTemplateFullRow(conn, null, id);
+                    if (row != null) latestRows[id] = row;
+                }
+                List<long> owned;
+                List<long> unowned;
+                latestState = ClassifySmartNativeRows(record, latestRows, out owned, out unowned);
+                record.ConfirmedIds = owned;
+                record.RemainingIds = owned.ToList();
+                record.UnownedIds = unowned;
+                string signature = String.Join(",", added.Select(id => id.ToString(CultureInfo.InvariantCulture)).ToArray()) +
+                    "|" + latestState.ToString();
+                if (String.Equals(signature, lastSignature, StringComparison.Ordinal)) stableCount++;
+                else { lastSignature = signature; stableCount = 1; }
+                if (added.Count == 0) continue;
+                if (stableCount >= 3 && (latestState == NativeInsertState.Confirmed ||
+                    latestState == NativeInsertState.PartiallyConfirmed || latestState == NativeInsertState.Indeterminate))
+                {
+                    record.State = latestState;
+                    break;
+                }
+            }
+            if (record.State == NativeInsertState.Confirming || record.State == NativeInsertState.Submitted)
+                record.State = latestState;
+            if (record.State == NativeInsertState.Confirmed)
+            {
+                AssignSmartNativeRows(record, latestRows);
+                record.Message = "原生新增行已连续 3 次稳定并通过完整身份核对";
+            }
+            else if (String.IsNullOrWhiteSpace(record.Message))
+            {
+                record.Message = record.State == NativeInsertState.PartiallyConfirmed
+                    ? "原生新增行少于预期"
+                    : (record.State == NativeInsertState.Indeterminate ? "原生新增行身份不符或存在无法归属的同期新行" : "原生输入未检测到新行");
+            }
+            record.FinishedAt = DateTime.Now;
+            return record;
+        }
+
+        private static bool TryCompensateSmartNativeRows(Form mainForm, SqlConnection expectedConnection,
+            string expectedIdentity, IEnumerable<long> quotaIds, out string error)
+        {
+            error = "";
+            List<long> ids = (quotaIds ?? Enumerable.Empty<long>()).Where(id => id > 0).Distinct().ToList();
+            if (ids.Count == 0) return true;
+            try
+            {
+                SqlConnection current = GetOpenProjectConnection(mainForm);
+                if (!Object.ReferenceEquals(current, expectedConnection) ||
+                    !String.Equals(GetProjectConnectionIdentity(current), expectedIdentity ?? "", StringComparison.OrdinalIgnoreCase))
+                {
+                    error = "项目身份已变化，无法在新项目中补偿旧项目原生写入";
+                    return false;
+                }
+                using (SqlTransaction transaction = current.BeginTransaction())
+                {
+                    try
+                    {
+                        using (SqlCommand cmd = current.CreateCommand())
+                        {
+                            cmd.Transaction = transaction;
+                            List<string> parameters = new List<string>();
+                            for (int i = 0; i < ids.Count; i++)
+                            {
+                                string name = "@id" + i.ToString(CultureInfo.InvariantCulture);
+                                parameters.Add(name);
+                                cmd.Parameters.AddWithValue(name, ids[i]);
+                            }
+                            cmd.CommandText = "delete from 定额输入 where 定额序号 in (" + String.Join(",", parameters.ToArray()) + ")";
+                            cmd.ExecuteNonQuery();
+                            cmd.CommandText = "select count(*) from 定额输入 where 定额序号 in (" + String.Join(",", parameters.ToArray()) + ")";
+                            if (Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) != 0)
+                                throw new InvalidOperationException("补偿后仍检测到本批新增行");
+                        }
+                        transaction.Commit();
+                    }
+                    catch
+                    {
+                        transaction.Rollback();
+                        throw;
+                    }
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+        }
+
+        // 推荐定额：目标条目由用户在宿主章节树中明确选择；SF 可改道到唯一同级设备购置费条目。
+        private static string ApplyFillToSelectedEntry(Form mainForm, long targetUnitSeq, string targetUnitNo,
+            long entrySeq, string entryNo, string entryName, List<FillPreviewItem> items,
+            string sourceWorkbookName, string sourceWorksheet, out bool succeeded)
+        {
+            succeeded = false;
+            List<FillPreviewItem> candidates = (items ?? new List<FillPreviewItem>())
+                .Where(item => item != null && item.IsNameDriven)
+                .OrderBy(item => item.TargetRow).ThenBy(item => item.GroupOrder).ToList();
+            List<List<FillPreviewItem>> groups = candidates.GroupBy(item => item.TargetRow)
+                .Select(group => group.ToList()).ToList();
+            if (groups.Count == 0) return "没有同时被选中且勾选的定额。";
+            if (groups.Any(group => !IsNameQuotaGroupSafeForWrite(group)))
+                return "选中的组件存在数量、单位、公式或 SF 条目阻断，整组未写入。";
+
+            SqlConnection conn = GetOpenProjectConnection(mainForm);
+            string connectionIdentity = GetProjectConnectionIdentity(conn);
+            HashSet<string> targetColumns = LoadQuotaInputColumns(conn, null);
+            Dictionary<long, Dictionary<string, object>> structuralRows =
+                new Dictionary<long, Dictionary<string, object>>();
+            List<PreparedSmartFillItem> prepared = new List<PreparedSmartFillItem>();
+            foreach (FillPreviewItem item in candidates)
+            {
+                decimal quantity;
+                string quantityError;
+                if (!TryEvaluateDecimal(item.QuantityText, out quantity, out quantityError) || quantity <= 0m)
+                    return "组件数量无效，整组未写入：" + (item.TargetFullName ?? item.TargetName ?? "");
+                Dictionary<string, object> source = null;
+                if (item.ChosenQuotaSeq > 0)
+                {
+                    source = LoadTemplateFullRow(conn, null, item.ChosenQuotaSeq);
+                    if (!IsSmartFillSourceIdentityMatch(item, source)) source = null;
+                }
+                if (source == null && item.SourceCandidates != null && item.SourceCandidates.Count > 0)
+                {
+                    source = LoadCrossDbQuotaRow(conn, item, targetColumns);
+                    if (!IsSmartFillSourceIdentityMatch(item, source)) source = null;
+                }
+                PreparedSmartFillItem plan = new PreparedSmartFillItem { Item = item, SourceRow = source };
+                if (source != null)
+                {
+                    plan.Layer = SmartFillWriteLayer.L1;
+                    decimal sourcePrice;
+                    if (source.ContainsKey("单价") && Decimal.TryParse(Convert.ToString(source["单价"]), NumberStyles.Float,
+                        CultureInfo.InvariantCulture, out sourcePrice)) item.LearnedUnitPrice = sourcePrice;
+                }
+                else if (IsContextSensitiveLearningCode(item.QuotaCode))
+                {
+                    if (String.IsNullOrWhiteSpace(item.SourceName) || String.IsNullOrWhiteSpace(item.Unit))
+                        return "辅助码缺少完整名称或单位，整组未写入：" + (item.QuotaCode ?? "");
+                    Dictionary<string, object> structuralRow;
+                    if (!structuralRows.TryGetValue(item.ChosenItemSeq, out structuralRow))
+                    {
+                        structuralRow = LoadSmartFillStructuralRow(conn, targetUnitSeq, item.ChosenItemSeq);
+                        structuralRows[item.ChosenItemSeq] = structuralRow;
+                    }
+                    if (structuralRow == null) return "当前项目没有可用于构造辅助码完整行的业务结构，整组未写入。";
+                    plan.Layer = SmartFillWriteLayer.L2;
+                    plan.SourceRow = BuildSmartFillL2Row(structuralRow, item);
+                }
+                else
+                {
+                    plan.Layer = SmartFillWriteLayer.L3;
+                }
+                prepared.Add(plan);
+            }
+
+            AgentUndoRecord undo = new AgentUndoRecord
+            {
+                Summary = "推荐定额 -> 条目 " + entryNo,
+                Time = DateTime.Now,
+                ProjectConnection = conn,
+                ProjectConnectionIdentity = connectionIdentity
+            };
+            List<SmartNativeInsertRecord> nativeRecords = new List<SmartNativeInsertRecord>();
+            foreach (IGrouping<string, PreparedSmartFillItem> nativeGroup in prepared
+                .Where(plan => plan.Layer == SmartFillWriteLayer.L3).GroupBy(plan => plan.Item.ChosenItemNo ?? ""))
+            {
+                SmartNativeInsertRecord record = ExecuteSmartNativeInsertGroup(mainForm, conn, connectionIdentity, nativeGroup);
+                nativeRecords.Add(record);
+                foreach (long id in record.ConfirmedIds)
+                    undo.Rows.Add(new AgentUndoRow { Kind = "I", QuotaSequence = id });
+                if (record.State == NativeInsertState.Confirmed) continue;
+
+                List<long> allConfirmed = nativeRecords.SelectMany(value => value.ConfirmedIds).Distinct().ToList();
+                foreach (SmartNativeInsertRecord value in nativeRecords.Where(value => value.ConfirmedIds.Count > 0))
+                    value.State = NativeInsertState.Compensating;
+                string compensationError;
+                bool indeterminate = record.State == NativeInsertState.Indeterminate || record.UnownedIds.Count > 0;
+                if (TryCompensateSmartNativeRows(mainForm, conn, connectionIdentity, allConfirmed, out compensationError))
+                {
+                    foreach (SmartNativeInsertRecord value in nativeRecords.Where(value => value.ConfirmedIds.Count > 0))
+                    {
+                        value.State = NativeInsertState.Compensated;
+                        value.RemainingIds.Clear();
+                    }
+                    undo.Rows.RemoveAll(row => row.Kind == "I" && allConfirmed.Contains(row.QuotaSequence));
+                    if (indeterminate)
+                        return "正式编号原生输入结果不确定；已补偿删除能确认属于本批的新行，仍有无法归属的同期新行需在界面核对；未写 marker，未学习。";
+                    return "正式编号原生输入未完整确认；本批已确认新增行已补偿删除，未写 marker，未学习。";
+                }
+                foreach (SmartNativeInsertRecord value in nativeRecords.Where(value => value.ConfirmedIds.Count > 0))
+                    value.State = NativeInsertState.CompensationFailed;
+                if (undo.Rows.Count > 0)
+                {
+                    GetAgentUndoStack(mainForm).Add(undo);
+                    GetAgentRedoStack(mainForm).Clear();
+                }
+                return "正式编号原生输入未完整确认，且补偿失败：" + compensationError + "。已保留带项目身份的撤销记录；未写 marker，未学习。";
+            }
+
+            int markerRows = 0;
+            try
+            {
+                using (SqlTransaction transaction = conn.BeginTransaction())
+                {
+                    try
+                    {
+                        Dictionary<long, int> nextShun = new Dictionary<long, int>();
+                        foreach (IGrouping<long, PreparedSmartFillItem> entryGroup in prepared.GroupBy(plan => plan.Item.ChosenItemSeq))
+                        {
+                            long targetEntrySeq = entryGroup.Key;
+                            PreparedSmartFillItem markerPlan = entryGroup.FirstOrDefault(plan => plan.SourceRow != null);
+                            Dictionary<string, object> markerSource = markerPlan == null ? null : new Dictionary<string, object>(markerPlan.SourceRow);
+                            if (markerSource == null)
+                            {
+                                long nativeId = entryGroup.Select(plan => plan.Item.WrittenQuotaSequence).FirstOrDefault(id => id > 0);
+                                markerSource = LoadTemplateFullRow(conn, transaction, nativeId);
+                            }
+                            if (markerSource == null) throw new InvalidOperationException("无法构造本批 marker 完整行");
+                            int shun = GetMaxShun(conn, transaction, targetUnitSeq, targetEntrySeq) + 1;
+                            markerSource["条目序号"] = targetEntrySeq;
+                            ApplyTemplateFillMarkerFields(markerSource, targetUnitSeq, shun, "推荐定额");
+                            markerSource.Remove("定额序号");
+                            long markerId = InsertQuotaRowReturnId(conn, transaction, markerSource);
+                            if (markerId <= 0) throw new InvalidOperationException("marker 写入未返回新增 ID");
+                            undo.Rows.Add(new AgentUndoRow { Kind = "I", QuotaSequence = markerId });
+                            markerRows++;
+                            nextShun[targetEntrySeq] = shun + 1;
+                        }
+
+                        foreach (PreparedSmartFillItem plan in prepared.Where(value => value.Layer != SmartFillWriteLayer.L3))
+                        {
+                            FillPreviewItem item = plan.Item;
+                            Dictionary<string, object> row = new Dictionary<string, object>(plan.SourceRow);
+                            long itemSeq = item.ChosenItemSeq;
+                            int shun = nextShun[itemSeq];
+                            decimal quantity;
+                            string quantityError;
+                            bool quantityOk = TryEvaluateDecimal(item.QuantityText, out quantity, out quantityError);
+                            row["总概算序号"] = targetUnitSeq;
+                            row["条目序号"] = itemSeq;
+                            row["顺号"] = shun;
+                            row["工程数量输入"] = item.QuantityText ?? "";
+                            row["工程数量"] = quantityOk ? (object)quantity : DBNull.Value;
+                            row.Remove("定额序号");
+                            long newId = InsertQuotaRowReturnId(conn, transaction, row);
+                            if (newId <= 0) throw new InvalidOperationException("业务行写入未返回新增 ID");
+                            item.WrittenQuotaSequence = newId;
+                            undo.Rows.Add(new AgentUndoRow { Kind = "I", QuotaSequence = newId });
+                            nextShun[itemSeq] = shun + 1;
+                        }
+                        transaction.Commit();
+                    }
+                    catch
+                    {
+                        transaction.Rollback();
+                        throw;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                List<long> nativeIds = nativeRecords.SelectMany(value => value.ConfirmedIds).Distinct().ToList();
+                string compensationError;
+                if (!TryCompensateSmartNativeRows(mainForm, conn, connectionIdentity, nativeIds, out compensationError))
+                {
+                    undo.Rows.RemoveAll(row => !nativeIds.Contains(row.QuotaSequence));
+                    if (undo.Rows.Count > 0)
+                    {
+                        GetAgentUndoStack(mainForm).Add(undo);
+                        GetAgentRedoStack(mainForm).Clear();
+                    }
+                    return "项目业务事务已回滚，但原生新增行补偿失败：" + compensationError + "。已保留带项目身份的撤销记录；未学习。";
+                }
+                return "项目业务事务已整体回滚；原生新增行已补偿，未学习。失败原因：" + ex.Message;
+            }
+
+            GetAgentUndoStack(mainForm).Add(undo);
+            GetAgentRedoStack(mainForm).Clear();
+            try
+            {
+                List<MappingFeedbackGroup> feedback = new List<MappingFeedbackGroup>();
+                foreach (List<FillPreviewItem> group in groups)
+                {
+                    MappingFeedbackGroup accepted = BuildTemplateRightClickFeedbackGroup(group,
+                        sourceWorkbookName, sourceWorksheet, conn, 1, 0, 0, "accepted");
+                    if (accepted != null) feedback.Add(accepted);
+                }
+                if (feedback.Count > 0) RecordMappingGroupsToLearningDb(feedback, "apply-accept");
+            }
+            catch (Exception ex)
+            {
+                Log("Apply accept feedback failed: " + ex.Message);
+            }
+            RefreshCurrentQuotaGrid(mainForm);
+            int businessRows = candidates.Count;
+            succeeded = true;
+            return "已向当前条目写入 " + businessRows.ToString(CultureInfo.InvariantCulture) + " 条定额，标记 " +
+                markerRows.ToString(CultureInfo.InvariantCulture) + " 条。写入完成即已保存；请点击“计算”刷新单价、合价和项目汇总。";
         }
 
         // 写入：把选中预览项对应的源定额行，直接复制到【目标单元】的对应条目（条目序号全局共享，原样保留），
@@ -1093,7 +1699,13 @@ namespace RecoNet
                 long targetSeq = ResolveAgentUnitIdSimple(conn, targetUnitNo, out targetLabel);
                 if (targetSeq <= 0) return "找不到目标单元：" + targetUnitNo + "（请填 _ZGS_编号 或单元名称）。";
 
-                AgentUndoRecord undo = new AgentUndoRecord { Summary = "模板铺量 -> 单元 " + targetUnitNo, Time = DateTime.Now };
+                AgentUndoRecord undo = new AgentUndoRecord
+                {
+                    Summary = "模板铺量 -> 单元 " + targetUnitNo,
+                    Time = DateTime.Now,
+                    ProjectConnection = conn,
+                    ProjectConnectionIdentity = GetProjectConnectionIdentity(conn)
+                };
                 StringBuilder msg = new StringBuilder();
                 int inserted = 0, markerRows = 0, libraryInserted = 0, skipped = 0;
                 // 每个 (条目序号) 的下一个顺号，写入时递增。

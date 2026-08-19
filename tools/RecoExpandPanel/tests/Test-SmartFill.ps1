@@ -27,12 +27,10 @@ if ($smart -notmatch 'BuildPreview_SmartFill') { throw '缺少 BuildPreview_Smar
 if ($smart -notmatch 'LoadSmartLearningSnapshot') { throw '缺少学习库快照加载 LoadSmartLearningSnapshot' }
 if ($smart -match 'LoadMappingBoxRows\(' -or $smart -match '本地映射\(jsonl回退\)') { throw '推荐定额仍可能从本地学习配对' }
 if ($smart -notmatch 'local learning is disabled') { throw 'SQL 失败没有明确关闭本地学习' }
-if ($smart -notmatch 'IsLibraryQuota = true') { throw '缺少库内定额原生粘贴路径' }
+if ($smart -notmatch 'IsLibraryQuota = true') { throw '缺少库内目标候选标记' }
 if ($smart -notmatch 'IsNameDriven = true') { throw '推荐定额项必须 IsNameDriven=true,否则不回流学习库' }
 if ($smart -notmatch 'TemplateName = "推荐定额"') { throw '预览项名称未改为推荐定额' }
-if ($smart -notmatch 'EntryBySignatureQuota') { throw '缺少签名级条目证据' }
-if ($smart -notmatch 'prefixVotes') { throw '缺少工程前缀投票' }
-if ($smart -notmatch 'preferredPrefixes') { throw '缺少前缀过滤消歧' }
+if ($smart -match 'EntryBySignatureQuota|prefixVotes|preferredPrefixes|ResolveSmartTargetEntries') { throw '已下线的条目推断仍残留' }
 if ($smart -notmatch 'SmartLearningScope') { throw '缺少推荐学习库范围模型' }
 if ($smart -notmatch 'LoadSmartLearningScopes') { throw '缺少推荐学习库目录加载' }
 if ($smart -match '全库兜底') { throw '专业范围未命中后仍存在全库兜底' }
@@ -74,18 +72,13 @@ $allFlags = [System.Reflection.BindingFlags]'Public,NonPublic,Static,Instance'
 $candidateType = $panelType.GetNestedType('SmartMapCandidateScore', [System.Reflection.BindingFlags]'Public,NonPublic')
 $entryType = $panelType.GetNestedType('SmartMapEntry', [System.Reflection.BindingFlags]'Public,NonPublic')
 $targetType = $panelType.GetNestedType('SmartBoxTarget', [System.Reflection.BindingFlags]'Public,NonPublic')
-$entryStatType = $panelType.GetNestedType('SmartEntryStat', [System.Reflection.BindingFlags]'Public,NonPublic')
-$targetResolutionType = $panelType.GetNestedType('SmartTargetEntryResolution', [System.Reflection.BindingFlags]'Public,NonPublic')
 $mappingFeedbackTargetType = $panelType.GetNestedType('MappingFeedbackTarget', [System.Reflection.BindingFlags]'Public,NonPublic')
 $routeType = $panelType.GetNestedType('SmartMethodRoute', [System.Reflection.BindingFlags]'Public,NonPublic')
 $snapshotType = $panelType.GetNestedType('SmartLearningSnapshot', [System.Reflection.BindingFlags]'Public,NonPublic')
 $canAutoSelect = $panelType.GetMethod('CanAutoSelectSmartMapEntry', $allFlags)
 $isClassifiedEntryCode = $panelType.GetMethod('IsSmartClassifiedEntryCode', $allFlags)
 $resolveRoute = $panelType.GetMethod('ResolveSmartMethodRoute', $allFlags)
-$resolveEntryName = $panelType.GetMethod('ResolveSmartEntryName', $allFlags)
-$shouldWarnPartition = $panelType.GetMethod('ShouldWarnSmartLibraryPartitionMissing', $allFlags)
 $orderCandidates = $panelType.GetMethod('OrderSmartMapCandidateScores', $allFlags)
-$resolveTargetEntries = $panelType.GetMethod('ResolveSmartTargetEntries', $allFlags)
 $isPrimaryTarget = $panelType.GetMethod('IsPrimaryLearningTarget', $allFlags)
 $isEngineeringScopeTarget = $panelType.GetMethod('IsEngineeringScopeLearningTarget', $allFlags)
 $isLearningGroupRecommendable = $panelType.GetMethod('IsLearningGroupRecommendable', $allFlags)
@@ -93,11 +86,10 @@ $isSmartTargetSetRecommendable = $panelType.GetMethod('IsSmartTargetSetRecommend
 $isSingleQuotaTargetBox = $panelType.GetMethod('IsSingleQuotaTargetBox', $allFlags)
 $hasCompatibleSpecifications = $panelType.GetMethod('HaveCompatibleSmartSpecificationNumbers', $allFlags)
 if ($null -eq $candidateType -or $null -eq $entryType -or $null -eq $targetType -or $null -eq $routeType -or
-    $null -eq $entryStatType -or $null -eq $targetResolutionType -or $null -eq $mappingFeedbackTargetType -or
+    $null -eq $mappingFeedbackTargetType -or
     $null -eq $snapshotType -or $null -eq $canAutoSelect -or $null -eq $resolveRoute -or
-    $null -eq $resolveEntryName -or $null -eq $shouldWarnPartition -or
     $null -eq $isClassifiedEntryCode -or
-    $null -eq $orderCandidates -or $null -eq $resolveTargetEntries -or
+    $null -eq $orderCandidates -or
     $null -eq $isPrimaryTarget -or $null -eq $isEngineeringScopeTarget -or $null -eq $isLearningGroupRecommendable -or
     $null -eq $isSmartTargetSetRecommendable -or $null -eq $isSingleQuotaTargetBox -or $null -eq $hasCompatibleSpecifications) {
     throw '缺少跨专业同名冲突判定入口'
@@ -125,37 +117,10 @@ foreach ($routeCase in $routeCases) {
     }
 }
 if ([regex]::Matches($smart, 'FROM dbo\.ChapterEntry WHERE method=@library_method AND method_no=@method_no').Count -ne 2 -or
-    $smart -notmatch 'q\.method=@library_method AND q\.method_no=@method_no' -or
     $smart -match "method\s+IN\s*\(\s*'2020'\s*,\s*'101-estimate'" -or
     -not $smart.Contains('WHERE m.weight > 0 AND m.software_partition=@software_partition') -or
     -not $smart.Contains('WHERE software_partition=@software_partition AND method_no=@method_no')) {
     throw '参考库、普通关系分区或条目办法号未精确路由'
-}
-$basePartitionPosition = $smart.IndexOf('SELECT COUNT(*) FROM dbo.EntryQuota', [StringComparison]::Ordinal)
-$semiJoinPosition = $smart.IndexOf('SELECT quota_code, entry_code, entry_name, project_count FROM dbo.EntryQuota', [StringComparison]::Ordinal)
-if ($basePartitionPosition -lt 0 -or $semiJoinPosition -lt 0 -or $basePartitionPosition -gt $semiJoinPosition) {
-    throw '零命中告警没有在 EntryQuota 半连接前检查精确基础分区'
-}
-$warnArgs = New-Object 'object[]' 1
-$warnArgs[0] = 1
-if ([bool]$shouldWarnPartition.Invoke($null, $warnArgs)) { throw '基础分区存在但半连接可为 0 时被误告警' }
-$warnArgs[0] = 0
-if (-not [bool]$shouldWarnPartition.Invoke($null, $warnArgs)) { throw 'MethodNo 错误导致基础分区为 0 时未告警' }
-$nameSnapshot = [Activator]::CreateInstance($snapshotType, $true).PSObject.BaseObject
-$projectNames = $snapshotType.GetField('ProjectEntryNameByCode', $allFlags).GetValue($nameSnapshot)
-$projectNames['0101'] = '当前项目条目名'
-$nameArgs = New-Object 'object[]' 3
-$nameArgs[0] = $nameSnapshot
-$nameArgs[1] = '0101'
-$nameArgs[2] = '30号文学习侧条目名'
-if ($resolveEntryName.Invoke($null, $nameArgs) -ne '当前项目条目名') {
-    throw '101 号文缺少 ChapterEntry 分区时未优先使用当前项目条目名'
-}
-[void]$projectNames.Remove('0101')
-$learningNames = $snapshotType.GetField('LearningEntryNameByCode', $allFlags).GetValue($nameSnapshot)
-$learningNames['0101'] = '精确分区 ChapterEntry 条目名'
-if ($resolveEntryName.Invoke($null, $nameArgs) -ne '精确分区 ChapterEntry 条目名') {
-    throw '当前项目无条目名时未优先使用精确分区 ChapterEntry'
 }
 
 function New-SmartTarget([string]$Code, [string]$Name, [string]$Unit, [string]$Kind = 'quota') {
@@ -166,88 +131,13 @@ function New-SmartTarget([string]$Code, [string]$Name, [string]$Unit, [string]$K
     $targetType.GetField('Unit', $allFlags).SetValue($target, $Unit)
     return $target
 }
-function Add-SmartEntryStat($Dictionary, [string]$Key, [string]$EntryCode, [string]$EntryName, [bool]$CurrentMethod) {
-    if (-not $Dictionary.ContainsKey($Key)) {
-        $Dictionary.Add($Key, [Activator]::CreateInstance($smartEntryStatListType).PSObject.BaseObject)
-    }
-    $stat = [Activator]::CreateInstance($entryStatType, $true).PSObject.BaseObject
-    $entryStatType.GetField('EntryCode', $allFlags).SetValue($stat, $EntryCode)
-    $entryStatType.GetField('EntryName', $allFlags).SetValue($stat, $EntryName)
-    $entryStatType.GetField('ProjectCount', $allFlags).SetValue($stat, 3)
-    $entryStatType.GetField('CurrentMethodEvidence', $allFlags).SetValue($stat, $CurrentMethod)
-    [void]$Dictionary[$Key].Add($stat)
-}
-function Invoke-ResolveTargetEntries($Snapshot, $ProjectEntries, $Entry, [string]$Signature) {
-    $invokeArgs = New-Object 'object[]' 5
-    $invokeArgs[0] = $Snapshot
-    $invokeArgs[1] = $ProjectEntries
-    $invokeArgs[2] = $Entry
-    $invokeArgs[3] = $Signature
-    $invokeArgs[4] = $null
-    return $resolveTargetEntries.Invoke($null, $invokeArgs)
-}
-
-$targetSnapshot = [Activator]::CreateInstance($snapshotType, $true).PSObject.BaseObject
-$snapshotType.GetField('Method', $allFlags).SetValue($targetSnapshot, '2024')
-$targetProjectNames = $snapshotType.GetField('ProjectEntryNameByCode', $allFlags).GetValue($targetSnapshot)
-$targetProjectNames['0801'] = '安装工程费'
-$targetProjectNames['0802'] = '设备购置费'
-$projectEntryType = $resolveTargetEntries.GetParameters()[1].ParameterType
-$targetProjectEntries = [Activator]::CreateInstance($projectEntryType).PSObject.BaseObject
-$targetProjectEntries['0801'] = [long]801
-$targetProjectEntries['0802'] = [long]802
-$statsByTarget = $snapshotType.GetField('EntryBySignatureQuota', $allFlags).GetValue($targetSnapshot)
-$smartEntryStatListType = $statsByTarget.GetType().GetGenericArguments()[1]
-$targetSignature = 'target-entry|'
-$targetEntry = [Activator]::CreateInstance($entryType, $true).PSObject.BaseObject
-$ordinaryTarget = New-SmartTarget 'EY-299' '安装定额' '台'
-$sfTarget = New-SmartTarget 'SF' '设备购置费' '元'
-[void]$entryType.GetField('Targets', $allFlags).GetValue($targetEntry).Add($ordinaryTarget)
-[void]$entryType.GetField('Targets', $allFlags).GetValue($targetEntry).Add($sfTarget)
-Add-SmartEntryStat $statsByTarget ($targetSignature + "`nEY-299") '0801' '历史安装条目' $true
-Add-SmartEntryStat $statsByTarget ($targetSignature + "`nSF") '0802' '历史设备条目' $true
-$resolvedTargets = @(Invoke-ResolveTargetEntries $targetSnapshot $targetProjectEntries $targetEntry $targetSignature)
-$ordinaryResolved = @($resolvedTargets | Where-Object { $_.Target.Code -eq 'EY-299' })[0]
-$sfResolved = @($resolvedTargets | Where-Object { $_.Target.Code -eq 'SF' })[0]
-if ($ordinaryResolved.EntryCode -ne '0801' -or $ordinaryResolved.EntryName -ne '安装工程费' -or
-    $sfResolved.EntryCode -ne '0802' -or $sfResolved.EntryName -ne '设备购置费' -or
-    -not $ordinaryResolved.FromCurrentContext -or -not $sfResolved.FromCurrentContext) {
-    throw '普通定额与 SF 未按目标分别解析到安装工程费/设备购置费条目'
-}
-
-$statsByTarget.Clear()
-Add-SmartEntryStat $statsByTarget ($targetSignature + "`nEY-299") '0802' '设备购置费' $true
-Add-SmartEntryStat $statsByTarget ($targetSignature + "`nSF") '0801' '安装工程费' $true
-$blockedTargets = @(Invoke-ResolveTargetEntries $targetSnapshot $targetProjectEntries $targetEntry $targetSignature)
-$blockedOrdinary = @($blockedTargets | Where-Object { $_.Target.Code -eq 'EY-299' })[0]
-$blockedSf = @($blockedTargets | Where-Object { $_.Target.Code -eq 'SF' })[0]
-if (-not [String]::IsNullOrWhiteSpace($blockedOrdinary.EntryCode) -or
-    $blockedOrdinary.Issue -notlike '*设备购置费条目只能写入 SF*' -or
-    -not [String]::IsNullOrWhiteSpace($blockedSf.EntryCode) -or
-    $blockedSf.Issue -notlike '*SF 必须写入设备购置费条目*') {
-    throw 'SF 双向条目约束未同时阻断普通定额落设备购置费及 SF 落普通条目'
-}
-
-$statsByTarget.Clear()
-$followerEntry = [Activator]::CreateInstance($entryType, $true).PSObject.BaseObject
-$followerOrdinary = New-SmartTarget 'EY-299' '安装定额' '台'
-$zlfTarget = New-SmartTarget 'ZLF' '装料费' 'm3'
-[void]$entryType.GetField('Targets', $allFlags).GetValue($followerEntry).Add($followerOrdinary)
-[void]$entryType.GetField('Targets', $allFlags).GetValue($followerEntry).Add($zlfTarget)
-Add-SmartEntryStat $statsByTarget ($targetSignature + "`nEY-299") '0801' '安装工程费' $true
-$followerTargets = @(Invoke-ResolveTargetEntries $targetSnapshot $targetProjectEntries $followerEntry $targetSignature)
-$resolvedFollower = @($followerTargets | Where-Object { $_.Target.Code -eq 'ZLF' })[0]
-if ($resolvedFollower.EntryCode -ne '0801' -or $resolvedFollower.FromCurrentContext) {
-    throw 'ZLF/LF 跟随普通定额时应继承条目，但不得伪装成目标级当前办法证据'
-}
-
 foreach ($case in @(
     @('quota','EY-299',$true,$true),
     @('quota','SF',$false,$true),
-    @('quota','SH',$false,$false),
-    @('quota','ZLF',$false,$false),
-    @('quota','LF',$false,$false),
-    @('material','1009001',$false,$false)
+    @('quota','SH',$false,$true),
+    @('quota','ZLF',$false,$true),
+    @('quota','LF',$false,$true),
+    @('material','1009001',$false,$true)
 )) {
     $primaryArgs = New-Object 'object[]' 2; $primaryArgs[0] = $case[0]; $primaryArgs[1] = $case[1]
     if ([bool]$isPrimaryTarget.Invoke($null, $primaryArgs) -ne [bool]$case[2] -or
@@ -255,6 +145,7 @@ foreach ($case in @(
         throw "普通主目标或工程范围归集分类错误：$($case[0])/$($case[1])"
     }
 }
+Write-Host 'PASS EngineeringTemplate 工程范围门禁接纳纯 SH/SF/ZLF/LF 与正式材料'
 
 function New-FeedbackTarget([string]$Code, [string]$EntryName, [string]$Kind = 'quota') {
     $target = [Activator]::CreateInstance($mappingFeedbackTargetType, $true).PSObject.BaseObject
@@ -276,8 +167,8 @@ if (-not (Test-LearningTargets @((New-FeedbackTarget 'EY-299' '安装工程费')
     (Test-LearningTargets @((New-FeedbackTarget 'EY-299' '设备购置费'))) -or
     (Test-LearningTargets @((New-FeedbackTarget 'SF' '安装工程费'))) -or
     (Test-LearningTargets @((New-FeedbackTarget 'SF' '设备购置费' 'material'))) -or
-    (Test-LearningTargets @((New-FeedbackTarget 'ZLF' '安装工程费'))) -or
-    (Test-LearningTargets @((New-FeedbackTarget 'SH' '安装工程费'))) -or
+    -not (Test-LearningTargets @((New-FeedbackTarget 'ZLF' '安装工程费'))) -or
+    -not (Test-LearningTargets @((New-FeedbackTarget 'SH' '安装工程费'))) -or
     -not (Test-LearningTargets @((New-FeedbackTarget 'EY-299' '安装工程费'), (New-FeedbackTarget 'ZLF' '安装工程费'))) -or
     -not (Test-LearningTargets @((New-FeedbackTarget 'SF' '设备购置费')))) {
     throw '持久化入口没有对 SF 双向条目约束做防御性校验'
@@ -291,12 +182,12 @@ function Test-SmartTargetSet([object[]]$Targets) {
     $args[0] = $list
     return [bool]$isSmartTargetSetRecommendable.Invoke($null, $args)
 }
-if ((Test-SmartTargetSet @((New-SmartTarget 'ZLF' '装料费' 'm3'))) -or
-    (Test-SmartTargetSet @((New-SmartTarget 'SH' '设备费' '项'))) -or
+if (-not (Test-SmartTargetSet @((New-SmartTarget 'ZLF' '装料费' 'm3'))) -or
+    -not (Test-SmartTargetSet @((New-SmartTarget 'SH' '设备费' '项'))) -or
     (Test-SmartTargetSet @((New-SmartTarget 'SF' '设备购置费' '元' 'material'))) -or
     -not (Test-SmartTargetSet @((New-SmartTarget 'EY-299' '安装定额' '台'), (New-SmartTarget 'ZLF' '装料费' 'm3'))) -or
     -not (Test-SmartTargetSet @((New-SmartTarget 'SF' '设备购置费' '元')))) {
-    throw '历史纯辅助聚合框未在 SmartFill 读取端过滤，或误伤混合组件/纯 SF 设备费'
+    throw '完整身份的纯辅助组件未开放，或误伤混合组件/纯 SF 设备费安全约束'
 }
 $singleAuxEntry = [Activator]::CreateInstance($entryType, $true).PSObject.BaseObject
 [void]$entryType.GetField('Targets', $allFlags).GetValue($singleAuxEntry).Add((New-SmartTarget 'ZLF' '装料费' 'm3'))
@@ -309,10 +200,6 @@ $specArgs = [object[]]@('Φ100X10MMCPVC管', 'Φ10X100MMCPVC管')
 if ([bool]$hasCompatibleSpecifications.Invoke($null, $specArgs)) { throw '规格数字顺序不一致时不得模糊匹配' }
 $specArgs = [object[]]@('Φ100X10MMCPVC管', 'Φ100X10MMCPVC管')
 if (-not [bool]$hasCompatibleSpecifications.Invoke($null, $specArgs)) { throw '同规格异形符号归一后应保持兼容' }
-if ($smart -notmatch 'targetEntries\.All\(item => item\.FromCurrentContext\)' -or
-    $smart -notmatch 'targetEntries\.All\(item => item != null && !String\.IsNullOrWhiteSpace\(item\.EntryCode\)\)') {
-    throw 'HasEntry/HasCurrentContext 未按组内全部目标判定'
-}
 $classifiedCases = @{
     '12-01' = $true
     'SF' = $false
@@ -342,7 +229,7 @@ function New-SmartCandidate([int]$Weight) {
     $entryType.GetField('Weight', $allFlags).SetValue($entry, $Weight)
     $candidate = [Activator]::CreateInstance($candidateType, $true).PSObject.BaseObject
     $candidateType.GetField('Entry', $allFlags).SetValue($candidate, $entry)
-    foreach ($fieldName in @('HasEntry', 'HasCurrentContext', 'HasCurrentMethodMapping', 'CurrentTargetsValid')) {
+    foreach ($fieldName in @('HasCurrentMethodMapping', 'CurrentTargetsValid')) {
         $candidateType.GetField($fieldName, $allFlags).SetValue($candidate, $true)
     }
     return $candidate

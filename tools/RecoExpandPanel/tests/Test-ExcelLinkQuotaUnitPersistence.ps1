@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
 $dll = if (-not [String]::IsNullOrWhiteSpace($env:RECO_EXPAND_DLL)) { $env:RECO_EXPAND_DLL } else { Join-Path $repoRoot 'RecoQuotaRecommend\bin\RecoExpandPanel.dll' }
@@ -14,7 +14,10 @@ if ($null -eq $quotaUnitProperty) { throw 'ExcelQuotaLink.QuotaUnit is missing' 
 $entryCodeProperty = $linkType.GetProperty('EntryCode', $flags)
 $entryNameProperty = $linkType.GetProperty('EntryName', $flags)
 $methodProperty = $linkType.GetProperty('Method', $flags)
-if ($null -eq $entryCodeProperty -or $null -eq $entryNameProperty -or $null -eq $methodProperty) { throw 'ExcelQuotaLink learning entry context is missing' }
+$unitPriceProperty = $linkType.GetProperty('UnitPrice', $flags)
+$sourceEndpointProperty = $linkType.GetProperty('SourceEndpointIdentity', $flags)
+if ($null -eq $entryCodeProperty -or $null -eq $entryNameProperty -or $null -eq $methodProperty -or
+    $null -eq $unitPriceProperty -or $null -eq $sourceEndpointProperty) { throw 'ExcelQuotaLink learning source context is missing' }
 
 $link = [Activator]::CreateInstance($linkType).PSObject.BaseObject
 $linkType.GetProperty('QuotaCode', $flags).SetValue($link, 'QY-317', $null)
@@ -23,6 +26,8 @@ $quotaUnitProperty.SetValue($link, 't', $null)
 $entryCodeProperty.SetValue($link, '0101-01', $null)
 $entryNameProperty.SetValue($link, 'entry name', $null)
 $methodProperty.SetValue($link, '2024', $null)
+$unitPriceProperty.SetValue($link, [decimal]12.5, $null)
+$sourceEndpointProperty.SetValue($link, 'server|project-db', $null)
 $store = [Activator]::CreateInstance($storeType).PSObject.BaseObject
 $links = $storeType.GetProperty('Links', $flags).GetValue($store, $null).PSObject.BaseObject
 [void]$links.Add($link)
@@ -36,11 +41,16 @@ if (-not $xml.Contains('<QuotaUnit>t</QuotaUnit>')) { throw 'New XML did not per
 if (-not $xml.Contains('<EntryCode>0101-01</EntryCode>') -or -not $xml.Contains('<EntryName>entry name</EntryName>') -or -not $xml.Contains('<Method>2024</Method>')) {
     throw 'New XML did not persist method/entry context'
 }
+if (-not $xml.Contains('<UnitPrice>12.5</UnitPrice>') -or -not $xml.Contains('<SourceEndpointIdentity>server|project-db</SourceEndpointIdentity>')) {
+    throw 'New XML did not persist unit price/source endpoint identity'
+}
 
 $legacyXml = [regex]::Replace($xml, '<QuotaUnit>.*?</QuotaUnit>', '')
 $legacyXml = [regex]::Replace($legacyXml, '<EntryCode>.*?</EntryCode>', '')
 $legacyXml = [regex]::Replace($legacyXml, '<EntryName>.*?</EntryName>', '')
 $legacyXml = [regex]::Replace($legacyXml, '<Method>.*?</Method>', '')
+$legacyXml = [regex]::Replace($legacyXml, '<UnitPrice>.*?</UnitPrice>', '')
+$legacyXml = [regex]::Replace($legacyXml, '<SourceEndpointIdentity>.*?</SourceEndpointIdentity>', '')
 $legacyBytes = [System.Text.Encoding]::UTF8.GetBytes($legacyXml)
 $legacyStream = New-Object System.IO.MemoryStream(,$legacyBytes)
 $legacyStore = $serializer.Deserialize($legacyStream).PSObject.BaseObject
@@ -52,5 +62,9 @@ if (-not [String]::IsNullOrEmpty($legacyUnit)) { throw "Legacy XML should load w
 foreach ($property in @($entryCodeProperty, $entryNameProperty, $methodProperty)) {
     if (-not [String]::IsNullOrEmpty([string]$property.GetValue($legacyLink, $null))) { throw "Legacy XML should load missing $($property.Name) as empty" }
 }
+if ([decimal]$unitPriceProperty.GetValue($legacyLink, $null) -ne 0 -or
+    -not [String]::IsNullOrEmpty([string]$sourceEndpointProperty.GetValue($legacyLink, $null))) {
+    throw 'Legacy XML should load missing unit price/source endpoint as zero/empty'
+}
 
-Write-Host 'Test-ExcelLinkQuotaUnitPersistence: PASS (new XML persists unit/method/entry; legacy XML remains compatible)'
+Write-Host 'Test-ExcelLinkQuotaUnitPersistence: PASS (new XML persists unit/method/entry/source/price; legacy XML remains compatible)'

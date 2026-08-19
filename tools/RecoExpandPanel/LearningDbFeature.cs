@@ -216,6 +216,10 @@ namespace RecoNet
                                     flat["corrected_count"] = Math.Max(0, group.CorrectedCount).ToString(CultureInfo.InvariantCulture);
                                     flat["rejected_count"] = Math.Max(0, group.RejectedCount).ToString(CultureInfo.InvariantCulture);
                                     if (!String.IsNullOrWhiteSpace(group.UserAction)) flat["user_action"] = group.UserAction;
+                                    if (target.QuotaSequence > 0) flat["quota_sequence"] = target.QuotaSequence.ToString(CultureInfo.InvariantCulture);
+                                    if (!String.IsNullOrWhiteSpace(target.SourceEndpointIdentity)) flat["source_endpoint_identity"] = target.SourceEndpointIdentity;
+                                    flat["unit_price"] = target.UnitPrice.ToString(CultureInfo.InvariantCulture);
+                                    if (!String.IsNullOrWhiteSpace(target.EntrySource)) flat["entry_source"] = target.EntrySource;
                                     string formulaEntryCode = LearningPartitionIdentity.NormalizeLearningEntryCode(
                                         GetMappingFeedbackTargetEntryCode(group, target));
                                     if (!String.IsNullOrWhiteSpace(target.FormulaTemplate) && group.FormulaOperands.Count > 0 &&
@@ -698,6 +702,10 @@ namespace RecoNet
                     row[targetPrefix + "entry_code"] = target.EntryCode ?? "";
                     row[targetPrefix + "entry_name"] = target.EntryName ?? "";
                     row[targetPrefix + "formula"] = target.FormulaTemplate ?? "";
+                    row[targetPrefix + "quota_sequence"] = target.QuotaSequence.ToString(CultureInfo.InvariantCulture);
+                    row[targetPrefix + "source_endpoint_identity"] = target.SourceEndpointIdentity ?? "";
+                    row[targetPrefix + "unit_price"] = target.UnitPrice.ToString(CultureInfo.InvariantCulture);
+                    row[targetPrefix + "entry_source"] = target.EntrySource ?? "";
                 }
                 row[prefix + "operand_count"] = (group.FormulaOperands == null ? 0 : group.FormulaOperands.Count).ToString(CultureInfo.InvariantCulture);
                 for (int operandIndex = 0; operandIndex < (group.FormulaOperands == null ? 0 : group.FormulaOperands.Count); operandIndex++)
@@ -710,6 +718,20 @@ namespace RecoNet
                 }
             }
             return row;
+        }
+
+        private static long ReadFlatLong(Dictionary<string, string> values, string key, long fallback)
+        {
+            long parsed;
+            return Int64.TryParse(GetFlat(values, key), NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed)
+                ? parsed : fallback;
+        }
+
+        private static decimal ReadFlatDecimal(Dictionary<string, string> values, string key, decimal fallback)
+        {
+            decimal parsed;
+            return Decimal.TryParse(GetFlat(values, key), NumberStyles.Float, CultureInfo.InvariantCulture, out parsed)
+                ? parsed : fallback;
         }
 
         private static LearningDbOutboxBatch ParseLearningDbOutboxBatch(string line)
@@ -764,7 +786,11 @@ namespace RecoNet
                         Unit = GetFlat(row, targetPrefix + "unit"),
                         EntryCode = GetFlat(row, targetPrefix + "entry_code"),
                         EntryName = GetFlat(row, targetPrefix + "entry_name"),
-                        FormulaTemplate = GetFlat(row, targetPrefix + "formula")
+                        FormulaTemplate = GetFlat(row, targetPrefix + "formula"),
+                        QuotaSequence = ReadFlatLong(row, targetPrefix + "quota_sequence", 0),
+                        SourceEndpointIdentity = GetFlat(row, targetPrefix + "source_endpoint_identity"),
+                        UnitPrice = ReadFlatDecimal(row, targetPrefix + "unit_price", 0m),
+                        EntrySource = GetFlat(row, targetPrefix + "entry_source")
                     });
                 }
                 for (int operandIndex = 0; operandIndex < operandCount; operandIndex++)
@@ -1023,23 +1049,38 @@ namespace RecoNet
                 cmd.ExecuteNonQuery();
             }
 
+            bool targetHasUnitPrice;
+            using (SqlCommand columnCheck = conn.CreateCommand())
+            {
+                columnCheck.Transaction = transaction;
+                columnCheck.CommandTimeout = 5;
+                columnCheck.CommandText = "SELECT CASE WHEN COL_LENGTH('dbo.QuotaBoxTarget','unit_price') IS NULL THEN 0 ELSE 1 END";
+                targetHasUnitPrice = Convert.ToInt32(columnCheck.ExecuteScalar(), CultureInfo.InvariantCulture) != 0;
+            }
             foreach (MappingFeedbackTarget target in targets)
             {
                 using (SqlCommand cmd = conn.CreateCommand())
                 {
                     cmd.Transaction = transaction;
                     cmd.CommandTimeout = 5;
-                    cmd.CommandText =
-                        "UPDATE dbo.QuotaBoxTarget WITH (UPDLOCK,HOLDLOCK) SET " +
-                        "target_name=CASE WHEN @name='' THEN target_name ELSE @name END, " +
-                        "target_unit=CASE WHEN @unit='' THEN target_unit ELSE @unit END " +
-                        "WHERE box_id=@box AND target_kind=@kind AND target_code=@code; " +
-                        "IF @@ROWCOUNT=0 INSERT INTO dbo.QuotaBoxTarget(box_id,target_kind,target_code,target_name,target_unit) VALUES(@box,@kind,@code,@name,@unit);";
+                    cmd.CommandText = targetHasUnitPrice
+                        ? "UPDATE dbo.QuotaBoxTarget WITH (UPDLOCK,HOLDLOCK) SET " +
+                          "target_name=CASE WHEN @name='' THEN target_name ELSE @name END, " +
+                          "target_unit=CASE WHEN @unit='' THEN target_unit ELSE @unit END, " +
+                          "unit_price=CASE WHEN @price=0 THEN unit_price ELSE @price END " +
+                          "WHERE box_id=@box AND target_kind=@kind AND target_code=@code; " +
+                          "IF @@ROWCOUNT=0 INSERT INTO dbo.QuotaBoxTarget(box_id,target_kind,target_code,target_name,target_unit,unit_price) VALUES(@box,@kind,@code,@name,@unit,@price);"
+                        : "UPDATE dbo.QuotaBoxTarget WITH (UPDLOCK,HOLDLOCK) SET " +
+                          "target_name=CASE WHEN @name='' THEN target_name ELSE @name END, " +
+                          "target_unit=CASE WHEN @unit='' THEN target_unit ELSE @unit END " +
+                          "WHERE box_id=@box AND target_kind=@kind AND target_code=@code; " +
+                          "IF @@ROWCOUNT=0 INSERT INTO dbo.QuotaBoxTarget(box_id,target_kind,target_code,target_name,target_unit) VALUES(@box,@kind,@code,@name,@unit);";
                     cmd.Parameters.AddWithValue("@box", boxId);
                     cmd.Parameters.AddWithValue("@kind", TrimLearningText(String.IsNullOrWhiteSpace(target.Kind) ? "quota" : target.Kind, 20));
                     cmd.Parameters.AddWithValue("@code", TrimLearningText(target.Code, 100));
                     cmd.Parameters.AddWithValue("@name", TrimLearningText(target.Name, 500));
                     cmd.Parameters.AddWithValue("@unit", TrimLearningText(target.Unit, 50));
+                    if (targetHasUnitPrice) cmd.Parameters.AddWithValue("@price", target.UnitPrice);
                     cmd.ExecuteNonQuery();
                 }
             }

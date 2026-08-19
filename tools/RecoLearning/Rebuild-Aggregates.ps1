@@ -57,16 +57,23 @@ foreach ($row in $log.Rows) {
   if ($targetKind -eq '') { $targetKind = if ($targetCode -match '^\d+$') { 'material' } else { 'quota' } }
   $baseKey = $targetKind.ToLowerInvariant() + ':' + $targetCode.ToUpperInvariant()
   $identityKey = Get-LearningTargetIdentityKey $targetKind $targetCode ([string]$row.target_name) ([string]$row.target_unit)
+  [decimal]$unitPrice = 0
+  try {
+    $extraObject = ([string]$row.extra) | ConvertFrom-Json
+    $priceProperty = $extraObject.PSObject.Properties['unit_price']
+    if ($priceProperty) { [void][decimal]::TryParse([string]$priceProperty.Value, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$unitPrice) }
+  } catch {}
   if ($g.Targets.ContainsKey($baseKey)) {
     if ((Test-ContextSensitiveLearningCode $targetCode) -and
         -not [string]::Equals([string]$g.Targets[$baseKey].Identity, $identityKey, [System.StringComparison]::OrdinalIgnoreCase)) {
       $g.UnsafeContextTargets = $true
     }
   } else {
-    $g.Targets[$baseKey] = @{ Kind = $targetKind; Code = $targetCode; Name = [string]$row.target_name; Unit = [string]$row.target_unit; Identity = $identityKey; EntryCode = (Get-NormalizedLearningEntryCode ([string]$row.entry_code)); EntryName = [string]$row.entry_name; Partition = $rowPartition; MethodNo = $rowMethodNo }
+    $g.Targets[$baseKey] = @{ Kind = $targetKind; Code = $targetCode; Name = [string]$row.target_name; Unit = [string]$row.target_unit; UnitPrice = $unitPrice; PriceAt = $row.occurred_at; Identity = $identityKey; EntryCode = (Get-NormalizedLearningEntryCode ([string]$row.entry_code)); EntryName = [string]$row.entry_name; Partition = $rowPartition; MethodNo = $rowMethodNo }
   }
   if ($g.Targets.ContainsKey($baseKey)) {
     $storedTarget = $g.Targets[$baseKey]
+    if ($unitPrice -ne 0 -and $row.occurred_at -ge $storedTarget.PriceAt) { $storedTarget.UnitPrice = $unitPrice; $storedTarget.PriceAt = $row.occurred_at }
     $normalizedEntryCode = Get-NormalizedLearningEntryCode ([string]$row.entry_code)
     if ([string]::IsNullOrWhiteSpace([string]$storedTarget.EntryCode) -and $normalizedEntryCode -ne '') {
       $storedTarget.EntryCode = $normalizedEntryCode
@@ -346,9 +353,10 @@ $dtBox = New-Object System.Data.DataTable
 foreach ($c in 'box_id','target_set_hash') { [void]$dtBox.Columns.Add($c, [string]) }
 $dtTarget = New-Object System.Data.DataTable
 foreach ($c in 'box_id','target_kind','target_code','target_name','target_unit') { [void]$dtTarget.Columns.Add($c, [string]) }
+[void]$dtTarget.Columns.Add('unit_price', [decimal])
 foreach ($entry in $boxes.GetEnumerator()) {
   [void]$dtBox.Rows.Add($entry.Value.Id, $entry.Key)
-  foreach ($t in $entry.Value.Targets.Values) { [void]$dtTarget.Rows.Add($entry.Value.Id, $t.Kind, $t.Code, $t.Name, $t.Unit) }
+  foreach ($t in $entry.Value.Targets.Values) { [void]$dtTarget.Rows.Add($entry.Value.Id, $t.Kind, $t.Code, $t.Name, $t.Unit, [decimal]$t.UnitPrice) }
 }
 Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Table $dtBox -TargetTable 'dbo.QuotaBox'
 Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Table $dtTarget -TargetTable 'dbo.QuotaBoxTarget'

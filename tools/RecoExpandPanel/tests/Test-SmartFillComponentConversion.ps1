@@ -54,7 +54,6 @@ if ($null -eq $previewType -or $null -eq $panelType) { throw 'Missing preview/pa
 $targetRowType = $type.GetNestedType('TargetQtyRow', $nestedFlags)
 $targetType = $type.GetNestedType('SmartBoxTarget', $nestedFlags)
 $mapEntryType = $type.GetNestedType('SmartMapEntry', $nestedFlags)
-$resolutionType = $type.GetNestedType('SmartTargetEntryResolution', $nestedFlags)
 $snapshotType = $type.GetNestedType('SmartLearningSnapshot', $nestedFlags)
 $projectQuotaType = $type.GetNestedType('ProjectQuota', $nestedFlags)
 $appendSmartItems = Require-Method $type 'AppendSmartItems'
@@ -73,19 +72,11 @@ function Invoke-SmartUnitPreview([string]$SourceUnit, [string]$QuotaUnit) {
     }
     $entry = [Activator]::CreateInstance($mapEntryType, $true).PSObject.BaseObject
     [void]$mapEntryType.GetField('Targets', $flags).GetValue($entry).Add($target)
-    $resolution = [Activator]::CreateInstance($resolutionType, $true).PSObject.BaseObject
-    foreach ($pair in @{ Target=$target; EntryCode='0101-01'; EntryName='测试条目'; EntrySeq=[long]1 }.GetEnumerator()) {
-        $resolutionType.GetField($pair.Key, $flags).SetValue($resolution, $pair.Value)
-    }
-    $resolutionListType = [Collections.Generic.List``1].MakeGenericType($resolutionType)
-    $resolutions = [Activator]::CreateInstance($resolutionListType); [void]$resolutions.Add($resolution)
 
     $snapshot = [Activator]::CreateInstance($snapshotType, $true).PSObject.BaseObject
     foreach ($pair in @{ Method='2020'; SoftwarePartition='2020'; MethodNo='30号文' }.GetEnumerator()) {
         $snapshotType.GetField($pair.Key, $flags).SetValue($snapshot, $pair.Value)
     }
-    $projectEntries = [Collections.Generic.Dictionary[string,long]]::new([StringComparer]::OrdinalIgnoreCase)
-    $projectEntries.Add('0101-01', [long]1)
     $quota = [Activator]::CreateInstance($projectQuotaType, $true).PSObject.BaseObject
     foreach ($pair in @{ Code='TEST-UNIT'; Name='测试定额'; Unit=$QuotaUnit; QuotaSeq=[long]1; IsLibrary=$false }.GetEnumerator()) {
         $projectQuotaType.GetField($pair.Key, $flags).SetValue($quota, $pair.Value)
@@ -95,10 +86,9 @@ function Invoke-SmartUnitPreview([string]$SourceUnit, [string]$QuotaUnit) {
     $currentQuotas.Add('TEST-UNIT', $quota)
     $previewListType = [Collections.Generic.List``1].MakeGenericType($previewType)
     $items = [Activator]::CreateInstance($previewListType)
-    $args = [object[]]::new(13)
+    $args = [object[]]::new(9)
     $args[0]=$items; $args[1]=$row; $args[2]=$rows; $args[3]=$entry; $args[4]=$snapshot
-    $args[5]=$projectEntries; $args[6]=$currentQuotas; $args[7]=$resolutions; $args[8]=$false
-    $args[9]='SQL精确'; $args[10]='测试签名|'; $args[11]=$null; $args[12]=$null
+    $args[5]=$currentQuotas; $args[6]=$false; $args[7]='SQL精确'; $args[8]='测试签名|'
     [void]$appendSmartItems.Invoke($null, $args)
     if ($items.Count -ne 1) { throw "Expected one preview item, got $($items.Count)" }
     return $items[0]
@@ -206,7 +196,7 @@ $zlf = New-PreviewItem '个' '个' '1' '' $true 0
 $zlf.TemplateName = '推荐定额'; $zlf.QuotaCode = 'ZLF'; $zlf.ChosenItemName = '安装工程费'
 [void]$pureAux.Add($zlf)
 $pureAuxArgs = [object[]]::new(1); $pureAuxArgs[0] = $pureAux.PSObject.BaseObject
-if ([bool]$groupSafe.Invoke($null, $pureAuxArgs)) { throw 'A SmartFill pure-ZLF component must not pass the write gate' }
+if (-not [bool]$groupSafe.Invoke($null, $pureAuxArgs)) { throw 'A complete SmartFill pure-ZLF component should pass the write gate' }
 
 $mixed = [Activator]::CreateInstance($listType)
 $ordinary = New-PreviewItem '个' '个' '1' '' $true 0

@@ -46,6 +46,10 @@ namespace RecoNet
             private ToolStripControlHost smartLearningScopeHost;
             private readonly Button btnPreview = new Button();
             private readonly Button btnApply = new Button();
+            private readonly Button btnCheckSelected = new Button();
+            private readonly Button btnUncheckSelected = new Button();
+            private readonly Label lblCurrentEntry = new Label();
+            private readonly Label lblWriteScope = new Label();
             private readonly CheckBox chkNameMode = new CheckBox();
             private readonly ToolTip targetWorkbookToolTip = new ToolTip();
             private readonly SplitContainer split = new SplitContainer();
@@ -62,6 +66,44 @@ namespace RecoNet
             private string smartActiveWorkbookPath = "";
             private string smartPreviewWorkbookPath = "";
             private SmartLearningScope selectedSmartLearningScope = SmartLearningScope.CreateAll();
+            private TreeView hostTree;
+            private bool busy;
+            private bool smartPreviewReady;
+            private SmartScopeLoadStatus smartLoadStatus = SmartScopeLoadStatus.Success;
+            private bool currentEntryWritable;
+            private int smartPreviewVersion;
+            private SmartPreviewContext previewContext;
+            private CurrentSmartEntry currentSmartEntry;
+            private bool updatingSmartPreviewInputs;
+            private string smartScopeNotice = "";
+
+            private sealed class SmartPreviewContext
+            {
+                public SqlConnection ProjectConnection;
+                public string ProjectConnectionIdentity = "";
+                public long CurrentUnitId;
+                public string CurrentUnitCode = "";
+                public string SoftwarePartition = "";
+                public string MethodNo = "";
+                public string ScopeKind = "";
+                public string ScopeEntryCode = "";
+                public string WorkbookPath = "";
+                public string Worksheet = "";
+                public string TargetColumn = "";
+                public int PreviewVersion;
+            }
+
+            private sealed class CurrentSmartEntry
+            {
+                public SqlConnection ProjectConnection;
+                public string ProjectConnectionIdentity = "";
+                public long UnitId;
+                public string UnitCode = "";
+                public long EntrySequence;
+                public string EntryCode = "";
+                public string EntryName = "";
+                public TreeNode Node;
+            }
 
             private readonly bool smartOnly;
 
@@ -78,6 +120,7 @@ namespace RecoNet
                 StartPosition = FormStartPosition.CenterParent;
                 ClientSize = new Size(900, 580);
                 BuildLayout();
+                if (smartOnly) HookSmartHostTree();
                 if (!smartOnly)
                 {
                     ReloadTemplateList();
@@ -89,10 +132,12 @@ namespace RecoNet
                     string ignoredWorkbook;
                     string ignoredError;
                     TryResolveSmartActiveWorkbook(out ignoredWorkbook, out ignoredError);
+                    RefreshCurrentSmartEntry(false);
                 }
                 else ReloadTargetWorkbooks();
                 string cur = GetCurrentUnitNo(mainForm);
                 if (!String.IsNullOrEmpty(cur)) txtUnit.Text = cur;
+                RefreshApplyEnabled();
             }
 
             private void BuildLayout()
@@ -172,25 +217,51 @@ namespace RecoNet
                 };
                 AddLabel("目标列", 455, targetTop + 3, 50);
                 txtColumn.SetBounds(505, targetTop, 40, 23); txtColumn.Text = "";
-                AddLabel("目标单元", 555, targetTop + 3, 60);
-                cmbTargetUnit.SetBounds(620, targetTop, 80, 23); cmbTargetUnit.Text = "_ZGS_02";
-                cmbTargetUnit.DropDownStyle = ComboBoxStyle.DropDown; // 可选可填
-                cmbTargetUnit.DropDown += delegate { ReloadTargetUnits(); };
-                btnPreview.SetBounds(710, targetTop - 1, 60, 25); btnPreview.Text = "预览";
+                if (!smartOnly)
+                {
+                    AddLabel("目标单元", 555, targetTop + 3, 60);
+                    cmbTargetUnit.SetBounds(620, targetTop, 80, 23); cmbTargetUnit.Text = "_ZGS_02";
+                    cmbTargetUnit.DropDownStyle = ComboBoxStyle.DropDown; // 可选可填
+                    cmbTargetUnit.DropDown += delegate { ReloadTargetUnits(); };
+                    btnPreview.SetBounds(710, targetTop - 1, 60, 25);
+                    btnApply.SetBounds(780, targetTop - 1, 108, 25);
+                }
+                else
+                {
+                    btnCheckSelected.SetBounds(555, targetTop - 1, 88, 25); btnCheckSelected.Text = "勾选选中行";
+                    btnUncheckSelected.SetBounds(648, targetTop - 1, 78, 25); btnUncheckSelected.Text = "取消勾选";
+                    btnPreview.SetBounds(731, targetTop - 1, 55, 25);
+                    btnApply.SetBounds(791, targetTop - 1, 97, 25);
+                    btnCheckSelected.Click += delegate { SetSelectedSmartGroupsChecked(true); };
+                    btnUncheckSelected.Click += delegate { SetSelectedSmartGroupsChecked(false); };
+                    lblCurrentEntry.AutoSize = false;
+                    lblCurrentEntry.SetBounds(12, targetTop + 29, 520, 18);
+                    lblWriteScope.AutoSize = false;
+                    lblWriteScope.TextAlign = ContentAlignment.MiddleRight;
+                    lblWriteScope.SetBounds(535, targetTop + 29, 353, 18);
+                    Controls.Add(btnCheckSelected);
+                    Controls.Add(btnUncheckSelected);
+                    Controls.Add(lblCurrentEntry);
+                    Controls.Add(lblWriteScope);
+                }
+                btnPreview.Text = "预览";
                 btnPreview.Click += delegate { OnPreview(); };
-                btnApply.SetBounds(780, targetTop - 1, 108, 25); btnApply.Text = "写入目标单元";
+                btnApply.Text = smartOnly ? "写入当前条目" : "写入目标单元";
                 btnApply.Click += delegate { OnApply(); };
 
                 Label reminder = new Label
                 {
-                    Text = "写入＝复制定额到“目标单元”的对应条目（条目序号全局共享）。写入后请在软件点一次“计算”刷新单价与汇总。",
+                    Text = smartOnly
+                        ? "写入＝把选中且勾选的定额写入左侧章节树当前条目。写入完成即已保存；点“计算”只刷新单价、合价和汇总。"
+                        : "写入＝复制定额到“目标单元”的对应条目（条目序号全局共享）。写入完成即已保存；点“计算”只刷新单价与汇总。",
                     ForeColor = Color.Firebrick, AutoSize = false
                 };
-                reminder.SetBounds(12, targetTop + 29, 876, 18);
+                reminder.SetBounds(12, targetTop + (smartOnly ? 51 : 29), 876, 18);
                 reminder.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
                 // —— 左侧条目树 + 右侧预览表：SplitContainer 分栏，可拖动调整宽度 ——
-                split.SetBounds(12, targetTop + 53, 876, ClientSize.Height - (targetTop + 53) - 12);
+                int contentTop = targetTop + (smartOnly ? 75 : 53);
+                split.SetBounds(12, contentTop, 876, ClientSize.Height - contentTop - 12);
                 split.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
                 split.Orientation = Orientation.Vertical;
                 split.Panel1MinSize = 100;
@@ -205,6 +276,8 @@ namespace RecoNet
 
                 grid.Dock = DockStyle.Fill;
                 grid.ReadOnly = false; grid.AllowUserToAddRows = false;
+                grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+                grid.MultiSelect = true;
                 grid.RowHeadersVisible = false;
                 grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
                 grid.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
@@ -250,6 +323,7 @@ namespace RecoNet
                     if (String.Equals(grid.Columns[e.ColumnIndex].Name, "sel", StringComparison.Ordinal))
                     {
                         ApplyNameGroupSelectionFromCheck(grid.Rows[e.RowIndex]);
+                        UpdateSmartWriteScope();
                     }
                     else if (String.Equals(grid.Columns[e.ColumnIndex].Name, "qty", StringComparison.Ordinal))
                     {
@@ -297,6 +371,10 @@ namespace RecoNet
                     }
                     e.Handled = true;
                 };
+                grid.SelectionChanged += delegate
+                {
+                    if (!updatingNameQuotaCell) UpdateSmartWriteScope();
+                };
 
                 ContextMenuStrip gridMenu = new ContextMenuStrip();
                 ToolStripMenuItem miBindSelected = new ToolStripMenuItem("绑定软件选中的定额到此行");
@@ -317,6 +395,7 @@ namespace RecoNet
 
                 split.Panel1.Controls.Add(itemTree);
                 split.Panel2.Controls.Add(grid);
+                if (smartOnly) split.Panel1Collapsed = true;
 
                 if (!smartOnly)
                 {
@@ -326,14 +405,342 @@ namespace RecoNet
                 if (smartOnly) Controls.Add(btnSmartLearningScope);
                 else Controls.Add(cmbTargetWorkbook);
                 Controls.Add(cmbTargetSheet); Controls.Add(txtColumn);
-                Controls.Add(cmbTargetUnit);
+                if (!smartOnly) Controls.Add(cmbTargetUnit);
                 Controls.Add(btnPreview); Controls.Add(btnApply); Controls.Add(reminder); Controls.Add(split);
+                if (smartOnly)
+                {
+                    cmbTargetSheet.TextChanged += delegate { InvalidateSmartPreview(); };
+                    txtColumn.TextChanged += delegate { InvalidateSmartPreview(); };
+                    Activated += delegate { RefreshCurrentSmartEntry(false); };
+                    FormClosed += OnSmartPanelClosed;
+                }
             }
 
             private void AddLabel(string text, int x, int y, int w)
             {
                 Label l = new Label { Text = text, AutoSize = false };
                 l.SetBounds(x, y, w, 18); Controls.Add(l);
+            }
+
+            private void HookSmartHostTree()
+            {
+                if (!smartOnly) return;
+                hostTree = GetField<TreeView>(mainForm, "Tv_tree");
+                if (hostTree == null) return;
+                hostTree.AfterSelect += OnHostTreeSelected;
+            }
+
+            private void OnHostTreeSelected(object sender, TreeViewEventArgs e)
+            {
+                if (!smartOnly || IsDisposed || Disposing || !IsHandleCreated) return;
+                try
+                {
+                    BeginInvoke(new MethodInvoker(delegate { RefreshCurrentSmartEntry(false); }));
+                }
+                catch { }
+            }
+
+            private void OnSmartPanelClosed(object sender, FormClosedEventArgs e)
+            {
+                try
+                {
+                    if (hostTree != null) hostTree.AfterSelect -= OnHostTreeSelected;
+                }
+                catch { }
+                hostTree = null;
+                previewContext = null;
+            }
+
+            private static bool IsEditableAgentQuotaGrid(DataGridView agentGrid)
+            {
+                if (agentGrid == null || !agentGrid.Visible || !agentGrid.Enabled || !agentGrid.AllowUserToAddRows ||
+                    agentGrid.NewRowIndex < 0) return false;
+                return agentGrid.Columns.Cast<DataGridViewColumn>().Any(column => column.Visible && !column.ReadOnly &&
+                    ((column.Name ?? "").IndexOf("定额编号", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                     (column.HeaderText ?? "").IndexOf("定额编号", StringComparison.OrdinalIgnoreCase) >= 0));
+            }
+
+            private bool TryResolveCurrentSmartEntry(out CurrentSmartEntry result, out string error)
+            {
+                result = null;
+                error = "请在左侧章节树选择可写入的具体条目";
+                if (mainForm == null || mainForm.IsDisposed) return false;
+                TreeView tree = GetField<TreeView>(mainForm, "Tv_tree");
+                TreeNode node = tree == null ? null : tree.SelectedNode;
+                TreeNode currNode = GetField<TreeNode>(mainForm, "CurrNode");
+                if (node == null || (currNode != null && !Object.ReferenceEquals(node, currNode))) return false;
+                if (node.Nodes.Count != 0)
+                {
+                    error = "当前树节点不是可写入的叶条目";
+                    return false;
+                }
+                DataGridView agentGrid = GetField<DataGridView>(mainForm, "dataGridViewDE");
+                if (!IsEditableAgentQuotaGrid(agentGrid))
+                {
+                    error = "当前条目未处于可输入定额状态";
+                    return false;
+                }
+
+                string seqText = TryGetValue(node.Tag, "条目序号");
+                if (String.IsNullOrWhiteSpace(seqText) && IsNumeric(node.Name)) seqText = node.Name;
+                string code = (TryGetValue(node.Tag, "条目编号") ?? "").Trim();
+                if (code.Length == 0 && !String.IsNullOrWhiteSpace(node.Name) && !IsNumeric(node.Name))
+                    code = node.Name.Trim();
+                long sequence;
+                if (!Int64.TryParse(seqText ?? "", NumberStyles.Integer, CultureInfo.InvariantCulture, out sequence) || sequence <= 0)
+                {
+                    error = "当前树节点缺少可核对的条目序号";
+                    return false;
+                }
+                if (code.Length == 0)
+                {
+                    error = "当前树节点缺少可核对的条目编号";
+                    return false;
+                }
+
+                SqlConnection conn = GetOpenProjectConnection(mainForm);
+                string dbCode = "";
+                string dbName = "";
+                int matchCount = 0;
+                using (SqlCommand cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "select 条目编号,工程或费用项目名称 from 章节表 where 条目序号=@seq";
+                    cmd.Parameters.AddWithValue("@seq", sequence);
+                    using (SqlDataReader reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            matchCount++;
+                            dbCode = reader.IsDBNull(0) ? "" : Convert.ToString(reader.GetValue(0)).Trim();
+                            dbName = reader.IsDBNull(1) ? "" : Convert.ToString(reader.GetValue(1)).Trim();
+                        }
+                    }
+                }
+                if (matchCount != 1 || dbCode.Length == 0 || !String.Equals(code, dbCode, StringComparison.OrdinalIgnoreCase))
+                {
+                    error = "当前树节点与项目章节表身份不一致";
+                    return false;
+                }
+                using (SqlCommand cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "select count(*) from 章节表 where 条目编号=@code and 条目序号=@seq";
+                    cmd.Parameters.AddWithValue("@code", dbCode);
+                    cmd.Parameters.AddWithValue("@seq", sequence);
+                    if (Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) != 1)
+                    {
+                        error = "当前树节点不是项目中的唯一可写条目";
+                        return false;
+                    }
+                }
+
+                AgentSelectionSnapshot selection = CaptureAgentSelection(mainForm);
+                if (selection == null || selection.CurrentUnitId <= 0)
+                {
+                    error = "无法识别当前单元";
+                    return false;
+                }
+                result = new CurrentSmartEntry
+                {
+                    ProjectConnection = conn,
+                    ProjectConnectionIdentity = GetProjectConnectionIdentity(conn),
+                    UnitId = selection.CurrentUnitId,
+                    UnitCode = selection.CurrentUnitCode ?? "",
+                    EntrySequence = sequence,
+                    EntryCode = dbCode,
+                    EntryName = dbName,
+                    Node = node
+                };
+                return true;
+            }
+
+            private void RefreshCurrentSmartEntry(bool forApply)
+            {
+                if (!smartOnly) return;
+                CurrentSmartEntry entry;
+                string error;
+                currentEntryWritable = TryResolveCurrentSmartEntry(out entry, out error);
+                currentSmartEntry = currentEntryWritable ? entry : null;
+                lblCurrentEntry.Text = currentEntryWritable
+                    ? "当前条目：" + entry.EntryCode + "  " + entry.EntryName
+                    : "当前条目：（" + error + "）";
+                RefreshSmartSfEntryState();
+                RefreshApplyEnabled();
+                UpdateSmartWriteScope();
+            }
+
+            private HashSet<int> GetSelectedSmartTargetRows()
+            {
+                HashSet<int> selected = new HashSet<int>();
+                foreach (DataGridViewRow row in grid.SelectedRows)
+                {
+                    FillPreviewItem item = row.Tag as FillPreviewItem;
+                    if (item != null) selected.Add(item.TargetRow);
+                }
+                return selected;
+            }
+
+            private HashSet<int> GetCheckedSmartTargetRows()
+            {
+                return new HashSet<int>(preview.Where(item => item != null && item.IsNameDriven &&
+                    item.GroupOrder == 0 && item.Selected).Select(item => item.TargetRow));
+            }
+
+            private void SetSelectedSmartGroupsChecked(bool value)
+            {
+                if (!smartOnly) return;
+                HashSet<int> selectedRows = GetSelectedSmartTargetRows();
+                foreach (FillPreviewItem item in preview.Where(item => item != null && selectedRows.Contains(item.TargetRow)))
+                {
+                    item.Selected = value;
+                }
+                bool old = updatingNameQuotaCell;
+                updatingNameQuotaCell = true;
+                try
+                {
+                    foreach (DataGridViewRow row in grid.Rows)
+                    {
+                        FillPreviewItem item = row.Tag as FillPreviewItem;
+                        if (item != null && item.GroupOrder == 0 && selectedRows.Contains(item.TargetRow))
+                            row.Cells["sel"].Value = value;
+                    }
+                }
+                finally { updatingNameQuotaCell = old; }
+                UpdateSmartWriteScope();
+                RefreshApplyEnabled();
+            }
+
+            private void UpdateSmartWriteScope()
+            {
+                if (!smartOnly) return;
+                HashSet<int> selected = GetSelectedSmartTargetRows();
+                HashSet<int> checkedRows = GetCheckedSmartTargetRows();
+                HashSet<int> intersection = new HashSet<int>(selected);
+                intersection.IntersectWith(checkedRows);
+                int itemCount = preview.Count(item => item != null && intersection.Contains(item.TargetRow));
+                lblWriteScope.Text = "将写入 " + itemCount.ToString(CultureInfo.InvariantCulture) + " 条（选中 " +
+                    selected.Count.ToString(CultureInfo.InvariantCulture) + " 组 ∩ 已勾选 " +
+                    checkedRows.Count.ToString(CultureInfo.InvariantCulture) + " 组）";
+            }
+
+            private void InvalidateSmartPreview()
+            {
+                if (!smartOnly || updatingSmartPreviewInputs) return;
+                smartPreviewVersion++;
+                previewContext = null;
+                smartPreviewReady = false;
+                smartPreviewWorkbookPath = "";
+                preview = new List<FillPreviewItem>();
+                bool old = updatingNameQuotaCell;
+                updatingNameQuotaCell = true;
+                try { grid.Rows.Clear(); }
+                finally { updatingNameQuotaCell = old; }
+                UpdateSmartWriteScope();
+                RefreshApplyEnabled();
+            }
+
+            private void RefreshApplyEnabled()
+            {
+                if (!smartOnly)
+                {
+                    btnApply.Enabled = !busy;
+                    btnPreview.Enabled = !busy;
+                    return;
+                }
+                bool hasWritableGroup = preview.GroupBy(item => item.TargetRow)
+                    .Any(group => group.All(item => item != null && String.IsNullOrEmpty(item.Status) && !item.SfEntryBlocked));
+                btnPreview.Enabled = !busy && smartLoadStatus == SmartScopeLoadStatus.Success;
+                btnApply.Enabled = !busy && smartPreviewReady && previewContext != null && currentEntryWritable && hasWritableGroup;
+            }
+
+            // SF state is recomputed from the current host entry; it never mutates the persistent Status text.
+            private void RefreshSmartSfEntryState()
+            {
+                if (!smartOnly || preview == null) return;
+                foreach (FillPreviewItem item in preview)
+                {
+                    item.SfEntryBlocked = false;
+                    item.SfEntryBlockReason = "";
+                }
+                if (!currentEntryWritable || currentSmartEntry == null) return;
+                bool currentIsEquipment = (currentSmartEntry.EntryName ?? "").IndexOf("设备购置费", StringComparison.OrdinalIgnoreCase) >= 0;
+                foreach (IGrouping<int, FillPreviewItem> group in preview.Where(item => item != null).GroupBy(item => item.TargetRow))
+                {
+                    bool hasSf = group.Any(item => String.Equals((item.QuotaCode ?? "").Trim(), "SF", StringComparison.OrdinalIgnoreCase));
+                    bool hasNonSf = group.Any(item => !String.Equals((item.QuotaCode ?? "").Trim(), "SF", StringComparison.OrdinalIgnoreCase));
+                    string reason = "";
+                    if (currentIsEquipment && hasNonSf) reason = "设备购置费条目只接受 SF";
+                    else if (hasSf && !currentIsEquipment)
+                    {
+                        long sfSeq;
+                        string sfCode;
+                        string sfName;
+                        if (!TryResolveSiblingEquipmentEntry(currentSmartEntry.ProjectConnection, currentSmartEntry.EntryCode,
+                            out sfSeq, out sfCode, out sfName, out reason)) { }
+                    }
+                    if (reason.Length == 0) continue;
+                    foreach (FillPreviewItem item in group)
+                    {
+                        item.SfEntryBlocked = true;
+                        item.SfEntryBlockReason = reason;
+                    }
+                }
+            }
+
+            private static bool TryResolveSiblingEquipmentEntry(SqlConnection conn, string currentEntryCode,
+                out long entrySequence, out string entryCode, out string entryName, out string error)
+            {
+                entrySequence = 0;
+                entryCode = "";
+                entryName = "";
+                error = "";
+                string[] currentParts = (currentEntryCode ?? "").Split(new[] { '-' }, StringSplitOptions.RemoveEmptyEntries);
+                if (currentParts.Length < 2)
+                {
+                    error = "当前条目无法确定同级设备购置费条目";
+                    return false;
+                }
+                List<CurrentSmartEntry> candidates = new List<CurrentSmartEntry>();
+                using (SqlCommand cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "select 条目序号,条目编号,工程或费用项目名称 from 章节表 where 工程或费用项目名称 like @name";
+                    cmd.Parameters.AddWithValue("@name", "%设备购置费%");
+                    using (SqlDataReader reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            string candidateCode = reader.IsDBNull(1) ? "" : Convert.ToString(reader.GetValue(1)).Trim();
+                            string[] parts = candidateCode.Split(new[] { '-' }, StringSplitOptions.RemoveEmptyEntries);
+                            if (parts.Length != currentParts.Length) continue;
+                            bool sameParent = true;
+                            for (int i = 0; i < parts.Length - 1; i++)
+                            {
+                                if (!String.Equals(parts[i], currentParts[i], StringComparison.OrdinalIgnoreCase))
+                                {
+                                    sameParent = false;
+                                    break;
+                                }
+                            }
+                            if (!sameParent) continue;
+                            candidates.Add(new CurrentSmartEntry
+                            {
+                                EntrySequence = Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture),
+                                EntryCode = candidateCode,
+                                EntryName = reader.IsDBNull(2) ? "" : Convert.ToString(reader.GetValue(2)).Trim()
+                            });
+                        }
+                    }
+                }
+                if (candidates.Count != 1)
+                {
+                    error = candidates.Count == 0
+                        ? "未找到唯一的同级设备购置费条目"
+                        : "同级设备购置费条目不唯一";
+                    return false;
+                }
+                entrySequence = candidates[0].EntrySequence;
+                entryCode = candidates[0].EntryCode;
+                entryName = candidates[0].EntryName;
+                return true;
             }
 
             // 同一 Excel 工程量行产生的多条定额 = 一个合并显示组。
@@ -485,16 +892,20 @@ namespace RecoNet
                     List<SmartLearningScope> scopes;
                     try
                     {
-                        scopes = IsLearningDbCircuitOpen()
-                            ? new List<SmartLearningScope>
-                            {
-                                new SmartLearningScope { Kind = "Unclassified", EntryCode = "", DisplayName = "未归类" }
-                            }
-                            : LoadSmartLearningScopes(mainForm);
+                        SmartScopeLoadResult scopeLoad = LoadSmartLearningScopes(mainForm);
+                        scopes = scopeLoad.Scopes;
+                        smartLoadStatus = scopeLoad.Status;
+                        smartScopeNotice = scopeLoad.Message ?? "";
+                        if (scopeLoad.Status != SmartScopeLoadStatus.Success)
+                        {
+                            btnSmartLearningScope.Text = scopeLoad.Message ?? "学习库不可用";
+                        }
                     }
                     catch (Exception ex)
                     {
                         Log("Load smart learning scopes failed: " + ex.Message);
+                        smartLoadStatus = SmartScopeLoadStatus.Error;
+                        smartScopeNotice = "学习库不可用，未生成推荐。";
                         scopes = new List<SmartLearningScope>();
                     }
 
@@ -538,12 +949,15 @@ namespace RecoNet
                     if (selectedNode == null) selectedNode = allNode;
                     selectedSmartLearningScope = selectedNode.Tag as SmartLearningScope ?? allScope;
                     smartLearningScopeTree.SelectedNode = selectedNode;
-                    btnSmartLearningScope.Text = BuildSmartLearningScopeText(selectedSmartLearningScope);
+                    btnSmartLearningScope.Text = smartLoadStatus == SmartScopeLoadStatus.Success
+                        ? BuildSmartLearningScopeText(selectedSmartLearningScope)
+                        : (String.IsNullOrWhiteSpace(smartScopeNotice) ? "学习库不可用" : smartScopeNotice);
                 }
                 finally
                 {
                     smartLearningScopeTree.EndUpdate();
                     rebuildingSmartLearningScopeTree = false;
+                    RefreshApplyEnabled();
                 }
             }
 
@@ -589,9 +1003,13 @@ namespace RecoNet
                 if (rebuildingSmartLearningScopeTree || node == null) return;
                 SmartLearningScope scope = node.Tag as SmartLearningScope;
                 if (scope == null) return;
+                bool changed = selectedSmartLearningScope == null ||
+                    !String.Equals(selectedSmartLearningScope.Kind ?? "", scope.Kind ?? "", StringComparison.OrdinalIgnoreCase) ||
+                    !String.Equals(selectedSmartLearningScope.EntryCode ?? "", scope.EntryCode ?? "", StringComparison.OrdinalIgnoreCase);
                 selectedSmartLearningScope = scope;
                 btnSmartLearningScope.Text = BuildSmartLearningScopeText(scope);
                 smartLearningScopeDropDown.Close();
+                if (changed) InvalidateSmartPreview();
             }
 
             private void AddTemplateSourceWorkbook(List<OpenSpreadsheetWorkbookInfo> workbooks)
@@ -793,6 +1211,7 @@ namespace RecoNet
 
             private void OnPreview()
             {
+                if (smartOnly) InvalidateSmartPreview();
                 SetBusy(true, "预览中...");
                 try
                 {
@@ -801,17 +1220,47 @@ namespace RecoNet
                     {
                         string smartWorkbook;
                         string smartWorkbookError;
-                        if (!TryResolveSmartActiveWorkbook(out smartWorkbook, out smartWorkbookError))
+                        updatingSmartPreviewInputs = true;
+                        bool workbookReady;
+                        try { workbookReady = TryResolveSmartActiveWorkbook(out smartWorkbook, out smartWorkbookError); }
+                        finally { updatingSmartPreviewInputs = false; }
+                        if (!workbookReady)
                         {
                             MessageBox.Show(this, smartWorkbookError, "推荐定额");
                             return;
                         }
                         smartPreviewWorkbookPath = smartWorkbook;
                         string smartWarning = null;
+                        string softwarePartition;
+                        string normalizedMethodNo;
                         preview = BuildPreview_SmartFill(mainForm, smartWorkbook, cmbTargetSheet.Text.Trim(), txtColumn.Text.Trim(),
-                            selectedSmartLearningScope, out smartWarning);
+                            selectedSmartLearningScope, out smartWarning, out smartLoadStatus, out softwarePartition, out normalizedMethodNo);
+                        if (!String.IsNullOrWhiteSpace(smartScopeNotice) && smartLoadStatus == SmartScopeLoadStatus.Success)
+                            smartWarning = String.IsNullOrWhiteSpace(smartWarning) ? smartScopeNotice : smartWarning + "\n" + smartScopeNotice;
                         if (!String.IsNullOrEmpty(smartWarning)) MessageBox.Show(this, smartWarning, "推荐定额");
-                        RebuildItemTree();
+                        RefreshCurrentSmartEntry(false);
+                        smartPreviewReady = smartLoadStatus == SmartScopeLoadStatus.Success && preview.Count > 0;
+                        if (smartPreviewReady)
+                        {
+                            SqlConnection conn = GetOpenProjectConnection(mainForm);
+                            AgentSelectionSnapshot selection = CaptureAgentSelection(mainForm);
+                            smartPreviewVersion++;
+                            previewContext = new SmartPreviewContext
+                            {
+                                ProjectConnection = conn,
+                                ProjectConnectionIdentity = GetProjectConnectionIdentity(conn),
+                                CurrentUnitId = selection == null ? 0 : selection.CurrentUnitId,
+                                CurrentUnitCode = selection == null ? "" : selection.CurrentUnitCode ?? "",
+                                SoftwarePartition = softwarePartition ?? "",
+                                MethodNo = normalizedMethodNo ?? "",
+                                ScopeKind = selectedSmartLearningScope == null ? "All" : selectedSmartLearningScope.Kind ?? "All",
+                                ScopeEntryCode = selectedSmartLearningScope == null ? "" : selectedSmartLearningScope.EntryCode ?? "",
+                                WorkbookPath = Path.GetFullPath(smartWorkbook),
+                                Worksheet = cmbTargetSheet.Text.Trim(),
+                                TargetColumn = txtColumn.Text.Trim().ToUpperInvariant(),
+                                PreviewVersion = smartPreviewVersion
+                            };
+                        }
                         FillGrid();
                         return;
                     }
@@ -873,11 +1322,14 @@ namespace RecoNet
                         nameLeaders.TryGetValue(item.TargetRow, out leader);
                         SetGridRow(grid.Rows[index], item, leader);
                     }
+                    grid.ClearSelection();
                 }
                 finally
                 {
                     updatingNameQuotaCell = previousUpdating;
                 }
+                UpdateSmartWriteScope();
+                RefreshApplyEnabled();
             }
 
             private void SetGridRow(DataGridViewRow row, FillPreviewItem item, FillPreviewItem leader)
@@ -1181,14 +1633,17 @@ namespace RecoNet
 
             private static bool HasUnsafeNameQuotaCandidate(IEnumerable<FillPreviewItem> items)
             {
-                return items == null || items.Any(item => item == null || IsNameQuotaHardStatus(item.Status));
+                return items == null || items.Any(item => item == null || IsNameQuotaHardStatus(item.Status) || item.SfEntryBlocked);
             }
 
             private static string GetUnsafeNameQuotaCandidateReason(IEnumerable<FillPreviewItem> items)
             {
                 if (items == null) return "未找到组件数据";
-                return String.Join("；", items.Where(item => item != null && IsNameQuotaHardStatus(item.Status))
-                    .SelectMany(item => SplitNameQuotaStatus(item.Status).Where(part => !IsSoftNameQuotaStatusPart(part)))
+                return String.Join("；", items.Where(item => item != null)
+                    .SelectMany(item => SplitNameQuotaStatus(item.Status).Where(part => !IsSoftNameQuotaStatusPart(part))
+                        .Concat(item.SfEntryBlocked && !String.IsNullOrWhiteSpace(item.SfEntryBlockReason)
+                            ? new[] { item.SfEntryBlockReason }
+                            : new string[0]))
                     .Distinct(StringComparer.Ordinal).ToArray());
             }
 
@@ -1215,7 +1670,7 @@ namespace RecoNet
                 if (item.NeedManualQuota &&
                     String.Equals((item.Status ?? "").Trim(), "未匹配", StringComparison.Ordinal))
                     return Color.FromArgb(255, 246, 196);
-                if (IsNameQuotaHardStatus(item.Status)) return Color.MistyRose;
+                if (IsNameQuotaHardStatus(item.Status) || item.SfEntryBlocked) return Color.MistyRose;
                 if (item.NeedExactNameConfirmation || item.NeedManualQuota ||
                     SplitNameQuotaStatus(item.Status).Any(IsSoftNameQuotaStatusPart))
                     return Color.FromArgb(255, 246, 196);
@@ -1318,6 +1773,7 @@ namespace RecoNet
             // “第一部分”这类更高层级不进树。节点 Tag 为条目编号，根节点 Tag 为空串表示全部。
             private void RebuildItemTree()
             {
+                if (smartOnly) return;
                 rebuildingTree = true;
                 itemTree.BeginUpdate();
                 try
@@ -1631,11 +2087,160 @@ namespace RecoNet
                 catch (Exception ex) { MessageBox.Show(this, "绑定失败：" + ex.Message, "模板铺量"); }
             }
 
+            private bool IsSmartPreviewContextCurrent(CurrentSmartEntry entry, out string error)
+            {
+                error = "";
+                SmartPreviewContext context = previewContext;
+                if (context == null || entry == null)
+                {
+                    error = "预览已失效，请重新预览";
+                    return false;
+                }
+                if (!Object.ReferenceEquals(context.ProjectConnection, entry.ProjectConnection) ||
+                    !String.Equals(context.ProjectConnectionIdentity, entry.ProjectConnectionIdentity, StringComparison.OrdinalIgnoreCase) ||
+                    context.CurrentUnitId != entry.UnitId ||
+                    (!String.IsNullOrWhiteSpace(context.CurrentUnitCode) &&
+                     !String.Equals(context.CurrentUnitCode, entry.UnitCode, StringComparison.OrdinalIgnoreCase)))
+                {
+                    error = "项目或当前单元已切换，请重新预览";
+                    return false;
+                }
+                if (context.PreviewVersion != smartPreviewVersion ||
+                    !String.Equals(context.ScopeKind, selectedSmartLearningScope == null ? "All" : selectedSmartLearningScope.Kind ?? "All", StringComparison.OrdinalIgnoreCase) ||
+                    !String.Equals(context.ScopeEntryCode, selectedSmartLearningScope == null ? "" : selectedSmartLearningScope.EntryCode ?? "", StringComparison.OrdinalIgnoreCase) ||
+                    !String.Equals(context.Worksheet, cmbTargetSheet.Text.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                    !String.Equals(context.TargetColumn, txtColumn.Text.Trim().ToUpperInvariant(), StringComparison.OrdinalIgnoreCase))
+                {
+                    error = "推荐范围或 Excel 预览输入已变化，请重新预览";
+                    return false;
+                }
+                string activeWorkbook;
+                string workbookError;
+                updatingSmartPreviewInputs = true;
+                bool workbookReady;
+                try { workbookReady = TryResolveSmartActiveWorkbook(out activeWorkbook, out workbookError); }
+                finally { updatingSmartPreviewInputs = false; }
+                if (!workbookReady || !String.Equals(Path.GetFullPath(activeWorkbook), context.WorkbookPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    error = workbookReady ? "当前活动工作簿已变化，请重新预览" : workbookError;
+                    return false;
+                }
+                SmartMethodRoute route = ResolveSmartMethodRoute(SmartResolveProjectMethod(entry.ProjectConnection));
+                if (!String.Equals(context.SoftwarePartition, ResolveLearningSoftwarePartition(), StringComparison.OrdinalIgnoreCase) ||
+                    !String.Equals(context.MethodNo, NormalizeLearningMethodNo(route.MethodNo), StringComparison.OrdinalIgnoreCase))
+                {
+                    error = "当前软件分区或编制办法已变化，请重新预览";
+                    return false;
+                }
+                return true;
+            }
+
+            private bool StampSelectedSmartEntries(List<FillPreviewItem> selectedItems, CurrentSmartEntry entry, out string error)
+            {
+                error = "";
+                bool currentIsEquipment = (entry.EntryName ?? "").IndexOf("设备购置费", StringComparison.OrdinalIgnoreCase) >= 0;
+                long sfSequence = entry.EntrySequence;
+                string sfCode = entry.EntryCode;
+                string sfName = entry.EntryName;
+                bool needsSfRedirect = selectedItems.Any(item => String.Equals((item.QuotaCode ?? "").Trim(), "SF", StringComparison.OrdinalIgnoreCase)) &&
+                    !currentIsEquipment;
+                if (needsSfRedirect && !TryResolveSiblingEquipmentEntry(entry.ProjectConnection, entry.EntryCode,
+                    out sfSequence, out sfCode, out sfName, out error)) return false;
+
+                foreach (IGrouping<int, FillPreviewItem> group in selectedItems.GroupBy(item => item.TargetRow))
+                {
+                    bool hasSf = group.Any(item => String.Equals((item.QuotaCode ?? "").Trim(), "SF", StringComparison.OrdinalIgnoreCase));
+                    bool hasNonSf = group.Any(item => !String.Equals((item.QuotaCode ?? "").Trim(), "SF", StringComparison.OrdinalIgnoreCase));
+                    if (currentIsEquipment && hasNonSf)
+                    {
+                        error = "设备购置费条目只接受 SF，所选组件整组未写入";
+                        return false;
+                    }
+                    if (hasSf && !currentIsEquipment && sfSequence <= 0)
+                    {
+                        error = "未找到唯一同级设备购置费条目，所选组件整组未写入";
+                        return false;
+                    }
+                    foreach (FillPreviewItem item in group)
+                    {
+                        bool sf = String.Equals((item.QuotaCode ?? "").Trim(), "SF", StringComparison.OrdinalIgnoreCase);
+                        item.ChosenItemSeq = sf ? sfSequence : entry.EntrySequence;
+                        item.ChosenItemNo = sf ? sfCode : entry.EntryCode;
+                        item.ChosenItemName = sf ? sfName : entry.EntryName;
+                        item.SfRedirect = sf && !currentIsEquipment;
+                        item.EntrySource = item.SfRedirect ? "sf-sibling-redirect" : "user-selected";
+                        item.Selected = true;
+                    }
+                }
+                return true;
+            }
+
             private void OnApply()
             {
                 try
                 {
                     FlushGridSelectionsToPreview();
+                    if (smartOnly)
+                    {
+                        RefreshCurrentSmartEntry(true);
+                        string contextError = "当前树节点不是可写入的条目，请选中具体条目后重试。";
+                        if (!currentEntryWritable || currentSmartEntry == null ||
+                            !IsSmartPreviewContextCurrent(currentSmartEntry, out contextError))
+                        {
+                            MessageBox.Show(this, String.IsNullOrWhiteSpace(contextError)
+                                ? "当前树节点不是可写入的条目，请选中具体条目后重试。"
+                                : contextError, "推荐定额");
+                            return;
+                        }
+                        HashSet<int> selectedRows = GetSelectedSmartTargetRows();
+                        HashSet<int> checkedRows = GetCheckedSmartTargetRows();
+                        selectedRows.IntersectWith(checkedRows);
+                        if (selectedRows.Count == 0)
+                        {
+                            MessageBox.Show(this, "没有同时被选中且勾选的定额。请先在表格中选中要写的行（可 Ctrl/Shift 多选），再勾选左侧复选框。", "推荐定额");
+                            return;
+                        }
+                        List<FillPreviewItem> selectedItems = preview.Where(item => item != null && selectedRows.Contains(item.TargetRow))
+                            .OrderBy(item => item.TargetRow).ThenBy(item => item.GroupOrder).ToList();
+                        string stampError;
+                        if (!StampSelectedSmartEntries(selectedItems, currentSmartEntry, out stampError))
+                        {
+                            MessageBox.Show(this, stampError, "推荐定额");
+                            return;
+                        }
+                        long approvedEntrySequence = currentSmartEntry.EntrySequence;
+                        string approvedEntryCode = currentSmartEntry.EntryCode;
+                        if (MessageBox.Show(this, "确认把选中且勾选的 " + selectedItems.Count.ToString(CultureInfo.InvariantCulture) +
+                            " 条定额写入当前条目【" + currentSmartEntry.EntryCode + " " + currentSmartEntry.EntryName + "】？\n写入动作本身会保存；“计算”只刷新价格和汇总。",
+                            "推荐定额", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+                        // 用户确认框的嵌套消息循环期间仍可能切换项目/条目；真正写入前再读一次并与确认文案中的目标对比。
+                        RefreshCurrentSmartEntry(true);
+                        contextError = "确认后项目或条目已变化，请重新选择并写入。";
+                        if (!currentEntryWritable || currentSmartEntry == null ||
+                            !IsSmartPreviewContextCurrent(currentSmartEntry, out contextError) ||
+                            currentSmartEntry.EntrySequence != approvedEntrySequence ||
+                            !String.Equals(currentSmartEntry.EntryCode, approvedEntryCode, StringComparison.OrdinalIgnoreCase))
+                        {
+                            MessageBox.Show(this, String.IsNullOrWhiteSpace(contextError)
+                                ? "确认后项目或条目已变化，请重新选择并写入。"
+                                : contextError, "推荐定额");
+                            return;
+                        }
+                        if (!StampSelectedSmartEntries(selectedItems, currentSmartEntry, out stampError))
+                        {
+                            MessageBox.Show(this, stampError, "推荐定额");
+                            return;
+                        }
+                        SetBusy(true, "写入中...");
+                        string sourceWorkbook = Path.GetFileName(previewContext.WorkbookPath);
+                        bool smartSucceeded;
+                        string smartResult = ApplyFillToSelectedEntry(mainForm, currentSmartEntry.UnitId, currentSmartEntry.UnitCode,
+                            currentSmartEntry.EntrySequence, currentSmartEntry.EntryCode, currentSmartEntry.EntryName,
+                            selectedItems, sourceWorkbook, previewContext.Worksheet, out smartSucceeded);
+                        MessageBox.Show(this, smartResult, "推荐定额");
+                        if (smartSucceeded) InvalidateSmartPreview();
+                        return;
+                    }
                     int selectedCount = preview.Count(it => it.Selected);
                     string targetUnit = cmbTargetUnit.Text.Trim();
                     if (MessageBox.Show(this, "确认把勾选的 " + selectedCount.ToString() + " 条定额（含树筛选后未显示条目中已勾选的行）复制到目标单元【" + targetUnit + "】的对应条目？",
@@ -1646,18 +2251,18 @@ namespace RecoNet
                         System.IO.Path.GetFileName(GetSelectedTargetWorkbookPath() ?? ""), cmbTargetSheet.Text.Trim());
                     MessageBox.Show(this, result, "模板铺量");
                 }
-                catch (Exception ex) { MessageBox.Show(this, "写入失败：" + ex.Message, "模板铺量"); }
+                catch (Exception ex) { MessageBox.Show(this, "写入失败：" + ex.Message, smartOnly ? "推荐定额" : "模板铺量"); }
                 finally { SetBusy(false, ""); }
             }
 
             private void SetBusy(bool busy, string action)
             {
+                this.busy = busy;
                 UseWaitCursor = busy;
                 Cursor = busy ? Cursors.WaitCursor : Cursors.Default;
-                btnPreview.Enabled = !busy;
-                btnApply.Enabled = !busy;
                 string baseTitle = smartOnly ? "推荐定额" : "模板铺量";
                 Text = busy && !String.IsNullOrEmpty(action) ? baseTitle + " - " + action : baseTitle;
+                RefreshApplyEnabled();
                 Refresh();
             }
         }

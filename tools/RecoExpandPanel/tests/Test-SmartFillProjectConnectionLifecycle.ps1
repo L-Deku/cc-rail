@@ -51,7 +51,7 @@ if (-not $chapterNames.Contains('GetOpenProjectConnection(mainForm)') -or $chapt
     throw 'SmartFill chapter-name loading still clones the host project connection.'
 }
 
-$applyFill = Get-Section $templateFeature 'private static string ApplyFill' 'private static List<List<FillPreviewItem>> CollectFullyWrittenNameDrivenGroups'
+$applyFill = Get-Section $templateFeature 'private static string ApplyFillToSelectedEntry' 'private static string ApplyFill'
 if (-not $applyFill.Contains('SqlConnection conn = GetOpenProjectConnection(mainForm);')) {
     throw 'ApplyFill does not borrow the safely reopened host project connection.'
 }
@@ -162,7 +162,7 @@ foreach ($section in @($chapterNames, $applyFill, $unitList, $reloadSheets, $bui
 }
 
 $smartFill = [IO.File]::ReadAllText((Join-Path $sourceDir 'SmartFillFeature.cs'))
-$learningScopes = Get-Section $smartFill 'private static List<SmartLearningScope> LoadSmartLearningScopes' 'private static bool IsSmartClassifiedEntryCode'
+$learningScopes = Get-Section $smartFill 'private static SmartScopeLoadResult LoadSmartLearningScopes' 'private static bool IsSmartClassifiedEntryCode'
 $previewStart = $smartFill.IndexOf('private static List<FillPreviewItem> BuildPreview_SmartFill', [StringComparison]::Ordinal)
 if ($previewStart -lt 0) { throw 'Missing SmartFill preview method.' }
 $smartPreview = $smartFill.Substring($previewStart)

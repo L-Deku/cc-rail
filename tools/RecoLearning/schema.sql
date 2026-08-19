@@ -78,8 +78,11 @@ CREATE TABLE dbo.QuotaBoxTarget (
   target_code NVARCHAR(100) NOT NULL,
   target_name NVARCHAR(500) NOT NULL DEFAULT(''),
   target_unit NVARCHAR(50) NOT NULL DEFAULT(''),
+  unit_price  DECIMAL(18,6) NOT NULL DEFAULT(0),
   CONSTRAINT PK_QuotaBoxTarget PRIMARY KEY (box_id, target_kind, target_code)
 );
+IF COL_LENGTH('dbo.QuotaBoxTarget','unit_price') IS NULL
+  ALTER TABLE dbo.QuotaBoxTarget ADD unit_price DECIMAL(18,6) NOT NULL CONSTRAINT DF_QuotaBoxTarget_unit_price DEFAULT(0);
 
 IF OBJECT_ID('dbo.SignatureBoxMap') IS NULL
 CREATE TABLE dbo.SignatureBoxMap (

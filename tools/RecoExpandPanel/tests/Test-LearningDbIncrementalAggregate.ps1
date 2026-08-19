@@ -26,6 +26,8 @@ $targetCode = 'TEST-' + $suffix.Substring(0, 20)
 $entryCode = '12-01'
 $entryName = 'rollback entry'
 $method = '2024'
+$methodNo = 'TB 10801—2024'
+$softwarePartition = '2024'
 $boxId = 'box-test-' + $suffix.Substring(0, 24)
 $engineeringType = $entryCode.Substring(0, 2)
 $contextTargetCode = 'CTX-' + $suffix.Substring(0, 18)
@@ -46,6 +48,8 @@ $groupType.GetField('QuantityUnit', $allFlags).SetValue($group, 'm2')
 $groupType.GetField('EntryCode', $allFlags).SetValue($group, $entryCode)
 $groupType.GetField('EntryName', $allFlags).SetValue($group, $entryName)
 $groupType.GetField('Method', $allFlags).SetValue($group, $method)
+$groupType.GetField('MethodNo', $allFlags).SetValue($group, $methodNo)
+$groupType.GetField('SoftwarePartition', $allFlags).SetValue($group, $softwarePartition)
 $groupType.GetField('BoxId', $allFlags).SetValue($group, $boxId)
 $targetType.GetField('Kind', $allFlags).SetValue($target, 'quota')
 $targetType.GetField('Code', $allFlags).SetValue($target, $targetCode)
@@ -65,7 +69,7 @@ $upsert = $panelType.GetMethod('UpsertBindingGroupAggregates', $allFlags)
 function New-ContextAggregateGroup([string]$quantityName, [string]$ordinaryCode,
     [string]$auxiliaryName, [string]$auxiliaryUnit, [string]$secondAuxiliaryName = '', [string]$secondAuxiliaryUnit = '') {
     $testGroup = [Activator]::CreateInstance($groupType, $true).PSObject.BaseObject
-    foreach ($pair in @{ QuantityName=$quantityName; QuantityUnit='100m3'; EntryCode='0309-01-03-01'; EntryName='桥涵工程'; Method='2024'; BoxId=('box-shared-' + $suffix.Substring(0, 20)) }.GetEnumerator()) {
+    foreach ($pair in @{ QuantityName=$quantityName; QuantityUnit='100m3'; EntryCode='0309-01-03-01'; EntryName='桥涵工程'; Method='2024'; MethodNo=$methodNo; SoftwarePartition=$softwarePartition; BoxId=('box-shared-' + $suffix.Substring(0, 20)) }.GetEnumerator()) {
         $groupType.GetField($pair.Key, $allFlags).SetValue($testGroup, $pair.Value)
     }
     $testTargets = $groupType.GetField('Targets', $allFlags).GetValue($testGroup).PSObject.BaseObject
@@ -92,7 +96,7 @@ function New-ContextAggregateGroup([string]$quantityName, [string]$ordinaryCode,
 }
 function New-TargetEntryAggregateGroup([string]$quantityName, [string]$testBoxId, $definitions) {
     $testGroup = [Activator]::CreateInstance($groupType, $true).PSObject.BaseObject
-    foreach ($pair in @{ QuantityName=$quantityName; QuantityUnit='元'; Method='2024'; BoxId=$testBoxId; AcceptedCount=1 }.GetEnumerator()) {
+    foreach ($pair in @{ QuantityName=$quantityName; QuantityUnit='元'; Method='2024'; MethodNo=$methodNo; SoftwarePartition=$softwarePartition; BoxId=$testBoxId; AcceptedCount=1 }.GetEnumerator()) {
         $groupType.GetField($pair.Key, $allFlags).SetValue($testGroup, $pair.Value)
     }
     $testTargets = $groupType.GetField('Targets', $allFlags).GetValue($testGroup).PSObject.BaseObject
@@ -344,8 +348,8 @@ WHERE a.raw_name=@name AND t.target_code='SH' AND t.target_name=@target_name AND
     [void]$pureContextQuery.Parameters.AddWithValue('@name', $pureContextName)
     [void]$pureContextQuery.Parameters.AddWithValue('@target_name', 'FAS 联动接入')
     [void]$pureContextQuery.Parameters.AddWithValue('@target_unit', '项')
-    if ([int]$pureContextQuery.ExecuteScalar() -ne 0) {
-        throw '纯 SH 组件不得进入增量聚合'
+    if ([int]$pureContextQuery.ExecuteScalar() -ne 1) {
+        throw '纯 SH 组件未进入增量聚合或完整身份丢失'
     }
 
     $pureSfDefinitions = New-Object System.Collections.ArrayList
@@ -372,21 +376,32 @@ WHERE a.raw_name=@name AND t.target_code='SH' AND t.target_name=@target_name AND
     $targetEntryQuery.Transaction = $transaction
     $targetEntryQuery.CommandText = @'
 SELECT
-  (SELECT COUNT(*) FROM dbo.EngineeringTemplate WHERE box_id=@pure_box AND entry_code='0802-01'),
+  (SELECT COUNT(*)
+   FROM dbo.EngineeringTemplate e
+   JOIN dbo.SignatureBoxMap m ON m.software_partition=e.software_partition AND m.box_id=e.box_id
+   WHERE m.software_partition=@software_partition AND m.signature=@pure_sig
+     AND e.method_no=@method_no AND e.entry_code='0802-01'),
   (SELECT COUNT(*) FROM dbo.SignatureEntryMap WHERE signature=@pure_sig AND target_code='SF' AND entry_code='0802-01'),
-  (SELECT COUNT(*) FROM dbo.EngineeringTemplate WHERE box_id=@mixed_box),
+  (SELECT COUNT(*)
+   FROM dbo.EngineeringTemplate e
+   JOIN dbo.SignatureBoxMap m ON m.software_partition=e.software_partition AND m.box_id=e.box_id
+   WHERE m.software_partition=@software_partition AND m.signature=@mixed_sig AND e.method_no=@method_no),
   (SELECT COUNT(*) FROM dbo.QuantityAlias WHERE raw_name=@invalid_name)
 '@
-    [void]$targetEntryQuery.Parameters.AddWithValue('@pure_box', $pureSfBoxId)
+    [void]$targetEntryQuery.Parameters.AddWithValue('@software_partition', $softwarePartition)
+    [void]$targetEntryQuery.Parameters.AddWithValue('@method_no', $methodNo)
     [void]$targetEntryQuery.Parameters.AddWithValue('@pure_sig', $pureSfName + '|')
-    [void]$targetEntryQuery.Parameters.AddWithValue('@mixed_box', $mixedEntryBoxId)
+    [void]$targetEntryQuery.Parameters.AddWithValue('@mixed_sig', $mixedEntryName + '|')
     [void]$targetEntryQuery.Parameters.AddWithValue('@invalid_name', $invalidSfName)
     $targetEntryReader = $targetEntryQuery.ExecuteReader()
     try {
-        if (-not $targetEntryReader.Read() -or $targetEntryReader.GetInt32(0) -ne 1 -or
-            $targetEntryReader.GetInt32(1) -ne 1 -or $targetEntryReader.GetInt32(2) -ne 2 -or
-            $targetEntryReader.GetInt32(3) -ne 0) {
-            throw '纯 SF 未归入设备购置费范围、混合框未按普通/SF 两条目归集，或 SF 违规组进入了聚合'
+        if (-not $targetEntryReader.Read()) { throw '未读取到 SF 条目聚合验证结果' }
+        $pureScopeCount = $targetEntryReader.GetInt32(0)
+        $pureEntryCount = $targetEntryReader.GetInt32(1)
+        $mixedScopeCount = $targetEntryReader.GetInt32(2)
+        $invalidAliasCount = $targetEntryReader.GetInt32(3)
+        if ($pureScopeCount -ne 1 -or $pureEntryCount -ne 1 -or $mixedScopeCount -ne 3 -or $invalidAliasCount -ne 0) {
+            throw "SF 条目聚合验证失败: pure_scope=$pureScopeCount, pure_entry=$pureEntryCount, mixed_scope=$mixedScopeCount, invalid_alias=$invalidAliasCount"
         }
     }
     finally { $targetEntryReader.Dispose() }
@@ -438,4 +453,4 @@ $contextAfterCount = [int]$contextVerify.ExecuteScalar()
 $connection.Dispose()
 if ($afterCount -ne 0 -or $contextAfterCount -ne 0) { throw "Rollback left $afterCount ordinary and $contextAfterCount context test rows" }
 
-Write-Host 'Test-LearningDbIncrementalAggregate: PASS (ordinary idempotence, pure SH exclusion, SH identity split/conflict guard, no residue after rollback)'
+Write-Host 'Test-LearningDbIncrementalAggregate: PASS (ordinary idempotence, pure SH inclusion, SH identity split/conflict guard, no residue after rollback)'

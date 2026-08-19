@@ -6,6 +6,19 @@ $templateMatch = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoExpand
 $schema = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\RecoLearning\schema.sql') -Raw -Encoding UTF8
 $credentialStore = Get-Content -LiteralPath (Join-Path $repoRoot 'RecoShared\RecoSqlCredentialStore.cs') -Raw -Encoding UTF8
 
+foreach ($marker in @('flat["quota_sequence"]', 'flat["source_endpoint_identity"]',
+    'flat["unit_price"]', 'flat["entry_source"]')) {
+    if (-not $learning.Contains($marker)) { throw "BindingLog.extra 缺少来源行/L2 回流字段：$marker" }
+}
+if (-not $schema.Contains('unit_price DECIMAL(18,6) NOT NULL') -or
+    -not $schema.Contains("COL_LENGTH('dbo.QuotaBoxTarget','unit_price')")) {
+    throw 'QuotaBoxTarget 缺少辅助码单价的初始结构或幂等迁移'
+}
+if (-not $learning.Contains("COL_LENGTH('dbo.QuotaBoxTarget','unit_price')") -or
+    -not $learning.Contains('unit_price=CASE WHEN @price=0 THEN unit_price ELSE @price END')) {
+    throw '增量聚合未在兼容旧 schema 的前提下保存最近非零单价'
+}
+
 if ($learning -notmatch 'RecordBindingEventsToLearningDb') { throw '缺少 SQL 学习入口 RecordBindingEventsToLearningDb' }
 if ($learning -notmatch 'RecoSqlCredentialStore\.BuildConnectionString\("learning", "RecoLearning", 1433, 3\)') { throw '学习库连接没有统一走共享 DPAPI 凭据存储' }
 if ($learning -match 'ServerSetting\.xml') { throw '学习库连接不应读取业务库配置' }

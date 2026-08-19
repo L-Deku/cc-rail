@@ -1524,6 +1524,10 @@ namespace RecoNet
             link.QuotaCode = quotaCode;
             link.QuotaName = quotaName;
             link.QuotaUnit = GetRowValue(row, "单位", "定额单位", "计量单位");
+            decimal unitPrice;
+            if (Decimal.TryParse(GetRowValue(row, "单价", "定额单价"), NumberStyles.Float,
+                CultureInfo.InvariantCulture, out unitPrice)) link.UnitPrice = unitPrice;
+            link.SourceEndpointIdentity = GetProjectConnectionIdentity(conn);
             PopulateExcelQuotaLinkLearningContext(conn, link);
             return true;
         }
@@ -2329,6 +2333,10 @@ namespace RecoNet
             public string EntryCode;
             public string EntryName;
             public string FormulaTemplate; // V0/V1... 占位的已确认跨单位数量公式
+            public long QuotaSequence;
+            public string SourceEndpointIdentity;
+            public decimal UnitPrice;
+            public string EntrySource;
         }
 
         private sealed class MappingFeedbackGroup
@@ -2516,7 +2524,10 @@ namespace RecoNet
                             Unit = target.QuotaUnit ?? "",
                             EntryCode = !String.IsNullOrWhiteSpace(target.EntryCode) ? target.EntryCode : group.EntryCode ?? "",
                             EntryName = !String.IsNullOrWhiteSpace(target.EntryName) ? target.EntryName : group.EntryName ?? "",
-                            FormulaTemplate = formulaTemplate
+                            FormulaTemplate = formulaTemplate,
+                            QuotaSequence = target.QuotaSequence,
+                            SourceEndpointIdentity = target.SourceEndpointIdentity,
+                            UnitPrice = target.UnitPrice
                         });
                     }
                     if (group.Targets.Count > 0) groups.Add(group);
@@ -2799,12 +2810,6 @@ namespace RecoNet
             List<MappingFeedbackTarget> list = (targets ?? Enumerable.Empty<MappingFeedbackTarget>())
                 .Where(target => target != null && !String.IsNullOrWhiteSpace(target.Code)).ToList();
             if (list.Count == 0) return false;
-            bool hasPrimaryTarget = list.Any(target => IsPrimaryLearningTarget(target.Kind, target.Code));
-            bool allSf = list.All(target =>
-                String.Equals(String.IsNullOrWhiteSpace(target.Kind) ? "quota" : target.Kind.Trim(), "quota",
-                    StringComparison.OrdinalIgnoreCase) &&
-                GetLearningBaseTargetCode(target.Code) == "SF");
-            if (!hasPrimaryTarget && !allSf) return false;
             foreach (MappingFeedbackTarget target in list)
             {
                 if (IsContextSensitiveLearningCode(target.Code) &&
@@ -2812,6 +2817,8 @@ namespace RecoNet
                 string targetEntryName = !String.IsNullOrWhiteSpace(target.EntryName) ? target.EntryName : entryName ?? "";
                 bool equipmentEntry = targetEntryName.IndexOf("设备购置费", StringComparison.OrdinalIgnoreCase) >= 0;
                 bool sf = GetLearningBaseTargetCode(target.Code) == "SF";
+                if (sf && !String.Equals(String.IsNullOrWhiteSpace(target.Kind) ? "quota" : target.Kind.Trim(),
+                    "quota", StringComparison.OrdinalIgnoreCase)) return false;
                 if (sf != equipmentEntry) return false;
             }
             return true;
@@ -2849,9 +2856,7 @@ namespace RecoNet
 
         private static bool IsEngineeringScopeLearningTarget(string kind, string code)
         {
-            return IsPrimaryLearningTarget(kind, code) ||
-                String.Equals(String.IsNullOrWhiteSpace(kind) ? "quota" : kind.Trim(), "quota", StringComparison.OrdinalIgnoreCase) &&
-                GetLearningBaseTargetCode(code) == "SF";
+            return !String.IsNullOrWhiteSpace(code);
         }
 
         private static string FindRecoQuotaDataDir()
@@ -5594,6 +5599,8 @@ namespace RecoNet
             public string QuotaCode { get; set; }
             public string QuotaName { get; set; }
             public string QuotaUnit { get; set; }   // 定额目标单位；与 Excel 工程量单位分开持久化
+            public decimal UnitPrice { get; set; }
+            public string SourceEndpointIdentity { get; set; }
             public string ExcelPath { get; set; }
             public string WorksheetName { get; set; }
             public string CellAddress { get; set; }

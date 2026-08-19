@@ -160,11 +160,16 @@ try {
     }
     Write-Host 'PASS 公式计算结果必须大于0'
 
-    # 跨单位公式只能命中当前办法+当前条目，或显式空条目的通用规则；不得回退到其他条目。
+    # 跨单位公式只能命中当前办法+当前专业范围；范围外或缺条目证据的公式不得混入。
     $snapshotType = $type.GetNestedType('SmartLearningSnapshot', $nestedFlags)
     $smartTargetType = $type.GetNestedType('SmartBoxTarget', $nestedFlags)
+    $scopeType = $type.GetNestedType('SmartLearningScope', $nestedFlags)
     $snapshot = [Activator]::CreateInstance($snapshotType, $true).PSObject.BaseObject
     $snapshotType.GetField('Method', $flags).SetValue($snapshot, '2024')
+    $selectedScope = [Activator]::CreateInstance($scopeType, $true).PSObject.BaseObject
+    $scopeType.GetField('Kind', $flags).SetValue($selectedScope, 'Entry')
+    $scopeType.GetField('EntryCode', $flags).SetValue($selectedScope, '0101')
+    $snapshotType.GetField('SelectedScope', $flags).SetValue($snapshot, $selectedScope)
     $target = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
     $smartTargetType.GetField('Kind', $flags).SetValue($target, 'quota')
     $smartTargetType.GetField('Code', $flags).SetValue($target, 'TEST-PILE')
@@ -181,33 +186,68 @@ try {
     [void]$ruleList.Add($rule)
     $formulaByKey.Add($formulaKey, $ruleList)
     $resolveFormula = $type.GetMethod('TryResolveSmartFormula', $flags)
-    function Invoke-ResolveFormula([string]$EntryCode) {
-        $resolveArgs = [object[]]::new(10)
+    function Invoke-ResolveFormula {
+        $resolveArgs = [object[]]::new(9)
         $resolveArgs[0] = $snapshot
         $resolveArgs[1] = $targetRows
         $resolveArgs[2] = $targetRows[0]
         $resolveArgs[3] = $target
         $resolveArgs[4] = 'm3'
-        $resolveArgs[5] = $EntryCode
-        $resolveArgs[6] = $anchorSignature
+        $resolveArgs[5] = $anchorSignature
+        $resolveArgs[6] = $null
         $resolveArgs[7] = $null
         $resolveArgs[8] = $null
-        $resolveArgs[9] = $null
         return [pscustomobject]@{ Ok = [bool]$resolveFormula.Invoke($null, $resolveArgs); Args = $resolveArgs }
     }
-    $wrongEntryResult = Invoke-ResolveFormula '0101-01'
-    if ($wrongEntryResult.Ok -or [string]$wrongEntryResult.Args[9] -notmatch '当前办法/条目') {
-        throw "错误条目公式被复用：$($wrongEntryResult.Args[9])"
+    $wrongEntryResult = Invoke-ResolveFormula
+    if ($wrongEntryResult.Ok -or [string]$wrongEntryResult.Args[8] -notmatch '当前办法/专业范围') {
+        throw "范围外公式被复用：$($wrongEntryResult.Args[8])"
     }
     $formulaRuleType.GetField('EntryCode', $flags).SetValue($rule, '')
-    $genericResult = Invoke-ResolveFormula '0101-01'
-    if ($genericResult.Ok -or [string]$genericResult.Args[9] -notmatch '当前办法/条目') {
-        throw '空条目公式不得跨条目作为可信换算公式复用'
+    $genericResult = Invoke-ResolveFormula
+    if ($genericResult.Ok -or [string]$genericResult.Args[8] -notmatch '当前办法/专业范围') {
+        throw '缺条目证据的历史公式不得跨专业范围复用'
     }
     $formulaRuleType.GetField('EntryCode', $flags).SetValue($rule, '0101-01')
-    $exactResult = Invoke-ResolveFormula '0101-01'
-    if (-not $exactResult.Ok) { throw "当前办法+条目精确公式未命中：$($exactResult.Args[9])" }
-    Write-Host 'PASS 公式严格按当前办法和当前条目选择，不回退其他条目或空条目'
+    $exactResult = Invoke-ResolveFormula
+    if (-not $exactResult.Ok) { throw "当前办法+专业范围公式未命中：$($exactResult.Args[8])" }
+    Write-Host 'PASS 公式按当前办法和专业范围选择，不回退范围外或空条目公式'
+
+    # 原始分片必须先按范围过滤，再在副本上按公式内容合并样本数。
+    $fragmentRules = [Activator]::CreateInstance($ruleListType)
+    foreach ($definition in @(
+        @('fragment-a', '0101-01', 2),
+        @('fragment-b', '0101-02', 3),
+        @('fragment-outside', '0201-01', 100)
+    )) {
+        $fragment = [Activator]::CreateInstance($formulaRuleType, $true).PSObject.BaseObject
+        foreach ($pair in @{ RuleHash=$definition[0]; TargetUnit='m3'; Template='V0*V1*V2*V2*3.14'; Method='2024'; EntryCode=$definition[1]; SampleCount=[int]$definition[2] }.GetEnumerator()) {
+            $formulaRuleType.GetField($pair.Key, $flags).SetValue($fragment, $pair.Value)
+        }
+        $fragmentOperands = $formulaRuleType.GetField('Operands', $flags).GetValue($fragment)
+        foreach ($sourceOperand in $ruleOperands) {
+            $fragmentOperand = [Activator]::CreateInstance($formulaOperandType, $true).PSObject.BaseObject
+            foreach ($field in @('Index','Signature','Name','Unit')) {
+                $formulaOperandType.GetField($field, $flags).SetValue($fragmentOperand,
+                    $formulaOperandType.GetField($field, $flags).GetValue($sourceOperand))
+            }
+            [void]$fragmentOperands.Add($fragmentOperand)
+        }
+        [void]$fragmentRules.Add($fragment)
+    }
+    $selectContextual = $type.GetMethod('SelectContextualSmartFormulaRules', $flags)
+    $selectArgs = New-Object 'object[]' 2
+    $selectArgs[0] = $snapshot
+    $selectArgs[1] = $fragmentRules.PSObject.BaseObject
+    $selectedFragments = $selectContextual.Invoke($null, $selectArgs)
+    $selectedEntryCodes = $formulaRuleType.GetField('EntryCodes', $flags).GetValue($selectedFragments[0])
+    if ($selectedFragments.Count -ne 1 -or
+        [int]$formulaRuleType.GetField('SampleCount', $flags).GetValue($selectedFragments[0]) -ne 5 -or
+        $selectedEntryCodes.Count -ne 2 -or
+        $fragmentRules.Count -ne 3) {
+        throw '公式分片未按当前专业先过滤后合并，或原始快照被就地修改'
+    }
+    Write-Host 'PASS 公式分片先按专业范围过滤，再在副本上合并样本数'
 
     # 已有多参数派生公式时，即使锚点单位与定额单位相同，也必须先完整求值；缺参数不得回退锚点单值。
     $targetRowType = $targetRows[0].GetType()
@@ -228,6 +268,10 @@ try {
     $snapshotType.GetField('Method', $flags).SetValue($sameUnitSnapshot, '2024')
     $snapshotType.GetField('SoftwarePartition', $flags).SetValue($sameUnitSnapshot, '2024')
     $snapshotType.GetField('MethodNo', $flags).SetValue($sameUnitSnapshot, 'TB 10801—2024')
+    $sameUnitScope = [Activator]::CreateInstance($scopeType, $true).PSObject.BaseObject
+    $scopeType.GetField('Kind', $flags).SetValue($sameUnitScope, 'Entry')
+    $scopeType.GetField('EntryCode', $flags).SetValue($sameUnitScope, '0101')
+    $snapshotType.GetField('SelectedScope', $flags).SetValue($sameUnitSnapshot, $sameUnitScope)
     $sameUnitSignature = [string]$signatureMethod.Invoke($null, [object[]]@('主体混凝土', 'm3'))
     $sameUnitKey = [string]$formulaKeyMethod.Invoke($null, [object[]]@($sameUnitSignature, 'quota', 'TEST-DERIVED'))
     $sameUnitFormulaByKey = $snapshotType.GetField('FormulaByKey', $flags).GetValue($sameUnitSnapshot)
@@ -255,10 +299,6 @@ try {
     $smartTargetType.GetField('Kind', $flags).SetValue($sameUnitTarget, 'quota')
     $smartTargetType.GetField('Code', $flags).SetValue($sameUnitTarget, 'TEST-DERIVED')
     [void]$mapEntryType.GetField('Targets', $flags).GetValue($sameUnitEntry).Add($sameUnitTarget)
-    [void]$mapEntryType.GetField('LocalContextKeys', $flags).GetValue($sameUnitEntry).Add("TB 10801—2024`n0101-01")
-
-    $projectEntries = [Collections.Generic.Dictionary[string,long]]::new([StringComparer]::OrdinalIgnoreCase)
-    $projectEntries.Add('0101-01', [long]1)
     $projectQuotaType = $type.GetNestedType('ProjectQuota', $nestedFlags)
     $quotaDictionaryType = [Collections.Generic.Dictionary``2].MakeGenericType([string], $projectQuotaType)
     $currentQuotaByCode = [Activator]::CreateInstance($quotaDictionaryType, [StringComparer]::OrdinalIgnoreCase)
@@ -272,20 +312,16 @@ try {
     $appendSmartItems = $type.GetMethod('AppendSmartItems', $flags)
     function Invoke-DerivedPreview($Rows) {
         $previewItems = [Activator]::CreateInstance($previewListType)
-        $appendArgs = [object[]]::new(13)
+        $appendArgs = [object[]]::new(9)
         $appendArgs[0] = $previewItems.PSObject.BaseObject
         $appendArgs[1] = $Rows[0]
         $appendArgs[2] = $Rows.PSObject.BaseObject
         $appendArgs[3] = $sameUnitEntry
         $appendArgs[4] = $sameUnitSnapshot
-        $appendArgs[5] = $projectEntries.PSObject.BaseObject
-        $appendArgs[6] = $currentQuotaByCode.PSObject.BaseObject
-        $appendArgs[7] = $null
-        $appendArgs[8] = $false
-        $appendArgs[9] = 'test'
-        $appendArgs[10] = $sameUnitSignature
-        $appendArgs[11] = $null
-        $appendArgs[12] = $null
+        $appendArgs[5] = $currentQuotaByCode.PSObject.BaseObject
+        $appendArgs[6] = $false
+        $appendArgs[7] = 'test'
+        $appendArgs[8] = $sameUnitSignature
         [void]$appendSmartItems.Invoke($null, $appendArgs)
         return ,$previewItems
     }
@@ -322,13 +358,11 @@ try {
         $mapEntry = [Activator]::CreateInstance($mapEntryType, $true).PSObject.BaseObject
         $mapEntryType.GetField('Weight', $flags).SetValue($mapEntry, $weight)
         $candidateScoreType.GetField('Entry', $flags).SetValue($score, $mapEntry)
-        foreach ($field in @('CurrentTargetsValid','HasCurrentMethodMapping','HasEntry','HasCurrentContext')) {
+        foreach ($field in @('CurrentTargetsValid','HasCurrentMethodMapping')) {
             $candidateScoreType.GetField($field, $flags).SetValue($score, $true)
         }
         [void]$scoreList.Add($score)
     }
-    $entryNameField = $candidateScoreType.GetField('EntryName', $flags)
-    if ($null -eq $entryNameField) { throw '候选分数缺少条目名称字段' }
     $smartTargetType = $type.GetNestedType('SmartBoxTarget', $nestedFlags)
     $targetIdentity = $type.GetMethod('BuildLearningTargetIdentityKey', $flags)
     $shDisposalIdentity = [string]$targetIdentity.Invoke($null, @('quota', 'SH', '消纳费', 'm³'))
@@ -365,7 +399,7 @@ try {
     $usableArgs[0] = $safetyEntry
     $usableArgs[1] = '弃渣外运'
     $usableArgs[2] = $currentMetadata.PSObject.BaseObject
-    if ($usableEntry.Invoke($null, $usableArgs)) { throw '纯 SH 辅助组件不得独立进入普通推荐' }
+    if (-not $usableEntry.Invoke($null, $usableArgs)) { throw '完整身份的纯 SH 辅助组件应能独立进入推荐' }
 
     $missingIdentityEntry = [Activator]::CreateInstance($mapEntryType, $true).PSObject.BaseObject
     $missingIdentityTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
@@ -387,8 +421,18 @@ try {
     $mismatchMetadata = [Activator]::CreateInstance($quotaDictionaryType)
     Add-CurrentQuota $mismatchMetadata 'SH' 'PE' 'm'
     Add-CurrentQuota $mismatchMetadata 'LY-89' '挖掘机挖装石' '100m3'
+    $tryCurrentQuota = $type.GetMethod('TryGetCurrentSmartQuota', $flags)
+    $currentQuotaArgs = New-Object 'object[]' 3
+    $currentQuotaArgs[0] = $mismatchMetadata.PSObject.BaseObject
+    $currentQuotaArgs[1] = $shTarget
+    $currentQuotaArgs[2] = $null
+    if ($tryCurrentQuota.Invoke($null, $currentQuotaArgs)) {
+        throw '项目内另一种同码 SH 不得被误认成当前目标的完整源行'
+    }
     $usableArgs[2] = $mismatchMetadata.PSObject.BaseObject
-    if ($usableEntry.Invoke($null, $usableArgs)) { throw '辅助名称或单位不一致时必须过滤整个混合组件' }
+    if (-not $usableEntry.Invoke($null, $usableArgs)) {
+        throw '项目已有另一种同码 SH 时，完整学习身份的目标仍应进入推荐并转 L2'
+    }
 
     $sfEntry = [Activator]::CreateInstance($mapEntryType, $true).PSObject.BaseObject
     $sfTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
@@ -402,36 +446,28 @@ try {
     $usableArgs[1] = '设备购置费'
     $usableArgs[2] = $sfMetadata.PSObject.BaseObject
     if (-not $usableEntry.Invoke($null, $usableArgs)) { throw 'SF 设备购置费的既有业务例外被误过滤' }
-    Write-Host 'PASS 通用辅助代码按名称单位隔离，纯辅助与混合组件都做原子过滤'
+    Write-Host 'PASS 通用辅助代码按名称单位隔离；同码不同身份不互相阻断，缺身份仍整组拒绝'
 
     $firstMapEntry = $candidateScoreType.GetField('Entry', $flags).GetValue($scoreList[0])
-    $targetResolutionType = $type.GetNestedType('SmartTargetEntryResolution', $nestedFlags)
-    $targetResolutions = $candidateScoreType.GetField('TargetEntries', $flags).GetValue($scoreList[0])
     foreach ($definition in @(
-        @('SH', '0401-01', '弃渣工程'),
-        @('1009001002*1.224', '0309-01-03-03', '桥涵工程'),
-        @('LY-89', '0309-01-03-03', '桥涵工程')
+        @('quota', 'SH', '消纳费', 'm3'),
+        @('material', '1009001002*1.224', '商品混凝土', 'm3'),
+        @('quota', 'LY-89', '挖掘机挖装石', '100m3')
     )) {
-        $targetCode = $definition[0]
         $smartTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
-        $smartTargetType.GetField('Code', $flags).SetValue($smartTarget, $targetCode)
+        $smartTargetType.GetField('Kind', $flags).SetValue($smartTarget, $definition[0])
+        $smartTargetType.GetField('Code', $flags).SetValue($smartTarget, $definition[1])
+        $smartTargetType.GetField('Name', $flags).SetValue($smartTarget, $definition[2])
+        $smartTargetType.GetField('Unit', $flags).SetValue($smartTarget, $definition[3])
         [void]$mapEntryType.GetField('Targets', $flags).GetValue($firstMapEntry).Add($smartTarget)
-        $targetResolution = [Activator]::CreateInstance($targetResolutionType, $true).PSObject.BaseObject
-        $targetResolutionType.GetField('Target', $flags).SetValue($targetResolution, $smartTarget)
-        $targetResolutionType.GetField('EntryCode', $flags).SetValue($targetResolution, $definition[1])
-        $targetResolutionType.GetField('EntryName', $flags).SetValue($targetResolution, $definition[2])
-        [void]$targetResolutions.Add($targetResolution)
     }
-    $candidateScoreType.GetField('EntryCode', $flags).SetValue($scoreList[0], '0309-01-03-03')
-    $entryNameField.SetValue($scoreList[0], '弃渣外运')
     $snapshotType = $type.GetNestedType('SmartLearningSnapshot', $nestedFlags)
     $snapshot = [Activator]::CreateInstance($snapshotType, $true).PSObject.BaseObject
-    $candidateLabel = $type.GetMethod('BuildSmartCandidateLabel', $flags).Invoke($null, @($snapshot, $scoreList[0]))
-    if ($candidateLabel -ne 'LY-89（桥涵工程 0309-01-03-03） + 1009001002*1.224（桥涵工程 0309-01-03-03） + SH（弃渣工程 0401-01）' -or
-        $candidateLabel -match '权重|当前办法') {
-        throw "候选下拉应按定额/材料/辅助排序并逐目标显示条目，实际：$candidateLabel"
+    $candidateLabel = $type.GetMethod('BuildSmartCandidateLabel', $flags).Invoke($null, @($scoreList[0]))
+    if ($candidateLabel -ne 'LY-89（挖掘机挖装石 / 100m3） + 1009001002*1.224（商品混凝土 / m3） + SH（消纳费 / m3）' -or
+        $candidateLabel -match '条目|权重|当前办法') {
+        throw "候选下拉应只显示组件编号、名称和单位，不得显示推理条目，实际：$candidateLabel"
     }
-    $scopeType = $type.GetNestedType('SmartLearningScope', $nestedFlags)
     $classifiedEntryCode = $type.GetMethod('IsSmartClassifiedEntryCode', $flags)
     if (-not $classifiedEntryCode.Invoke($null, @('0309-01-03-03')) -or
         $classifiedEntryCode.Invoke($null, @('ENTRY-test')) -or
@@ -504,7 +540,7 @@ try {
     foreach ($candidateDefinition in @(
         @('box-high', $candidateLabel),
         @('box-low', $candidateLabel),
-        @('box-other', 'LY-90（桥涵 0309-01-03-03）')
+        @('box-other', 'LY-90（人工挖土 / 100m3）')
     )) {
         $candidate = [Activator]::CreateInstance($candidateType)
         $candidateType.GetField('Key', $flags).SetValue($candidate, $candidateDefinition[0])
@@ -530,7 +566,7 @@ try {
     if (Invoke-CanAutoSelect) { throw '两个有效组件权重差10时不应静默选择' }
     $secondEntry = $candidateScoreType.GetField('Entry', $flags).GetValue($scoreList[1])
     $mapEntryType.GetField('Weight', $flags).SetValue($secondEntry, 20)
-    if (-not (Invoke-CanAutoSelect)) { throw '当前办法/条目唯一且权重差30时应允许自动选择' }
+    if (-not (Invoke-CanAutoSelect)) { throw '当前办法候选权重差30时应允许自动选择' }
     $candidateScoreType.GetField('HasCurrentMethodMapping', $flags).SetValue($scoreList[0], $false)
     if (Invoke-CanAutoSelect) { throw '空办法兼容关系不应静默压过当前办法关系' }
     Write-Host 'PASS 组件候选小权重差需确认，且空办法关系不能自动采纳'
