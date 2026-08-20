@@ -65,6 +65,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 默认加载 `RecoQuotaRecommend/bin/RecoExpandPanel.dll`，不会自动编译当前源码；做源码级红绿回归时，应先把 `tools/RecoExpandPanel/` 当前全部 C# 源文件编译到工作区验证目录并设置 `RECO_EXPAND_DLL`，避免把旧 DLL 的结果误判为新代码结果。
 - `build.ps1 -BuildOnly` 输出目录按白名单只含两个插件 DLL 和清单，不携带 NPOI 运行依赖；反射测试新 `RecoExpandPanel.dll` 前应在工作区 `artifacts/test-runtime/` 创建隔离测试目录，仅复制该 DLL 与既有 NPOI 依赖。测试依赖不得复制到运行目录或发布包。
 - BuildOnly 清单中的源码哈希必须来自实际传给编译器的只读快照，不得在编译后重新哈希可能已被并行修改的工作树原文件；`source_commit` 只表示基线 HEAD，dirty 工作树必须另行显式标记。
+- `build.ps1 -BuildOnly` 的构建清单文件名是 `artifact-manifest.json`；构建后校验提交、dirty 标记和 DLL 哈希时应读取该文件，不要猜成 `build-manifest.json`。
 - `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 在非交互 WinForms 环境可能卡在“定额候选下拉与组件组界面确认”之后的滚动视口用例；连续停在该位置时应按“综合回归未完成”报告，终止并核对本次测试启动的精确进程，不得把前半段 PASS 当作全部通过，也不要反复无上限重跑。
 - 读取 UTF-8 附件或中文文本时，如 PowerShell `Get-Content` 输出乱码，先设置 `[Console]::OutputEncoding`，并优先用 `[System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes(...))` 按字节解码验证内容。
 - PowerShell 部署/验证脚本需要格式化多段 `foreach` 输出时，优先先收集到数组或 `List[object]` 再统一 `Format-Table`；不要把脚本块闭合后直接接管道，容易触发 `An empty pipe element is not allowed` 解析错误。
