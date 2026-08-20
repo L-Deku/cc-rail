@@ -462,9 +462,9 @@ namespace RecoNet
                 error = "请在左侧章节树选择可写入的具体条目";
                 if (mainForm == null || mainForm.IsDisposed) return false;
                 TreeView tree = GetField<TreeView>(mainForm, "Tv_tree");
-                TreeNode node = tree == null ? null : tree.SelectedNode;
                 TreeNode currNode = GetField<TreeNode>(mainForm, "CurrNode");
-                if (node == null || (currNode != null && !Object.ReferenceEquals(node, currNode))) return false;
+                TreeNode node = ResolveSmartHostTreeNode(tree, currNode);
+                if (node == null) return false;
                 if (node.Nodes.Count != 0)
                 {
                     error = "当前树节点不是可写入的叶条目";
@@ -547,6 +547,13 @@ namespace RecoNet
                     Node = node
                 };
                 return true;
+            }
+
+            private static TreeNode ResolveSmartHostTreeNode(TreeView tree, TreeNode currNode)
+            {
+                // 宿主的 CurrNode 不是稳定的 SelectedNode 对象引用；当前树存在时以界面真实选中项为准，
+                // 再由条目序号、编号和项目章节表完成身份核对。只有拿不到树控件时才回退 CurrNode。
+                return tree == null ? currNode : tree.SelectedNode;
             }
 
             private void RefreshCurrentSmartEntry(bool forApply)

@@ -118,10 +118,28 @@ $planType = $formType.GetNestedType('PreparedSmartFillItem', $nested)
 $recordType = $formType.GetNestedType('SmartNativeInsertRecord', $nested)
 $classify = $formType.GetMethod('ClassifySmartNativeRows', $flags)
 $buildL2 = $formType.GetMethod('BuildSmartFillL2Row', $flags)
+$panelType = $formType.GetNestedType('TemplateFillPanel', $nested)
+$resolveTreeNode = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('ResolveSmartHostTreeNode', $flags) }
 if ($null -eq $itemType -or $null -eq $planType -or $null -eq $recordType -or
-    $null -eq $classify -or $null -eq $buildL2) {
+    $null -eq $classify -or $null -eq $buildL2 -or $null -eq $resolveTreeNode) {
     throw '缺少 L2 构造或 L3 结构化确认的可测试行为入口'
 }
+
+$hostTree = New-Object System.Windows.Forms.TreeView
+$selectedNode = New-Object System.Windows.Forms.TreeNode '界面实际选中条目'
+$staleCurrNode = New-Object System.Windows.Forms.TreeNode '宿主旧 CurrNode'
+[void]$hostTree.Nodes.Add($selectedNode)
+$hostTree.SelectedNode = $selectedNode
+$resolvedNode = $resolveTreeNode.Invoke($null, @($hostTree.PSObject.BaseObject, $staleCurrNode.PSObject.BaseObject))
+if (-not [Object]::ReferenceEquals($resolvedNode, $selectedNode.PSObject.BaseObject)) {
+    throw '推荐定额没有优先采用章节树当前真实选中节点'
+}
+$resolvedFallback = $resolveTreeNode.Invoke($null, @($null, $staleCurrNode.PSObject.BaseObject))
+if (-not [Object]::ReferenceEquals($resolvedFallback, $staleCurrNode.PSObject.BaseObject)) {
+    throw '章节树不可用时没有回退宿主 CurrNode'
+}
+$hostTree.Dispose()
+Write-Host 'PASS 当前条目优先采用章节树 SelectedNode，不受陈旧 CurrNode 引用阻断'
 
 function New-Item([string]$Code, [string]$Name, [string]$Unit, [string]$Quantity) {
     $item = [Activator]::CreateInstance($itemType).PSObject.BaseObject
