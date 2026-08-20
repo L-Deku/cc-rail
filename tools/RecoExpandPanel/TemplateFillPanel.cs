@@ -369,6 +369,10 @@ namespace RecoNet
                 };
                 grid.SelectionChanged += delegate
                 {
+                    // 选择变化时 DataGridView 往往只重绘新旧选中行；合并工程量名跨多行，
+                    // 必须让整列同时失效，否则未被重绘的成员行会留下被擦除的文字片段。
+                    if (grid.Columns.Contains("tname"))
+                        grid.InvalidateColumn(grid.Columns["tname"].Index);
                     if (!updatingNameQuotaCell) UpdateSmartWriteScope();
                 };
 
@@ -551,9 +555,9 @@ namespace RecoNet
 
             private static TreeNode ResolveSmartHostTreeNode(TreeView tree, TreeNode currNode)
             {
-                // 宿主的 CurrNode 不是稳定的 SelectedNode 对象引用；当前树存在时以界面真实选中项为准，
-                // 再由条目序号、编号和项目章节表完成身份核对。只有拿不到树控件时才回退 CurrNode。
-                return tree == null ? currNode : tree.SelectedNode;
+                // SelectedNode 有值时始终以界面真实选中项为准，不要求与宿主 CurrNode 引用相同；
+                // 宿主切换焦点期间 SelectedNode 可能暂时为空，此时回退 CurrNode，再由后续项目章节表校验身份。
+                return tree == null || tree.SelectedNode == null ? currNode : tree.SelectedNode;
             }
 
             private void RefreshCurrentSmartEntry(bool forApply)

@@ -138,8 +138,13 @@ $resolvedFallback = $resolveTreeNode.Invoke($null, @($null, $staleCurrNode.PSObj
 if (-not [Object]::ReferenceEquals($resolvedFallback, $staleCurrNode.PSObject.BaseObject)) {
     throw '章节树不可用时没有回退宿主 CurrNode'
 }
+$hostTree.SelectedNode = $null
+$resolvedTransientFallback = $resolveTreeNode.Invoke($null, @($hostTree.PSObject.BaseObject, $staleCurrNode.PSObject.BaseObject))
+if (-not [Object]::ReferenceEquals($resolvedTransientFallback, $staleCurrNode.PSObject.BaseObject)) {
+    throw '章节树 SelectedNode 暂时为空时没有回退宿主 CurrNode'
+}
 $hostTree.Dispose()
-Write-Host 'PASS 当前条目优先采用章节树 SelectedNode，不受陈旧 CurrNode 引用阻断'
+Write-Host 'PASS 当前条目优先采用章节树 SelectedNode，空选中时安全回退 CurrNode'
 
 function New-Item([string]$Code, [string]$Name, [string]$Unit, [string]$Quantity) {
     $item = [Activator]::CreateInstance($itemType).PSObject.BaseObject

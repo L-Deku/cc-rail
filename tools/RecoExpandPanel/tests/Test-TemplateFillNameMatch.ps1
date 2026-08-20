@@ -809,6 +809,10 @@ try {
         }
         $drawMerged = $panelType.GetMethod('DrawMergedTargetNameTextForCell', $flags)
         if ($null -eq $drawMerged) { throw '缺少合并工程量名逐成员行绘制入口' }
+        $panelSource = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $PSScriptRoot) 'TemplateFillPanel.cs'), [System.Text.Encoding]::UTF8)
+        if (-not $panelSource.Contains('grid.InvalidateColumn(grid.Columns["tname"].Index);')) {
+            throw '选择成员行后没有让合并工程量名整列失效重绘'
+        }
         $paintBitmap = New-Object System.Drawing.Bitmap 140, 40
         $paintGraphics = [System.Drawing.Graphics]::FromImage($paintBitmap)
         try {
