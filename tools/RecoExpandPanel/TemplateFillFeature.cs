@@ -1118,6 +1118,8 @@ namespace RecoNet
             public List<long> ConfirmedIds = new List<long>();
             public List<long> RemainingIds = new List<long>();
             public List<long> UnownedIds = new List<long>();
+            public List<string> UnconfirmedItems = new List<string>();
+            public List<string> IdentityMismatchItems = new List<string>();
             public long TargetItemSeq;
             public SqlConnection ProjectConnection;
             public string ProjectConnectionIdentity = "";
@@ -1238,6 +1240,8 @@ namespace RecoNet
             ownedIds = new List<long>();
             unownedIds = new List<long>();
             if (record == null || record.Items == null || record.Items.Count == 0) return NativeInsertState.Failed;
+            record.UnconfirmedItems.Clear();
+            record.IdentityMismatchItems.Clear();
             List<PreparedSmartFillItem> unmatched = record.Items.ToList();
             bool fullIdentity = true;
             foreach (KeyValuePair<long, Dictionary<string, object>> pair in (rows ??
@@ -1248,7 +1252,11 @@ namespace RecoNet
                 if (match < 0)
                 {
                     match = unmatched.FindIndex(plan => IsSmartNativePlannedShell(plan.Item, pair.Value));
-                    if (match >= 0) fullIdentity = false;
+                    if (match >= 0)
+                    {
+                        fullIdentity = false;
+                        record.IdentityMismatchItems.Add(DescribeSmartNativeItem(unmatched[match].Item));
+                    }
                 }
                 if (match < 0)
                 {
@@ -1258,11 +1266,41 @@ namespace RecoNet
                 ownedIds.Add(pair.Key);
                 unmatched.RemoveAt(match);
             }
+            record.UnconfirmedItems.AddRange(unmatched.Select(plan => DescribeSmartNativeItem(plan.Item))
+                .Where(value => !String.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase));
             if (ownedIds.Count == record.ExpectedCount && unmatched.Count == 0 && unownedIds.Count == 0 && fullIdentity)
                 return NativeInsertState.Confirmed;
             if (unownedIds.Count > 0 || !fullIdentity) return NativeInsertState.Indeterminate;
             if (ownedIds.Count > 0) return NativeInsertState.PartiallyConfirmed;
             return NativeInsertState.Failed;
+        }
+
+        private static string DescribeSmartNativeItem(FillPreviewItem item)
+        {
+            if (item == null) return "";
+            string code = (item.QuotaCode ?? "").Trim();
+            string name = (item.SourceName ?? "").Trim();
+            return String.IsNullOrWhiteSpace(name) ? code : code + " " + name;
+        }
+
+        private static string DescribeSmartNativeFailure(SmartNativeInsertRecord record)
+        {
+            if (record == null) return "正式编号原生输入状态未知";
+            List<string> affected = record.UnconfirmedItems.Concat(record.IdentityMismatchItems)
+                .Where(value => !String.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (affected.Count == 0)
+            {
+                affected = record.Items.Select(plan => DescribeSmartNativeItem(plan.Item))
+                    .Where(value => !String.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            }
+            FillPreviewItem first = record.Items.Select(plan => plan.Item).FirstOrDefault(item => item != null);
+            string entry = first == null ? "" : ((first.ChosenItemNo ?? "") + " " + (first.ChosenItemName ?? "")).Trim();
+            string counts = "预期 " + record.ExpectedCount.ToString(CultureInfo.InvariantCulture) + " 条，确认 " +
+                record.ConfirmedIds.Count.ToString(CultureInfo.InvariantCulture) + " 条";
+            if (record.UnownedIds.Count > 0)
+                counts += "，另有 " + record.UnownedIds.Count.ToString(CultureInfo.InvariantCulture) + " 条同期新增行无法归属";
+            return "条目【" + entry + "】正式定额【" + String.Join("；", affected.ToArray()) + "】：" +
+                (String.IsNullOrWhiteSpace(record.Message) ? record.State.ToString() : record.Message) + "（" + counts + "）";
         }
 
         private static void AssignSmartNativeRows(SmartNativeInsertRecord record,
@@ -1302,6 +1340,7 @@ namespace RecoNet
                 record.State = NativeInsertState.Failed;
                 record.Message = "未能在左侧树上定位目标条目";
                 record.FinishedAt = DateTime.Now;
+                Log("Smart native insert result. " + DescribeSmartNativeFailure(record));
                 return record;
             }
             WaitAgentUiIdle(800);
@@ -1311,6 +1350,7 @@ namespace RecoNet
                 record.State = NativeInsertState.Failed;
                 record.Message = "没有找到定额输入表格";
                 record.FinishedAt = DateTime.Now;
+                Log("Smart native insert result. " + DescribeSmartNativeFailure(record));
                 return record;
             }
 
@@ -1322,10 +1362,25 @@ namespace RecoNet
             }
             try
             {
-                grid.Focus();
+                mainForm.Activate();
+                mainForm.BringToFront();
+                WaitAgentUiIdle(100);
                 MoveAgentGridToNewRow(grid);
+                bool focused = grid.Focus() || grid.ContainsFocus;
+                WaitAgentUiIdle(100);
+                if (!focused && !grid.ContainsFocus)
+                {
+                    record.State = NativeInsertState.Failed;
+                    record.Message = "无法把输入焦点切换到宿主定额输入表格";
+                    record.FinishedAt = DateTime.Now;
+                    Log("Smart native insert result. " + DescribeSmartNativeFailure(record));
+                    return record;
+                }
                 Clipboard.SetText(text.ToString());
-                if (!TryInvokeAgentPasteMenu(mainForm)) SendKeys.SendWait("^v");
+                bool usedMenu = TryInvokeAgentPasteMenu(mainForm);
+                if (!usedMenu) SendKeys.SendWait("^v");
+                Log("Smart native paste submitted. route=" + (usedMenu ? "menu" : "ctrl-v") +
+                    " items=" + record.ExpectedCount.ToString(CultureInfo.InvariantCulture));
                 record.State = NativeInsertState.Submitted;
             }
             catch (Exception ex)
@@ -1333,6 +1388,7 @@ namespace RecoNet
                 record.State = NativeInsertState.Failed;
                 record.Message = "原生粘贴失败：" + ex.Message;
                 record.FinishedAt = DateTime.Now;
+                Log("Smart native insert result. " + DescribeSmartNativeFailure(record));
                 return record;
             }
 
@@ -1402,6 +1458,8 @@ namespace RecoNet
                     : (record.State == NativeInsertState.Indeterminate ? "原生新增行身份不符或存在无法归属的同期新行" : "原生输入未检测到新行");
             }
             record.FinishedAt = DateTime.Now;
+            Log("Smart native insert result. state=" + record.State.ToString() + " " +
+                (record.State == NativeInsertState.Confirmed ? record.Message : DescribeSmartNativeFailure(record)));
             return record;
         }
 
@@ -1541,6 +1599,7 @@ namespace RecoNet
                     undo.Rows.Add(new AgentUndoRow { Kind = "I", QuotaSequence = id });
                 if (record.State == NativeInsertState.Confirmed) continue;
 
+                string nativeFailure = DescribeSmartNativeFailure(record);
                 List<long> allConfirmed = nativeRecords.SelectMany(value => value.ConfirmedIds).Distinct().ToList();
                 foreach (SmartNativeInsertRecord value in nativeRecords.Where(value => value.ConfirmedIds.Count > 0))
                     value.State = NativeInsertState.Compensating;
@@ -1555,8 +1614,8 @@ namespace RecoNet
                     }
                     undo.Rows.RemoveAll(row => row.Kind == "I" && allConfirmed.Contains(row.QuotaSequence));
                     if (indeterminate)
-                        return "正式编号原生输入结果不确定；已补偿删除能确认属于本批的新行，仍有无法归属的同期新行需在界面核对；未写 marker，未学习。";
-                    return "正式编号原生输入未完整确认；本批已确认新增行已补偿删除，未写 marker，未学习。";
+                        return nativeFailure + "\n已补偿删除能确认属于本批的新行，仍有无法归属的同期新行需在界面核对；未写 marker，未学习。";
+                    return nativeFailure + "\n本批已确认新增行已补偿删除；未写 marker，未学习。";
                 }
                 foreach (SmartNativeInsertRecord value in nativeRecords.Where(value => value.ConfirmedIds.Count > 0))
                     value.State = NativeInsertState.CompensationFailed;
@@ -1565,7 +1624,7 @@ namespace RecoNet
                     GetAgentUndoStack(mainForm).Add(undo);
                     GetAgentRedoStack(mainForm).Clear();
                 }
-                return "正式编号原生输入未完整确认，且补偿失败：" + compensationError + "。已保留带项目身份的撤销记录；未写 marker，未学习。";
+                return nativeFailure + "\n补偿失败：" + compensationError + "。已保留带项目身份的撤销记录；未写 marker，未学习。";
             }
 
             int markerRows = 0;

@@ -750,8 +750,10 @@ namespace RecoNet
                                 string code = reader.IsDBNull(2) ? "" : reader.GetString(2).Trim();
                                 string name = reader.IsDBNull(3) ? "" : reader.GetString(3).Trim();
                                 string unit = reader.IsDBNull(4) ? "" : reader.GetString(4).Trim();
-                                string sourceDb = reader.IsDBNull(5) ? "" : reader.GetString(5).Trim();
+                                string sourceProjectId = reader.IsDBNull(5) ? "" : reader.GetString(5).Trim();
                                 Dictionary<string, string> extra = ParseFlatJson(reader.IsDBNull(6) ? "" : reader.GetString(6));
+                                string sourceEndpointIdentity = GetFlat(extra, "source_endpoint_identity");
+                                string sourceDb = ResolveSmartSourceDatabaseName(sourceProjectId, sourceEndpointIdentity);
                                 string identity = BuildLearningTargetIdentityKey(kind, code, name, unit);
                                 decimal unitPrice;
                                 if (!snapshot.UnitPriceByTargetIdentity.ContainsKey(identity) &&
@@ -772,7 +774,7 @@ namespace RecoNet
                                 candidates.Add(new SmartQuotaSourceCandidate
                                 {
                                     BindingId = reader.GetInt64(0),
-                                    EndpointIdentity = GetFlat(extra, "source_endpoint_identity"),
+                                    EndpointIdentity = sourceEndpointIdentity,
                                     Db = sourceDb,
                                     QuotaSeq = quotaSeq,
                                     Kind = kind,
@@ -817,6 +819,19 @@ namespace RecoNet
                 note = "学习库(SQL)不可用，已禁止本地配对：" + ex.Message;
                 return snapshot;
             }
+        }
+
+        private static string ResolveSmartSourceDatabaseName(string projectId, string endpointIdentity)
+        {
+            foreach (string value in new[] { endpointIdentity, projectId })
+            {
+                string text = (value ?? "").Trim();
+                if (text.Length == 0) continue;
+                int separator = text.LastIndexOf('|');
+                string database = separator >= 0 ? text.Substring(separator + 1).Trim() : text;
+                if (database.Length > 0) return database;
+            }
+            return "";
         }
 
         private static bool ShouldWarnSmartLibraryPartitionMissing(int basePartitionCount)
@@ -1016,18 +1031,21 @@ namespace RecoNet
                     TargetUnit = item.Unit
                 });
             }
-            string expectedIdentity = BuildLearningTargetIdentityKey(item == null ? "" : item.TargetKind,
-                item == null ? "" : item.QuotaCode, item == null ? "" : item.SourceName, item == null ? "" : item.Unit);
-            string[] requiredColumns = new[]
-            {
-                "定额编号", "工程或费用项目名称", "单位", "总概算序号", "条目序号", "顺号",
-                "工程数量输入", "工程数量", "单价", "基价", "工费", "料费", "机费", "人工费",
-                "材料费", "机械费", "设备费", "主材费", "价差", "定额调整", "单重", "合重"
-            };
             foreach (FillSourceCandidate candidate in candidates.OrderByDescending(value => value.BindingId))
             {
-                if (candidate == null || candidate.QuotaSequence <= 0 || String.IsNullOrWhiteSpace(candidate.DatabaseName) ||
-                    String.IsNullOrWhiteSpace(candidate.EndpointIdentity)) continue;
+                if (candidate == null || candidate.QuotaSequence <= 0 || String.IsNullOrWhiteSpace(candidate.DatabaseName)) continue;
+                if (String.Equals(targetConn.Database, candidate.DatabaseName, StringComparison.OrdinalIgnoreCase))
+                {
+                    Dictionary<string, object> currentValues = TryLoadSmartSourceRowFromConnection(targetConn, candidate, item, targetColumns);
+                    if (currentValues != null)
+                    {
+                        item.SourceDb = targetConn.Database;
+                        item.SourceDbQuotaSeq = candidate.QuotaSequence;
+                        item.SourceEndpointIdentity = GetProjectConnectionIdentity(targetConn);
+                        return currentValues;
+                    }
+                }
+                if (String.IsNullOrWhiteSpace(candidate.EndpointIdentity)) continue;
                 foreach (string credentialName in new[] { "business", "learning" })
                 {
                     try
@@ -1038,39 +1056,13 @@ namespace RecoNet
                             src.Open();
                             if (!String.Equals(GetProjectConnectionIdentity(src), candidate.EndpointIdentity,
                                 StringComparison.OrdinalIgnoreCase)) continue;
-                            using (SqlCommand cmd = src.CreateCommand())
+                            Dictionary<string, object> values = TryLoadSmartSourceRowFromConnection(src, candidate, item, targetColumns);
+                            if (values != null)
                             {
-                                cmd.CommandText = "select * from 定额输入 where 定额序号=@id";
-                                cmd.Parameters.AddWithValue("@id", candidate.QuotaSequence);
-                                using (SqlDataAdapter adapter = new SqlDataAdapter(cmd))
-                                {
-                                    DataTable table = new DataTable();
-                                    adapter.Fill(table);
-                                    if (table.Rows.Count != 1) continue;
-                                    if (requiredColumns.Any(name => !table.Columns.Contains(name))) continue;
-                                    DataRow sourceRow = table.Rows[0];
-                                    string actualName = Convert.ToString(sourceRow["工程或费用项目名称"]);
-                                    string actualUnit = Convert.ToString(sourceRow["单位"]);
-                                    string actualIdentity = BuildLearningTargetIdentityKey(candidate.TargetKind,
-                                        Convert.ToString(sourceRow["定额编号"]), actualName, actualUnit);
-                                    if (!String.Equals(actualIdentity, expectedIdentity, StringComparison.OrdinalIgnoreCase) ||
-                                        !String.Equals(actualIdentity, BuildLearningTargetIdentityKey(candidate.TargetKind,
-                                            candidate.TargetCode, candidate.TargetName, candidate.TargetUnit), StringComparison.OrdinalIgnoreCase) ||
-                                        !String.Equals(NormalizeForSignature(actualName), NormalizeForSignature(item.SourceName), StringComparison.OrdinalIgnoreCase) ||
-                                        !String.Equals(NormalizeForSignature(actualUnit), NormalizeForSignature(item.Unit), StringComparison.OrdinalIgnoreCase) ||
-                                        !String.Equals(NormalizeForSignature(actualName), NormalizeForSignature(candidate.TargetName), StringComparison.OrdinalIgnoreCase) ||
-                                        !String.Equals(NormalizeForSignature(actualUnit), NormalizeForSignature(candidate.TargetUnit), StringComparison.OrdinalIgnoreCase)) continue;
-                                    Dictionary<string, object> values = new Dictionary<string, object>();
-                                    foreach (DataColumn column in table.Columns)
-                                    {
-                                        if (targetColumns.Contains(column.ColumnName)) values[column.ColumnName] = sourceRow[column];
-                                    }
-                                    if (!IsSmartFillSourceIdentityMatch(item, values)) continue;
-                                    item.SourceDb = candidate.DatabaseName;
-                                    item.SourceDbQuotaSeq = candidate.QuotaSequence;
-                                    item.SourceEndpointIdentity = candidate.EndpointIdentity;
-                                    return values;
-                                }
+                                item.SourceDb = candidate.DatabaseName;
+                                item.SourceDbQuotaSeq = candidate.QuotaSequence;
+                                item.SourceEndpointIdentity = candidate.EndpointIdentity;
+                                return values;
                             }
                         }
                     }
@@ -1082,6 +1074,49 @@ namespace RecoNet
                 }
             }
             return null;
+        }
+
+        private static Dictionary<string, object> TryLoadSmartSourceRowFromConnection(SqlConnection sourceConn,
+            FillSourceCandidate candidate, FillPreviewItem item, HashSet<string> targetColumns)
+        {
+            if (sourceConn == null || candidate == null || item == null || targetColumns == null) return null;
+            string expectedIdentity = BuildLearningTargetIdentityKey(item.TargetKind, item.QuotaCode, item.SourceName, item.Unit);
+            string[] requiredColumns = new[]
+            {
+                "定额编号", "工程或费用项目名称", "单位", "总概算序号", "条目序号", "顺号",
+                "工程数量输入", "工程数量", "单价", "基价", "工费", "料费", "机费", "人工费",
+                "材料费", "机械费", "设备费", "主材费", "价差", "定额调整", "单重", "合重"
+            };
+            using (SqlCommand cmd = sourceConn.CreateCommand())
+            {
+                cmd.CommandText = "select * from 定额输入 where 定额序号=@id";
+                cmd.Parameters.AddWithValue("@id", candidate.QuotaSequence);
+                using (SqlDataAdapter adapter = new SqlDataAdapter(cmd))
+                {
+                    DataTable table = new DataTable();
+                    adapter.Fill(table);
+                    if (table.Rows.Count != 1 || requiredColumns.Any(name => !table.Columns.Contains(name))) return null;
+                    DataRow sourceRow = table.Rows[0];
+                    string actualName = Convert.ToString(sourceRow["工程或费用项目名称"]);
+                    string actualUnit = Convert.ToString(sourceRow["单位"]);
+                    string actualIdentity = BuildLearningTargetIdentityKey(candidate.TargetKind,
+                        Convert.ToString(sourceRow["定额编号"]), actualName, actualUnit);
+                    if (!String.Equals(actualIdentity, expectedIdentity, StringComparison.OrdinalIgnoreCase) ||
+                        !String.Equals(actualIdentity, BuildLearningTargetIdentityKey(candidate.TargetKind,
+                            candidate.TargetCode, candidate.TargetName, candidate.TargetUnit), StringComparison.OrdinalIgnoreCase) ||
+                        !String.Equals(NormalizeForSignature(actualName), NormalizeForSignature(item.SourceName), StringComparison.OrdinalIgnoreCase) ||
+                        !String.Equals(NormalizeForSignature(actualUnit), NormalizeForSignature(item.Unit), StringComparison.OrdinalIgnoreCase) ||
+                        !String.Equals(NormalizeForSignature(actualName), NormalizeForSignature(candidate.TargetName), StringComparison.OrdinalIgnoreCase) ||
+                        !String.Equals(NormalizeForSignature(actualUnit), NormalizeForSignature(candidate.TargetUnit), StringComparison.OrdinalIgnoreCase)) return null;
+                    Dictionary<string, object> values = new Dictionary<string, object>();
+                    foreach (DataColumn column in table.Columns)
+                    {
+                        if (targetColumns.Contains(column.ColumnName)) values[column.ColumnName] = sourceRow[column];
+                    }
+                    if (!IsSmartFillSourceIdentityMatch(item, values)) return null;
+                    return values;
+                }
+            }
         }
 
         private static List<SmartMapCandidateScore> RankSmartMapEntries(SmartLearningSnapshot snapshot,

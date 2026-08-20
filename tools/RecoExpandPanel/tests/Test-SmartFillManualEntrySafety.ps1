@@ -66,17 +66,22 @@ if ($crossDbStart -lt 0 -or $crossDbEnd -le $crossDbStart) {
 $crossDbBody = $smart.Substring($crossDbStart, $crossDbEnd - $crossDbStart)
 foreach ($marker in @(
     'candidates.OrderByDescending(value => value.BindingId)',
-    'NormalizeForSignature(actualName)',
-    'NormalizeForSignature(actualUnit)',
-    'IsSmartFillSourceIdentityMatch(item, values)) continue;',
+    'TryLoadSmartSourceRowFromConnection',
     'return values;'
 )) {
     if (-not $crossDbBody.Contains($marker)) {
         throw "跨库源行缺少同编号异义拒绝或候选回退门禁：$marker"
     }
 }
-if ($crossDbBody.IndexOf('IsSmartFillSourceIdentityMatch(item, values)) continue;', [StringComparison]::Ordinal) -gt
-    $crossDbBody.IndexOf('return values;', [StringComparison]::Ordinal)) {
+$sourceRowStart = $crossDbBody.IndexOf('private static Dictionary<string, object> TryLoadSmartSourceRowFromConnection', [StringComparison]::Ordinal)
+if ($sourceRowStart -lt 0) { throw '缺少跨库/同库共用的完整源行身份核对入口' }
+$sourceRowBody = $crossDbBody.Substring($sourceRowStart)
+foreach ($marker in @('NormalizeForSignature(actualName)', 'NormalizeForSignature(actualUnit)',
+    'if (!IsSmartFillSourceIdentityMatch(item, values)) return null;', 'return values;')) {
+    if (-not $sourceRowBody.Contains($marker)) { throw "完整源行缺少身份核对：$marker" }
+}
+if ($sourceRowBody.IndexOf('if (!IsSmartFillSourceIdentityMatch(item, values)) return null;', [StringComparison]::Ordinal) -gt
+    $sourceRowBody.IndexOf('return values;', [StringComparison]::Ordinal)) {
     throw '跨库源行在完整身份核对前已经返回，无法安全回退到旧候选'
 }
 foreach ($marker in @('approvedEntrySequence', '确认后项目或条目已变化',
@@ -86,8 +91,8 @@ foreach ($marker in @('approvedEntrySequence', '确认后项目或条目已变�
 if (-not $feature.Contains('out bool succeeded') -or
     -not $feature.Contains('succeeded = true;') -or
     $panel.Contains('smartResult.StartsWith(') -or
-    -not $panel.Contains('if (smartSucceeded) InvalidateSmartPreview();')) {
-    throw '推荐写入仍依赖成功提示字符串判断预览是否失效'
+    $panel.Contains('if (smartSucceeded) InvalidateSmartPreview();')) {
+    throw '推荐写入成功后不得清空预览，用户还要继续选择其他组写入别的条目'
 }
 if (-not $panel.Contains('smartOnly ? "推荐定额" : "模板铺量"')) {
     throw '推荐定额异常弹框标题仍被硬编码成模板铺量'
@@ -112,6 +117,26 @@ if ([regex]::Matches($currentEntryBody, 'from 章节表').Count -ne 1) {
 }
 if ($currentEntryBody.Contains('当前树节点缺少可核对的条目序号')) {
     throw '树节点未暴露条目序号时仍会被直接拒绝'
+}
+
+$nativeStart = $feature.IndexOf('private static SmartNativeInsertRecord ExecuteSmartNativeInsertGroup', [StringComparison]::Ordinal)
+$nativeEnd = $feature.IndexOf('private static bool TryCompensateSmartNativeRows', $nativeStart, [StringComparison]::Ordinal)
+if ($nativeStart -lt 0 -or $nativeEnd -le $nativeStart) { throw '缺少正式编号原生输入执行入口' }
+$nativeBody = $feature.Substring($nativeStart, $nativeEnd - $nativeStart)
+foreach ($marker in @('mainForm.Activate();', 'grid.Focus()', 'DescribeSmartNativeFailure(record)',
+    'Smart native insert result.')) {
+    if (-not $nativeBody.Contains($marker)) { throw "正式编号原生输入缺少焦点或逐组诊断：$marker" }
+}
+if ($nativeBody.IndexOf('mainForm.Activate();', [StringComparison]::Ordinal) -gt
+    $nativeBody.IndexOf('grid.Focus()', [StringComparison]::Ordinal)) {
+    throw '正式编号粘贴前必须先激活宿主主窗口，再聚焦定额输入表格'
+}
+
+foreach ($marker in @('String.Equals(targetConn.Database, candidate.DatabaseName',
+    'GetProjectConnectionIdentity(targetConn)', 'TryLoadSmartSourceRowFromConnection')) {
+    if (-not $crossDbBody.Contains($marker)) {
+        throw "当前项目历史右键绑定缺少同库完整源行回读：$marker"
+    }
 }
 
 foreach ($forbidden in @(
@@ -139,15 +164,24 @@ $planType = $formType.GetNestedType('PreparedSmartFillItem', $nested)
 $recordType = $formType.GetNestedType('SmartNativeInsertRecord', $nested)
 $classify = $formType.GetMethod('ClassifySmartNativeRows', $flags)
 $buildL2 = $formType.GetMethod('BuildSmartFillL2Row', $flags)
+$resolveSourceDatabase = $formType.GetMethod('ResolveSmartSourceDatabaseName', $flags)
 $panelType = $formType.GetNestedType('TemplateFillPanel', $nested)
 $resolveTreeNode = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('ResolveSmartHostTreeNode', $flags) }
 $isEditableGrid = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsEditableAgentQuotaGrid', $flags) }
 $isOptionalTreeSequenceConsistent = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsOptionalSmartTreeSequenceConsistent', $flags) }
 if ($null -eq $itemType -or $null -eq $planType -or $null -eq $recordType -or
-    $null -eq $classify -or $null -eq $buildL2 -or $null -eq $resolveTreeNode -or $null -eq $isEditableGrid -or
+    $null -eq $classify -or $null -eq $buildL2 -or $null -eq $resolveSourceDatabase -or
+    $null -eq $resolveTreeNode -or $null -eq $isEditableGrid -or
     $null -eq $isOptionalTreeSequenceConsistent) {
     throw '缺少 L2 构造或 L3 结构化确认的可测试行为入口'
 }
+
+if ($resolveSourceDatabase.Invoke($null, @('old-server|OldDb', 'current-server|CurrentDb')) -ne 'CurrentDb' -or
+    $resolveSourceDatabase.Invoke($null, @('old-server|OldDb', '')) -ne 'OldDb' -or
+    $resolveSourceDatabase.Invoke($null, @('LegacyDb', '')) -ne 'LegacyDb') {
+    throw 'BindingLog 项目身份没有被稳定解析为真实来源数据库名'
+}
+Write-Host 'PASS 历史/当前来源端点身份解析为真实数据库名'
 
 $hostTree = New-Object System.Windows.Forms.TreeView
 $selectedNode = New-Object System.Windows.Forms.TreeNode '界面实际选中条目'

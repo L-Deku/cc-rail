@@ -321,6 +321,8 @@ $itemType.GetField('SourceName', $flags).SetValue($manualLearningItem, '测试�
 $itemType.GetField('Unit', $flags).SetValue($manualLearningItem, 'm')
 $itemType.GetField('ChosenItemNo', $flags).SetValue($manualLearningItem, '0309-01-03-04')
 $itemType.GetField('ChosenItemName', $flags).SetValue($manualLearningItem, '（四）附属工程')
+$itemType.GetField('LearnedUnitPrice', $flags).SetValue($manualLearningItem, [decimal]123.45)
+$itemType.GetField('SourceEndpointIdentity', $flags).SetValue($manualLearningItem, 'server|database')
 $manualLearningItems.Add($manualLearningItem)
 $buildRightClickFeedback = $type.GetMethod('BuildTemplateRightClickFeedbackGroup', $flags)
 if ($null -eq $buildRightClickFeedback) { throw '缺少右键绑定目标级学习组构造入口' }
@@ -336,10 +338,12 @@ $buildFeedbackArgs[7] = 'correction'
 $builtFeedback = $buildRightClickFeedback.Invoke($null, $buildFeedbackArgs)
 $feedbackTargets = $builtFeedback.GetType().GetField('Targets', $flags).GetValue($builtFeedback)
 if ($feedbackTargets.Count -ne 1 -or $feedbackTargets[0].EntryCode -ne '0309-01-03-04' -or
-    $feedbackTargets[0].EntryName -ne '（四）附属工程') {
-    throw '右键绑定没有按每个目标保留定额所在条目编号和名称'
+    $feedbackTargets[0].EntryName -ne '（四）附属工程' -or
+    $feedbackTargets[0].UnitPrice -ne [decimal]123.45 -or
+    $feedbackTargets[0].SourceEndpointIdentity -ne 'server|database') {
+    throw '右键绑定没有按每个目标保留条目、单价和来源端点证据'
 }
-Write-Host 'PASS 右键绑定按每个目标保留定额所在条目证据'
+Write-Host 'PASS 右键绑定按每个目标保留条目、单价和来源端点证据'
 $feedbackNameMatches = $type.GetMethod('FeedbackNameMatches', $flags)
 if ($null -eq $feedbackNameMatches) { throw '缺少名字驱动人工绑定反馈入口' }
 $manualLearningArgs = [object[]]::new(6)

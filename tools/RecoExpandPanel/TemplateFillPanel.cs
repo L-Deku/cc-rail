@@ -2033,6 +2033,10 @@ namespace RecoNet
                         target.ChosenQuotaSeq = link.QuotaSequence;
                         target.QuotaCode = link.QuotaCode;
                         target.SourceName = link.QuotaName;
+                        target.LearnedUnitPrice = link.UnitPrice;
+                        target.SourceDb = conn.Database;
+                        target.SourceDbQuotaSeq = link.QuotaSequence;
+                        target.SourceEndpointIdentity = link.SourceEndpointIdentity;
                         target.IsLibraryQuota = false;
                         target.ChosenItemSeq = itemSeq;
                         target.ChosenItemNo = itemNo;
@@ -2271,7 +2275,11 @@ namespace RecoNet
                             currentSmartEntry.EntrySequence, currentSmartEntry.EntryCode, currentSmartEntry.EntryName,
                             selectedItems, sourceWorkbook, previewContext.Worksheet, out smartSucceeded);
                         MessageBox.Show(this, smartResult, "推荐定额");
-                        if (smartSucceeded) InvalidateSmartPreview();
+                        if (smartSucceeded)
+                        {
+                            UpdateSmartWriteScope();
+                            RefreshApplyEnabled();
+                        }
                         return;
                     }
                     int selectedCount = preview.Count(it => it.Selected);

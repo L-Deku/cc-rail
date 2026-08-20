@@ -37,6 +37,9 @@ Assert-Contains $smartFill 'LoadCurrentSmartQuotaMetadata' '推荐预览没有�
 if ($smartFill.Contains('BuildNameDrivenQtyText(row.QuantityText, row.Unit, target.Unit)')) { throw '推荐数量仍在使用 SQL 历史 target_unit 换算。' }
 Assert-Contains $templatePanel 'FeedbackNameMatches(groupLeader.TemplateName, replacements' '模板铺量右键绑定后没有立即写入学习关系。'
 Assert-Contains $templatePanel 'target.ChosenItemName = link.EntryName;' '右键绑定没有按每条被绑定定额保存目标级条目名称。'
+Assert-Contains $templatePanel 'target.LearnedUnitPrice = link.UnitPrice;' '右键绑定没有把软件定额行单价传入预览和 SQL 学习链。'
+Assert-Contains $templatePanel 'target.SourceEndpointIdentity = link.SourceEndpointIdentity;' '右键绑定没有保存可核验的来源端点身份。'
+Assert-Contains $templatePanel 'target.SourceDb = conn.Database;' '右键绑定没有保存来源项目数据库。'
 
 $dll = if (-not [String]::IsNullOrWhiteSpace($env:RECO_EXPAND_DLL)) { $env:RECO_EXPAND_DLL } else { Join-Path $repoRoot 'RecoQuotaRecommend\bin\RecoExpandPanel.dll' }
 if (-not (Test-Path -LiteralPath $dll)) { throw "找不到 $dll，先构建" }
