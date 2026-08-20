@@ -124,8 +124,14 @@ $nativeEnd = $feature.IndexOf('private static bool TryCompensateSmartNativeRows'
 if ($nativeStart -lt 0 -or $nativeEnd -le $nativeStart) { throw '缺少正式编号原生输入执行入口' }
 $nativeBody = $feature.Substring($nativeStart, $nativeEnd - $nativeStart)
 foreach ($marker in @('mainForm.Activate();', 'grid.Focus()', 'DescribeSmartNativeFailure(record)',
-    'Smart native insert result.')) {
+    'Smart native insert result.', 'IsSmartNativeTargetAlreadySelected',
+    'if (!alreadySelected && !TryNavigateToAgentItem(mainForm, conn, nativeGroup.Key))',
+    'Smart native target route=')) {
     if (-not $nativeBody.Contains($marker)) { throw "正式编号原生输入缺少焦点或逐组诊断：$marker" }
+}
+foreach ($marker in @('private static bool IsSmartNativeTargetAlreadySelected',
+    'ResolveChapterNo(mainForm, conn, selected)')) {
+    if (-not $feature.Contains($marker)) { throw "正式编号当前条目复用缺少身份核对：$marker" }
 }
 if ($nativeBody.IndexOf('mainForm.Activate();', [StringComparison]::Ordinal) -gt
     $nativeBody.IndexOf('grid.Focus()', [StringComparison]::Ordinal)) {
@@ -165,16 +171,25 @@ $recordType = $formType.GetNestedType('SmartNativeInsertRecord', $nested)
 $classify = $formType.GetMethod('ClassifySmartNativeRows', $flags)
 $buildL2 = $formType.GetMethod('BuildSmartFillL2Row', $flags)
 $resolveSourceDatabase = $formType.GetMethod('ResolveSmartSourceDatabaseName', $flags)
+$isSameNativeTargetItem = $formType.GetMethod('IsSameSmartNativeTargetItem', $flags)
 $panelType = $formType.GetNestedType('TemplateFillPanel', $nested)
 $resolveTreeNode = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('ResolveSmartHostTreeNode', $flags) }
 $isEditableGrid = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsEditableAgentQuotaGrid', $flags) }
 $isOptionalTreeSequenceConsistent = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsOptionalSmartTreeSequenceConsistent', $flags) }
 if ($null -eq $itemType -or $null -eq $planType -or $null -eq $recordType -or
     $null -eq $classify -or $null -eq $buildL2 -or $null -eq $resolveSourceDatabase -or
+    $null -eq $isSameNativeTargetItem -or
     $null -eq $resolveTreeNode -or $null -eq $isEditableGrid -or
     $null -eq $isOptionalTreeSequenceConsistent) {
     throw '缺少 L2 构造或 L3 结构化确认的可测试行为入口'
 }
+
+if (-not [bool]$isSameNativeTargetItem.Invoke($null, @('0309-01-03-05', '0309-01-03-05')) -or
+    [bool]$isSameNativeTargetItem.Invoke($null, @('0309-01-03-05', '0309-01-03-06')) -or
+    [bool]$isSameNativeTargetItem.Invoke($null, @('', '0309-01-03-05'))) {
+    throw '正式编号原生输入没有稳定核对当前已选条目与目标条目'
+}
+Write-Host 'PASS 正式编号优先复用与目标编号一致的当前已选条目'
 
 if ($resolveSourceDatabase.Invoke($null, @('old-server|OldDb', 'current-server|CurrentDb')) -ne 'CurrentDb' -or
     $resolveSourceDatabase.Invoke($null, @('old-server|OldDb', '')) -ne 'OldDb' -or

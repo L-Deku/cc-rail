@@ -1322,6 +1322,30 @@ namespace RecoNet
             }
         }
 
+        private static bool IsSameSmartNativeTargetItem(string selectedItemNo, string targetItemNo)
+        {
+            selectedItemNo = (selectedItemNo ?? "").Trim();
+            targetItemNo = (targetItemNo ?? "").Trim();
+            return selectedItemNo.Length > 0 && targetItemNo.Length > 0 &&
+                String.Equals(selectedItemNo, targetItemNo, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsSmartNativeTargetAlreadySelected(Form mainForm, SqlConnection conn,
+            string targetItemNo, out string selectedItemNo)
+        {
+            selectedItemNo = "";
+            TreeView tree = GetField<TreeView>(mainForm, "Tv_tree");
+            TreeNode selected = tree == null ? null : tree.SelectedNode;
+            if (selected == null) selected = GetField<TreeNode>(mainForm, "CurrNode");
+            if (selected == null) return false;
+
+            selectedItemNo = (ResolveChapterNo(mainForm, conn, selected) ?? "").Trim();
+            if (!IsSameSmartNativeTargetItem(selectedItemNo, targetItemNo)) return false;
+            try { selected.EnsureVisible(); }
+            catch { }
+            return true;
+        }
+
         private static SmartNativeInsertRecord ExecuteSmartNativeInsertGroup(Form mainForm, SqlConnection conn,
             string connectionIdentity, IGrouping<string, PreparedSmartFillItem> nativeGroup)
         {
@@ -1335,14 +1359,21 @@ namespace RecoNet
                 StartedAt = DateTime.Now
             };
             HashSet<long> before = LoadAgentItemQuotaIds(conn, nativeGroup.Key);
-            if (!TryNavigateToAgentItem(mainForm, conn, nativeGroup.Key))
+            string selectedItemNo;
+            bool alreadySelected = IsSmartNativeTargetAlreadySelected(mainForm, conn, nativeGroup.Key,
+                out selectedItemNo);
+            if (!alreadySelected && !TryNavigateToAgentItem(mainForm, conn, nativeGroup.Key))
             {
                 record.State = NativeInsertState.Failed;
-                record.Message = "未能在左侧树上定位目标条目";
+                record.Message = selectedItemNo.Length == 0
+                    ? "未能核对当前已选条目，且未能在左侧树上定位目标条目"
+                    : "当前已选条目【" + selectedItemNo + "】与目标不一致，且未能在左侧树上定位目标条目";
                 record.FinishedAt = DateTime.Now;
                 Log("Smart native insert result. " + DescribeSmartNativeFailure(record));
                 return record;
             }
+            Log("Smart native target route=" + (alreadySelected ? "current-selected" : "tree-navigation") +
+                " target=" + (nativeGroup.Key ?? "") + " current=" + selectedItemNo);
             WaitAgentUiIdle(800);
             DataGridView grid = GetField<DataGridView>(mainForm, "dataGridViewDE");
             if (grid == null)
