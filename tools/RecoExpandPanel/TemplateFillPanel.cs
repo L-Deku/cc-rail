@@ -453,9 +453,11 @@ namespace RecoNet
 
             private static bool IsEditableAgentQuotaGrid(DataGridView agentGrid)
             {
-                if (agentGrid == null || !agentGrid.Visible || !agentGrid.Enabled || !agentGrid.AllowUserToAddRows ||
-                    agentGrid.NewRowIndex < 0) return false;
-                return agentGrid.Columns.Cast<DataGridViewColumn>().Any(column => column.Visible && !column.ReadOnly &&
+                // 宿主的定额输入表自己管理末尾空白行，不使用 WinForms 的“新增行”标记；
+                // 实际粘贴路径 MoveAgentGridToNewRow 也会回退到最后一行，这里必须保持同一口径。
+                if (agentGrid == null || !agentGrid.Visible || !agentGrid.Enabled || agentGrid.Rows.Count == 0)
+                    return false;
+                return agentGrid.Columns.Cast<DataGridViewColumn>().Any(column => column.Visible &&
                     ((column.Name ?? "").IndexOf("定额编号", StringComparison.OrdinalIgnoreCase) >= 0 ||
                      (column.HeaderText ?? "").IndexOf("定额编号", StringComparison.OrdinalIgnoreCase) >= 0));
             }

@@ -120,8 +120,9 @@ $classify = $formType.GetMethod('ClassifySmartNativeRows', $flags)
 $buildL2 = $formType.GetMethod('BuildSmartFillL2Row', $flags)
 $panelType = $formType.GetNestedType('TemplateFillPanel', $nested)
 $resolveTreeNode = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('ResolveSmartHostTreeNode', $flags) }
+$isEditableGrid = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsEditableAgentQuotaGrid', $flags) }
 if ($null -eq $itemType -or $null -eq $planType -or $null -eq $recordType -or
-    $null -eq $classify -or $null -eq $buildL2 -or $null -eq $resolveTreeNode) {
+    $null -eq $classify -or $null -eq $buildL2 -or $null -eq $resolveTreeNode -or $null -eq $isEditableGrid) {
     throw '缺少 L2 构造或 L3 结构化确认的可测试行为入口'
 }
 
@@ -145,6 +146,26 @@ if (-not [Object]::ReferenceEquals($resolvedTransientFallback, $staleCurrNode.PS
 }
 $hostTree.Dispose()
 Write-Host 'PASS 当前条目优先采用章节树 SelectedNode，空选中时安全回退 CurrNode'
+
+$agentGrid = New-Object System.Windows.Forms.DataGridView
+$agentGrid.AllowUserToAddRows = $false
+$quotaColumn = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+$quotaColumn.Name = '定额编号'
+$quotaColumn.HeaderText = '定额编号'
+$quotaColumn.ReadOnly = $true
+[void]$agentGrid.Columns.Add($quotaColumn)
+[void]$agentGrid.Rows.Add()
+$gridArgs = New-Object 'object[]' 1
+$gridArgs[0] = $agentGrid.PSObject.BaseObject
+if (-not [bool]$isEditableGrid.Invoke($null, $gridArgs)) {
+    throw '宿主自管末尾空白行被误判为不可输入定额'
+}
+$agentGrid.Rows.Clear()
+if ([bool]$isEditableGrid.Invoke($null, $gridArgs)) {
+    throw '没有可定位行的定额表被误判为可输入'
+}
+$agentGrid.Dispose()
+Write-Host 'PASS 宿主自管空白行与实际定额粘贴路径采用同一可写判定'
 
 function New-Item([string]$Code, [string]$Name, [string]$Unit, [string]$Quantity) {
     $item = [Activator]::CreateInstance($itemType).PSObject.BaseObject
