@@ -946,6 +946,14 @@ namespace RecoNet
                 !String.IsNullOrWhiteSpace(target.Name) && !String.IsNullOrWhiteSpace(target.Unit);
         }
 
+        private static decimal ResolveSmartPreviewUnitPrice(SmartBoxTarget target, ProjectQuota currentQuota)
+        {
+            decimal learnedUnitPrice = target == null ? 0m : target.UnitPrice;
+            if (target != null && IsContextSensitiveLearningCode(target.Code) &&
+                currentQuota != null && currentQuota.UnitPrice != 0m) return currentQuota.UnitPrice;
+            return learnedUnitPrice;
+        }
+
         private static string BuildSmartCurrentQuotaKey(string code, string name, string unit)
         {
             return IsContextSensitiveLearningCode(code)
@@ -1630,13 +1638,13 @@ namespace RecoNet
                     TargetKind = String.IsNullOrWhiteSpace(target.Kind) ? "quota" : target.Kind.Trim(),
                     SourceName = currentQuota == null || String.IsNullOrWhiteSpace(currentQuota.Name) ? target.Name : currentQuota.Name,
                     Unit = currentQuotaUnit,
-                    LearnedUnitPrice = target.UnitPrice,
+                    LearnedUnitPrice = ResolveSmartPreviewUnitPrice(target, currentQuota),
                     GroupOrder = order,
                     OrderInItem = row.Row * 10 + order,
                     NeedExactNameConfirmation = needConfirm,
                     AlignNote = note
                 };
-                if (IsContextSensitiveLearningCode(target.Code) && target.UnitPrice == 0m)
+                if (IsContextSensitiveLearningCode(target.Code) && item.LearnedUnitPrice == 0m)
                 {
                     item.AlignNote = AppendPreviewNote(item.AlignNote,
                         "学习库无辅助码单价，写入时按 0 带入，请在软件中核对或修改");

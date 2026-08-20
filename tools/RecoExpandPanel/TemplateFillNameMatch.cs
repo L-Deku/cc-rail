@@ -1139,6 +1139,7 @@ namespace RecoNet
         private sealed class ProjectQuota
         {
             public string Code; public string Name; public string Unit; public long QuotaSeq;
+            public decimal UnitPrice;
             public string NormCode; public string NormName; // 预计算的归一化文本，避免每次打分重复归一化
             public bool IsLibrary;  // true=来自全库 quota-index.jsonl，项目里(尚)无此编号，写入需原生粘贴
             public override string ToString()
@@ -1156,11 +1157,11 @@ namespace RecoNet
                 SqlConnection conn = GetOpenProjectConnection(mainForm);
                 using (SqlCommand cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "select 定额编号, 工程或费用项目名称, 单位, " +
-                        "coalesce(min(case when 单价 is not null and 单价<>0 then 定额序号 end), min(定额序号)) " +
-                        "from 定额输入 " +
-                        "where 定额编号 is not null and ltrim(rtrim(定额编号))<>'' and 定额编号<>'-' " +
-                        "group by 定额编号, 工程或费用项目名称, 单位";
+                    cmd.CommandText = "with RankedQuota as (select 定额编号, 工程或费用项目名称, 单位, 定额序号, 单价, " +
+                        "row_number() over(partition by 定额编号, 工程或费用项目名称, 单位 order by " +
+                        "case when 单价 is not null and 单价<>0 then 0 else 1 end, 定额序号) as rn " +
+                        "from 定额输入 where 定额编号 is not null and ltrim(rtrim(定额编号))<>'' and 定额编号<>'-') " +
+                        "select 定额编号, 工程或费用项目名称, 单位, 定额序号, 单价 from RankedQuota where rn=1";
                     using (SqlDataReader r = cmd.ExecuteReader())
                     {
                         while (r.Read())
@@ -1170,6 +1171,7 @@ namespace RecoNet
                             q.Name = r.IsDBNull(1) ? "" : Convert.ToString(r.GetValue(1)).Trim();
                             q.Unit = r.IsDBNull(2) ? "" : Convert.ToString(r.GetValue(2)).Trim();
                             q.QuotaSeq = r.IsDBNull(3) ? 0L : Convert.ToInt64(r.GetValue(3), CultureInfo.InvariantCulture);
+                            q.UnitPrice = r.IsDBNull(4) ? 0m : Convert.ToDecimal(r.GetValue(4), CultureInfo.InvariantCulture);
                             q.NormCode = NormalizeMatchText(q.Code);
                             q.NormName = NormalizeMatchText(q.Name);
                             if (q.Code.Length > 0 && q.QuotaSeq > 0) list.Add(q);

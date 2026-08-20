@@ -166,8 +166,14 @@ foreach ($marker in @('String.Equals(targetConn.Database, candidate.DatabaseName
     }
 }
 
-if (-not $nameMatch.Contains('coalesce(min(case when 单价 is not null and 单价<>0 then 定额序号 end), min(定额序号))')) {
+if (-not $nameMatch.Contains('row_number() over(partition by 定额编号, 工程或费用项目名称, 单位') -or
+    -not $nameMatch.Contains('case when 单价 is not null and 单价<>0 then 0 else 1 end, 定额序号')) {
     throw '当前项目存在同身份 ZLF 时未优先选择非零单价完整行'
+}
+foreach ($marker in @('ResolveSmartPreviewUnitPrice',
+    'LearnedUnitPrice = ResolveSmartPreviewUnitPrice(target, currentQuota)',
+    'if (IsContextSensitiveLearningCode(target.Code) && item.LearnedUnitPrice == 0m)')) {
+    if (-not $smart.Contains($marker)) { throw "ZLF 当前项目单价未在预览阶段提前生效：$marker" }
 }
 foreach ($marker in @('LoadQuotaUnitPriceForLearning',
     'select 单价 from 定额输入 where 定额序号=@id',
@@ -208,6 +214,8 @@ $findNativeColumn = $formType.GetMethod('FindSmartNativeColumnIndex', $flags)
 $findNativeInputRow = $formType.GetMethod('FindSmartNativeInputRowIndex', $flags)
 $shouldLoadCurrentQuotaTarget = $formType.GetMethod('ShouldLoadCurrentSmartQuotaTarget', $flags)
 $smartTargetType = $formType.GetNestedType('SmartBoxTarget', $nested)
+$projectQuotaType = $formType.GetNestedType('ProjectQuota', $nested)
+$resolveSmartPreviewUnitPrice = $formType.GetMethod('ResolveSmartPreviewUnitPrice', $flags)
 $panelType = $formType.GetNestedType('TemplateFillPanel', $nested)
 $resolveTreeNode = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('ResolveSmartHostTreeNode', $flags) }
 $isEditableGrid = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsEditableAgentQuotaGrid', $flags) }
@@ -216,7 +224,8 @@ if ($null -eq $itemType -or $null -eq $planType -or $null -eq $recordType -or
     $null -eq $classify -or $null -eq $buildL2 -or $null -eq $resolveSourceDatabase -or
     $null -eq $isSameNativeTargetItem -or $null -eq $findNativeColumn -or
     $null -eq $findNativeInputRow -or $null -eq $shouldLoadCurrentQuotaTarget -or
-    $null -eq $smartTargetType -or
+    $null -eq $smartTargetType -or $null -eq $projectQuotaType -or
+    $null -eq $resolveSmartPreviewUnitPrice -or
     $null -eq $resolveTreeNode -or $null -eq $isEditableGrid -or
     $null -eq $isOptionalTreeSequenceConsistent) {
     throw '缺少 L2 构造或 L3 结构化确认的可测试行为入口'
@@ -239,11 +248,28 @@ $zlfArgs[0] = $zlfTarget
 if (-not [bool]$shouldLoadCurrentQuotaTarget.Invoke($null, $zlfArgs)) {
     throw '完整名称+单位的 ZLF 辅助码仍被排除在当前项目定额查找之外'
 }
+$currentZlf = [Activator]::CreateInstance($projectQuotaType, $true).PSObject.BaseObject
+$projectQuotaType.GetField('Code', $flags).SetValue($currentZlf, 'ZLF')
+$projectQuotaType.GetField('Name', $flags).SetValue($currentZlf, 'Ф150×12mm CPVC管')
+$projectQuotaType.GetField('Unit', $flags).SetValue($currentZlf, 'm')
+$projectQuotaType.GetField('UnitPrice', $flags).SetValue($currentZlf, [decimal]58.5)
+$smartTargetType.GetField('UnitPrice', $flags).SetValue($zlfTarget, [decimal]0)
+$previewPriceArgs = New-Object 'object[]' 2
+$previewPriceArgs[0] = $zlfTarget
+$previewPriceArgs[1] = $currentZlf
+if ([decimal]$resolveSmartPreviewUnitPrice.Invoke($null, $previewPriceArgs) -ne [decimal]58.5) {
+    throw 'ZLF 预览未优先显示当前项目完整身份行的非零单价'
+}
+$projectQuotaType.GetField('UnitPrice', $flags).SetValue($currentZlf, [decimal]0)
+$smartTargetType.GetField('UnitPrice', $flags).SetValue($zlfTarget, [decimal]12.5)
+if ([decimal]$resolveSmartPreviewUnitPrice.Invoke($null, $previewPriceArgs) -ne [decimal]12.5) {
+    throw 'ZLF 当前项目行为 0 时未回退学习库非零单价'
+}
 $smartTargetType.GetField('Unit', $flags).SetValue($zlfTarget, '')
 if ([bool]$shouldLoadCurrentQuotaTarget.Invoke($null, $zlfArgs)) {
     throw '缺少单位的 ZLF 辅助码被误当成可精确匹配的当前项目定额'
 }
-Write-Host 'PASS ZLF 按完整名称+单位进入当前项目定额查找，缺失身份时仍拒绝'
+Write-Host 'PASS ZLF 按完整名称+单位进入当前项目查找，预览优先非零单价，缺失身份时拒绝'
 
 if ($resolveSourceDatabase.Invoke($null, @('old-server|OldDb', 'current-server|CurrentDb')) -ne 'CurrentDb' -or
     $resolveSourceDatabase.Invoke($null, @('old-server|OldDb', '')) -ne 'OldDb' -or
