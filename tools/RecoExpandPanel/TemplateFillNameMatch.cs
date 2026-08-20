@@ -1156,7 +1156,9 @@ namespace RecoNet
                 SqlConnection conn = GetOpenProjectConnection(mainForm);
                 using (SqlCommand cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "select 定额编号, 工程或费用项目名称, 单位, min(定额序号) from 定额输入 " +
+                    cmd.CommandText = "select 定额编号, 工程或费用项目名称, 单位, " +
+                        "coalesce(min(case when 单价 is not null and 单价<>0 then 定额序号 end), min(定额序号)) " +
+                        "from 定额输入 " +
                         "where 定额编号 is not null and ltrim(rtrim(定额编号))<>'' and 定额编号<>'-' " +
                         "group by 定额编号, 工程或费用项目名称, 单位";
                     using (SqlDataReader r = cmd.ExecuteReader())

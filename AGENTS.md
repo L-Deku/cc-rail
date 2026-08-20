@@ -77,11 +77,14 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - Git 暂存范围包含中文或其他非 ASCII 路径时，使用 `git -c core.quotepath=false diff --cached --name-only` 获取可比较的真实路径；不要直接比较默认的八进制转义输出。
 - PowerShell 接收原生命令输出后需要使用 `.Count` 或 `[0]` 校验时，应写成 `[string[]]$items = @(...)`；单行输出若保留为普通字符串，`[0]` 只会得到首字符，可能造成错误的范围校验失败。
 - Windows PowerShell 5 中通过 `if/else` 表达式返回集合并赋值时，单元素结果也会被自动拆成标量；后续依赖 `.Count` 或乘法计数的变量应先声明为 `[object[]]`，再在分支内用 `@(...)` 赋值。
+- PowerShell 诊断/回归脚本不得把 `$Host`、`$Error` 等自动变量用作普通局部变量（变量名大小写不敏感）；应使用 `$projectHost`、`$commitMessage` 等任务专用名称，避免只读变量覆盖导致伪失败。
 - Windows PowerShell 5 把 `System.Collections.Generic.List[object]` 放入哈希表/JSON 对象时，不要用 `@($list)` 包装，可能报 `Argument types do not match`；应显式调用 `$list.ToArray()`，并在 PS5 下运行真实序列化测试。
 - Windows 上用 `git archive` + `tar` 生成干净构建快照时，如果仓库包含大量中文文件名，应把归档范围限制为实际参与构建的源码子树（如 `tools/RecoExpandPanel`），并核对源码文件数量；不要无条件归档整个仓库，避免 `tar` 因中文路径解码失败。
 - 修改已含中文字符串的 C# 源码时，避免用 PowerShell `Set-Content` 默认编码整文件重写；优先用补丁方式，必要时用 `.NET UTF8Encoding(false)` 并把新增中文字符串写成 `\u` 转义，防止产生无关编码差异。
 - 新增或修复绑定学习字段时，必须按“数据源 -> 预览对象 -> `ExcelQuotaLink` XML -> `mapping-boxes.jsonl` -> `BindingLog`/聚合表 -> 推荐读取”逐段核对；Excel 工程量单位与定额目标单位要分别做回归，不能因预览对象已有字段就认定持久化链已传递。
 - 推荐定额/模板铺量的名字驱动组件“确认写入”即为接受推荐，必须回流 `source='plugin:apply-accept'`；只有整个 `TargetRow` 组件组全部写入成功才学习，残缺组不得产生 accepted，学习库写入失败不得阻断实际写入结果。
+- 推荐定额 L3 正式编号不得使用宿主右键菜单/批量粘贴作为写入路径；已验证该路径可返回却不生成定额行。应对每条定额在“定额编号”列执行 `BeginEdit(true)` + `TextBoxBase` + Enter，再对同行“工程数量输入”列执行同样的原生提交；只能选末尾空白行，并以项目数据库新增行的完整身份+数量作成功判定。
+- 当前项目定额查找必须包含 ZLF/SH 等完整“编号+规范化名称+规范化单位”辅助码身份，精确命中时优先选非零单价完整行走 L1；右键绑定记录单价时应按 `定额序号` 从当前项目 `定额输入` 回读，表格值只作回读失败或未落库编辑的后备，禁止用较新的 0 元样本覆盖已有非零完整身份行。
 - `SignatureBoxMap.weight` 不设上限，只保留下限 0；调整公式时必须同步修改 SQL 增量写入、本机 `mapping-boxes.jsonl` 和 `Rebuild-Aggregates.ps1` 三端，并执行一次全量重算使历史聚合收敛。
 - `Rebuild-Aggregates.ps1` 分配 `QuotaBox.box_id` 时，历史显式 `box_id` 可能以 `auto-` 开头并与其他目标集合的自动 MD5 前缀冲突。必须先确定性保留唯一的历史显式 ID，再延长自动哈希前缀直到唯一；不得合并不同 `target_set_hash` 或依赖遍历顺序。
 - 修改 `NormalizeForSignature` 或 `Get-NormalizedPart` 时必须同步另一端并执行一次 `Rebuild-Aggregates.ps1`；包括 `-DryRun` 在内都会持有 `BindingLog` 独占锁，只能在冻结绑定写入的维护窗口执行。

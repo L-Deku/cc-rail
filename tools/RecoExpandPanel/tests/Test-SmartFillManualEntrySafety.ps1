@@ -12,6 +12,8 @@ if (-not (Test-Path -LiteralPath $dll)) { throw "Missing DLL: $dll" }
 $panel = [IO.File]::ReadAllText((Join-Path $sourceDir 'TemplateFillPanel.cs'))
 $feature = [IO.File]::ReadAllText((Join-Path $sourceDir 'TemplateFillFeature.cs'))
 $smart = [IO.File]::ReadAllText((Join-Path $sourceDir 'SmartFillFeature.cs'))
+$nameMatch = [IO.File]::ReadAllText((Join-Path $sourceDir 'TemplateFillNameMatch.cs'))
+$excelLink = [IO.File]::ReadAllText((Join-Path $sourceDir 'ExcelLinkFeature.cs'))
 
 $requiredPanel = @(
     'SmartPreviewContext',
@@ -41,9 +43,13 @@ $requiredFeature = @(
     'PartiallyConfirmed',
     'Indeterminate',
     'CompensationFailed',
-    'DateTime.Now.AddSeconds(10)',
-    'WaitAgentUiIdle(250)',
-    'stableCount >= 3',
+    'DateTime.Now.AddSeconds(3)',
+    'WaitAgentUiIdle(100)',
+    'stableCount >= 2',
+    'TryCommitSmartNativeQuotaViaSingleEnter',
+    'TryCommitSmartNativeCellViaSingleEnter',
+    'FindSmartNativeColumnIndex',
+    'FindSmartNativeInputRowIndex',
     'IsSmartFillSourceIdentityMatch',
     'ProjectConnection = conn',
     'ProjectConnectionIdentity = GetProjectConnectionIdentity(conn)'
@@ -126,8 +132,13 @@ $nativeBody = $feature.Substring($nativeStart, $nativeEnd - $nativeStart)
 foreach ($marker in @('mainForm.Activate();', 'grid.Focus()', 'DescribeSmartNativeFailure(record)',
     'Smart native insert result.', 'IsSmartNativeTargetAlreadySelected',
     'if (!alreadySelected && !TryNavigateToAgentItem(mainForm, conn, nativeGroup.Key))',
-    'Smart native target route=')) {
+    'Smart native target route=', 'TryCommitSmartNativeQuotaViaSingleEnter')) {
     if (-not $nativeBody.Contains($marker)) { throw "正式编号原生输入缺少焦点或逐组诊断：$marker" }
+}
+foreach ($forbiddenNativePath in @('Clipboard.SetText(', 'TryInvokeAgentPasteMenu(', 'SendKeys.SendWait("^v")')) {
+    if ($nativeBody.Contains($forbiddenNativePath)) {
+        throw "推荐定额 L3 仍在走已证实无法落库的批量粘贴路径：$forbiddenNativePath"
+    }
 }
 foreach ($marker in @('private static bool IsSmartNativeTargetAlreadySelected',
     'ResolveChapterNo(mainForm, conn, selected)')) {
@@ -137,11 +148,32 @@ if ($nativeBody.IndexOf('mainForm.Activate();', [StringComparison]::Ordinal) -gt
     $nativeBody.IndexOf('grid.Focus()', [StringComparison]::Ordinal)) {
     throw '正式编号粘贴前必须先激活宿主主窗口，再聚焦定额输入表格'
 }
+$nativeCellStart = $feature.IndexOf('private static bool TryCommitSmartNativeCellViaSingleEnter', [StringComparison]::Ordinal)
+$nativeCellEnd = $feature.IndexOf('private static string GetSmartNativeCellText', $nativeCellStart, [StringComparison]::Ordinal)
+if ($nativeCellStart -lt 0 -or $nativeCellEnd -le $nativeCellStart) {
+    throw '缺少可单独核对的原生单元格 Enter 提交入口'
+}
+$nativeCellBody = $feature.Substring($nativeCellStart, $nativeCellEnd - $nativeCellStart)
+foreach ($marker in @('grid.BeginEdit(true)', 'TextBoxBase editControl', 'editControl.Text =',
+    'grid.NotifyCurrentCellDirty(true)', 'SendKeys.SendWait("{ENTER}")', 'Application.DoEvents()')) {
+    if (-not $nativeCellBody.Contains($marker)) { throw "原生单元格 Enter 提交缺少已验证步骤：$marker" }
+}
 
 foreach ($marker in @('String.Equals(targetConn.Database, candidate.DatabaseName',
     'GetProjectConnectionIdentity(targetConn)', 'TryLoadSmartSourceRowFromConnection')) {
     if (-not $crossDbBody.Contains($marker)) {
         throw "当前项目历史右键绑定缺少同库完整源行回读：$marker"
+    }
+}
+
+if (-not $nameMatch.Contains('coalesce(min(case when 单价 is not null and 单价<>0 then 定额序号 end), min(定额序号))')) {
+    throw '当前项目存在同身份 ZLF 时未优先选择非零单价完整行'
+}
+foreach ($marker in @('LoadQuotaUnitPriceForLearning',
+    'select 单价 from 定额输入 where 定额序号=@id',
+    'link.UnitPrice = LoadQuotaUnitPriceForLearning(conn, quotaSequence, gridUnitPrice);')) {
+    if (-not $excelLink.Contains($marker)) {
+        throw "右键绑定未按定额序号从当前项目行回读单价：$marker"
     }
 }
 
@@ -172,13 +204,19 @@ $classify = $formType.GetMethod('ClassifySmartNativeRows', $flags)
 $buildL2 = $formType.GetMethod('BuildSmartFillL2Row', $flags)
 $resolveSourceDatabase = $formType.GetMethod('ResolveSmartSourceDatabaseName', $flags)
 $isSameNativeTargetItem = $formType.GetMethod('IsSameSmartNativeTargetItem', $flags)
+$findNativeColumn = $formType.GetMethod('FindSmartNativeColumnIndex', $flags)
+$findNativeInputRow = $formType.GetMethod('FindSmartNativeInputRowIndex', $flags)
+$shouldLoadCurrentQuotaTarget = $formType.GetMethod('ShouldLoadCurrentSmartQuotaTarget', $flags)
+$smartTargetType = $formType.GetNestedType('SmartBoxTarget', $nested)
 $panelType = $formType.GetNestedType('TemplateFillPanel', $nested)
 $resolveTreeNode = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('ResolveSmartHostTreeNode', $flags) }
 $isEditableGrid = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsEditableAgentQuotaGrid', $flags) }
 $isOptionalTreeSequenceConsistent = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsOptionalSmartTreeSequenceConsistent', $flags) }
 if ($null -eq $itemType -or $null -eq $planType -or $null -eq $recordType -or
     $null -eq $classify -or $null -eq $buildL2 -or $null -eq $resolveSourceDatabase -or
-    $null -eq $isSameNativeTargetItem -or
+    $null -eq $isSameNativeTargetItem -or $null -eq $findNativeColumn -or
+    $null -eq $findNativeInputRow -or $null -eq $shouldLoadCurrentQuotaTarget -or
+    $null -eq $smartTargetType -or
     $null -eq $resolveTreeNode -or $null -eq $isEditableGrid -or
     $null -eq $isOptionalTreeSequenceConsistent) {
     throw '缺少 L2 构造或 L3 结构化确认的可测试行为入口'
@@ -190,6 +228,22 @@ if (-not [bool]$isSameNativeTargetItem.Invoke($null, @('0309-01-03-05', '0309-01
     throw '正式编号原生输入没有稳定核对当前已选条目与目标条目'
 }
 Write-Host 'PASS 正式编号优先复用与目标编号一致的当前已选条目'
+
+$zlfTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
+$smartTargetType.GetField('Kind', $flags).SetValue($zlfTarget, 'quota')
+$smartTargetType.GetField('Code', $flags).SetValue($zlfTarget, 'ZLF')
+$smartTargetType.GetField('Name', $flags).SetValue($zlfTarget, 'Ф150×12mm CPVC管')
+$smartTargetType.GetField('Unit', $flags).SetValue($zlfTarget, 'm')
+$zlfArgs = New-Object 'object[]' 1
+$zlfArgs[0] = $zlfTarget
+if (-not [bool]$shouldLoadCurrentQuotaTarget.Invoke($null, $zlfArgs)) {
+    throw '完整名称+单位的 ZLF 辅助码仍被排除在当前项目定额查找之外'
+}
+$smartTargetType.GetField('Unit', $flags).SetValue($zlfTarget, '')
+if ([bool]$shouldLoadCurrentQuotaTarget.Invoke($null, $zlfArgs)) {
+    throw '缺少单位的 ZLF 辅助码被误当成可精确匹配的当前项目定额'
+}
+Write-Host 'PASS ZLF 按完整名称+单位进入当前项目定额查找，缺失身份时仍拒绝'
 
 if ($resolveSourceDatabase.Invoke($null, @('old-server|OldDb', 'current-server|CurrentDb')) -ne 'CurrentDb' -or
     $resolveSourceDatabase.Invoke($null, @('old-server|OldDb', '')) -ne 'OldDb' -or
@@ -238,6 +292,47 @@ if ([bool]$isEditableGrid.Invoke($null, $gridArgs)) {
 }
 $agentGrid.Dispose()
 Write-Host 'PASS 宿主自管空白行与实际定额粘贴路径采用同一可写判定'
+
+$nativeGrid = New-Object System.Windows.Forms.DataGridView
+$nativeGrid.AllowUserToAddRows = $false
+$nativeCodeColumn = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+$nativeCodeColumn.Name = '定额编号DE'
+$nativeCodeColumn.HeaderText = '定额编号'
+[void]$nativeGrid.Columns.Add($nativeCodeColumn)
+$nativeCalculatedQuantityColumn = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+$nativeCalculatedQuantityColumn.Name = '工程数量'
+$nativeCalculatedQuantityColumn.HeaderText = '工程数量'
+[void]$nativeGrid.Columns.Add($nativeCalculatedQuantityColumn)
+$nativeQuantityColumn = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+$nativeQuantityColumn.Name = '工程数量输入'
+$nativeQuantityColumn.HeaderText = '工程数量输入'
+[void]$nativeGrid.Columns.Add($nativeQuantityColumn)
+[void]$nativeGrid.Rows.Add('LY-1', '1', '1')
+[void]$nativeGrid.Rows.Add('', '', '')
+$nativeGridArgs = New-Object 'object[]' 2
+$nativeGridArgs[0] = $nativeGrid.PSObject.BaseObject
+$nativeGridArgs[1] = [string[]]@('定额编号', '定额编号DE')
+$nativeCodeIndex = [int]$findNativeColumn.Invoke($null, $nativeGridArgs)
+if ($nativeCodeIndex -ne 0) { throw '原生单行输入未找到宿主定额编号列' }
+$nativeGridArgs[1] = [string[]]@('工程数量输入', '工程数量')
+$nativeQuantityIndex = [int]$findNativeColumn.Invoke($null, $nativeGridArgs)
+if ($nativeQuantityIndex -ne 2) { throw '原生单行输入未优先选择可编辑的工程数量输入列' }
+$nativeRowArgs = New-Object 'object[]' 2
+$nativeRowArgs[0] = $nativeGrid.PSObject.BaseObject
+$nativeRowArgs[1] = $nativeCodeIndex
+if ([int]$findNativeInputRow.Invoke($null, $nativeRowArgs) -ne 1) {
+    throw '原生单行输入未选中宿主末尾空白行'
+}
+$nativeGrid.Rows[1].Cells[0].Value = 'LY-2'
+if ([int]$findNativeInputRow.Invoke($null, $nativeRowArgs) -ne -1) {
+    throw '没有空白行时原生单行输入误覆盖了已有定额'
+}
+$nativeGrid.Rows[0].Cells[0].Value = ''
+if ([int]$findNativeInputRow.Invoke($null, $nativeRowArgs) -ne -1) {
+    throw '原生单行输入误选了中间空白行，只允许使用末尾空白行'
+}
+$nativeGrid.Dispose()
+Write-Host 'PASS 正式定额单行 Enter 路径精确定位编号列和末尾空白行'
 
 if (-not [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @('', [long]8123)) -or
     -not [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @($null, [long]8123)) -or

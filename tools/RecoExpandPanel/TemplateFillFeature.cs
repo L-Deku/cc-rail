@@ -1346,6 +1346,165 @@ namespace RecoNet
             return true;
         }
 
+        private static bool SmartNativeColumnMatches(DataGridViewColumn column, IEnumerable<string> names)
+        {
+            if (column == null) return false;
+            foreach (string name in names ?? Enumerable.Empty<string>())
+            {
+                if (String.Equals(column.DataPropertyName, name, StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(column.Name, name, StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(column.HeaderText, name, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
+        }
+
+        private static int FindSmartNativeColumnIndex(DataGridView grid, string[] names)
+        {
+            if (grid == null) return -1;
+            foreach (string name in names ?? new string[0])
+            {
+                foreach (DataGridViewColumn column in grid.Columns)
+                {
+                    if (column.Visible && SmartNativeColumnMatches(column, new[] { name })) return column.Index;
+                }
+            }
+            return -1;
+        }
+
+        private static int FindSmartNativeInputRowIndex(DataGridView grid, int codeColumnIndex)
+        {
+            if (grid == null || codeColumnIndex < 0 || codeColumnIndex >= grid.Columns.Count) return -1;
+            if (grid.AllowUserToAddRows && grid.NewRowIndex >= 0 && grid.NewRowIndex < grid.Rows.Count)
+                return grid.NewRowIndex;
+            for (int rowIndex = grid.Rows.Count - 1; rowIndex >= 0; rowIndex--)
+            {
+                DataGridViewRow row = grid.Rows[rowIndex];
+                if (row == null || !row.Visible || row.IsNewRow) continue;
+                object value = row.Cells[codeColumnIndex].Value;
+                return value == null || String.IsNullOrWhiteSpace(Convert.ToString(value, CultureInfo.CurrentCulture))
+                    ? rowIndex
+                    : -1;
+            }
+            return -1;
+        }
+
+        private static bool TryCommitSmartNativeCellViaSingleEnter(DataGridView grid, int rowIndex,
+            int columnIndex, string value, out string error)
+        {
+            error = "";
+            if (grid == null || rowIndex < 0 || rowIndex >= grid.Rows.Count ||
+                columnIndex < 0 || columnIndex >= grid.Columns.Count)
+            {
+                error = "原生输入单元格位置无效";
+                return false;
+            }
+            try
+            {
+                grid.ClearSelection();
+                grid.CurrentCell = grid.Rows[rowIndex].Cells[columnIndex];
+                grid.Rows[rowIndex].Selected = true;
+                bool beganEdit = grid.BeginEdit(true);
+                TextBoxBase editControl = grid.EditingControl as TextBoxBase;
+                if (!beganEdit || editControl == null)
+                {
+                    error = "宿主未提供可编辑的文本输入框";
+                    return false;
+                }
+                editControl.Text = (value ?? "").Trim();
+                editControl.SelectionStart = editControl.TextLength;
+                editControl.SelectionLength = 0;
+                grid.NotifyCurrentCellDirty(true);
+                SendKeys.SendWait("{ENTER}");
+                Application.DoEvents();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+        }
+
+        private static string GetSmartNativeCellText(DataGridView grid, int rowIndex, int columnIndex)
+        {
+            if (grid == null || rowIndex < 0 || rowIndex >= grid.Rows.Count ||
+                columnIndex < 0 || columnIndex >= grid.Columns.Count) return "";
+            object value = grid.Rows[rowIndex].Cells[columnIndex].Value;
+            return value == null ? "" : Convert.ToString(value, CultureInfo.CurrentCulture).Trim();
+        }
+
+        private static int FindSmartNativeCommittedRowIndex(DataGridView grid, int codeColumnIndex,
+            int preferredRowIndex, string quotaCode)
+        {
+            string expected = GetLearningBaseTargetCode(quotaCode);
+            if (preferredRowIndex >= 0 && preferredRowIndex < (grid == null ? 0 : grid.Rows.Count) &&
+                String.Equals(GetLearningBaseTargetCode(GetSmartNativeCellText(grid, preferredRowIndex, codeColumnIndex)),
+                    expected, StringComparison.OrdinalIgnoreCase)) return preferredRowIndex;
+            if (grid == null) return -1;
+            for (int rowIndex = grid.Rows.Count - 1; rowIndex >= Math.Max(0, preferredRowIndex); rowIndex--)
+            {
+                if (String.Equals(GetLearningBaseTargetCode(GetSmartNativeCellText(grid, rowIndex, codeColumnIndex)),
+                    expected, StringComparison.OrdinalIgnoreCase)) return rowIndex;
+            }
+            return -1;
+        }
+
+        private static bool TryCommitSmartNativeQuotaViaSingleEnter(DataGridView grid, FillPreviewItem item,
+            out int committedRowIndex, out string error)
+        {
+            committedRowIndex = -1;
+            error = "";
+            if (grid == null || item == null || String.IsNullOrWhiteSpace(item.QuotaCode))
+            {
+                error = "缺少原生定额输入数据";
+                return false;
+            }
+            int codeColumnIndex = FindSmartNativeColumnIndex(grid,
+                new[] { "定额编号", "定额编号DE", "编号" });
+            int quantityColumnIndex = FindSmartNativeColumnIndex(grid,
+                new[] { "工程数量输入", "工程数量" });
+            if (codeColumnIndex < 0 || quantityColumnIndex < 0)
+            {
+                error = codeColumnIndex < 0 ? "没有找到定额编号列" : "没有找到工程数量输入列";
+                return false;
+            }
+            int inputRowIndex = FindSmartNativeInputRowIndex(grid, codeColumnIndex);
+            if (inputRowIndex < 0)
+            {
+                error = "宿主定额表没有可用的末尾空白行";
+                return false;
+            }
+
+            string cellError;
+            if (!TryCommitSmartNativeCellViaSingleEnter(grid, inputRowIndex, codeColumnIndex,
+                item.QuotaCode, out cellError))
+            {
+                error = "定额编号输入失败：" + cellError;
+                return false;
+            }
+
+            DateTime rowDeadline = DateTime.Now.AddSeconds(2);
+            while (DateTime.Now < rowDeadline)
+            {
+                committedRowIndex = FindSmartNativeCommittedRowIndex(grid, codeColumnIndex,
+                    inputRowIndex, item.QuotaCode);
+                if (committedRowIndex >= 0) break;
+                WaitAgentUiIdle(50);
+            }
+            if (committedRowIndex < 0)
+            {
+                error = "主程序未在定额表中生成对应编号行";
+                return false;
+            }
+            if (!TryCommitSmartNativeCellViaSingleEnter(grid, committedRowIndex, quantityColumnIndex,
+                item.QuantityText, out cellError))
+            {
+                error = "工程数量输入失败：" + cellError;
+                return false;
+            }
+            return true;
+        }
+
         private static SmartNativeInsertRecord ExecuteSmartNativeInsertGroup(Form mainForm, SqlConnection conn,
             string connectionIdentity, IGrouping<string, PreparedSmartFillItem> nativeGroup)
         {
@@ -1385,18 +1544,12 @@ namespace RecoNet
                 return record;
             }
 
-            StringBuilder text = new StringBuilder();
-            foreach (PreparedSmartFillItem plan in record.Items)
-            {
-                text.Append(CleanAgentCell(plan.Item.QuotaCode)).Append('\t').Append('\t').Append('\t')
-                    .Append(CleanAgentCell(plan.Item.QuantityText)).Append("\r\n");
-            }
+            string submissionError = "";
             try
             {
                 mainForm.Activate();
                 mainForm.BringToFront();
                 WaitAgentUiIdle(100);
-                MoveAgentGridToNewRow(grid);
                 bool focused = grid.Focus() || grid.ContainsFocus;
                 WaitAgentUiIdle(100);
                 if (!focused && !grid.ContainsFocus)
@@ -1407,23 +1560,32 @@ namespace RecoNet
                     Log("Smart native insert result. " + DescribeSmartNativeFailure(record));
                     return record;
                 }
-                Clipboard.SetText(text.ToString());
-                bool usedMenu = TryInvokeAgentPasteMenu(mainForm);
-                if (!usedMenu) SendKeys.SendWait("^v");
-                Log("Smart native paste submitted. route=" + (usedMenu ? "menu" : "ctrl-v") +
-                    " items=" + record.ExpectedCount.ToString(CultureInfo.InvariantCulture));
                 record.State = NativeInsertState.Submitted;
+                foreach (PreparedSmartFillItem plan in record.Items)
+                {
+                    DateTime itemStartedAt = DateTime.Now;
+                    int committedRowIndex;
+                    string itemError;
+                    if (!TryCommitSmartNativeQuotaViaSingleEnter(grid, plan.Item,
+                        out committedRowIndex, out itemError))
+                    {
+                        submissionError = "原生单行 Enter 输入失败：" +
+                            DescribeSmartNativeItem(plan.Item) + "：" + itemError;
+                        break;
+                    }
+                    Log("Smart native single-enter submitted. code=" + (plan.Item.QuotaCode ?? "") +
+                        " row=" + committedRowIndex.ToString(CultureInfo.InvariantCulture) +
+                        " elapsedMs=" + ((long)(DateTime.Now - itemStartedAt).TotalMilliseconds)
+                            .ToString(CultureInfo.InvariantCulture));
+                }
             }
             catch (Exception ex)
             {
-                record.State = NativeInsertState.Failed;
-                record.Message = "原生粘贴失败：" + ex.Message;
-                record.FinishedAt = DateTime.Now;
-                Log("Smart native insert result. " + DescribeSmartNativeFailure(record));
-                return record;
+                submissionError = "原生单行 Enter 输入失败：" + ex.Message;
             }
 
-            DateTime deadline = DateTime.Now.AddSeconds(10);
+            if (!String.IsNullOrWhiteSpace(submissionError)) record.Message = submissionError;
+            DateTime deadline = DateTime.Now.AddSeconds(3);
             string lastSignature = "";
             int stableCount = 0;
             Dictionary<long, Dictionary<string, object>> latestRows = new Dictionary<long, Dictionary<string, object>>();
@@ -1431,7 +1593,7 @@ namespace RecoNet
             while (DateTime.Now < deadline)
             {
                 record.State = NativeInsertState.Confirming;
-                WaitAgentUiIdle(250);
+                WaitAgentUiIdle(100);
                 SqlConnection current;
                 try { current = GetOpenProjectConnection(mainForm); }
                 catch (Exception ex)
@@ -1468,7 +1630,7 @@ namespace RecoNet
                 if (String.Equals(signature, lastSignature, StringComparison.Ordinal)) stableCount++;
                 else { lastSignature = signature; stableCount = 1; }
                 if (added.Count == 0) continue;
-                if (stableCount >= 3 && (latestState == NativeInsertState.Confirmed ||
+                if (stableCount >= 2 && (latestState == NativeInsertState.Confirmed ||
                     latestState == NativeInsertState.PartiallyConfirmed || latestState == NativeInsertState.Indeterminate))
                 {
                     record.State = latestState;
@@ -1480,7 +1642,7 @@ namespace RecoNet
             if (record.State == NativeInsertState.Confirmed)
             {
                 AssignSmartNativeRows(record, latestRows);
-                record.Message = "原生新增行已连续 3 次稳定并通过完整身份核对";
+                record.Message = "原生新增行已连续 2 次稳定并通过完整身份核对";
             }
             else if (String.IsNullOrWhiteSpace(record.Message))
             {

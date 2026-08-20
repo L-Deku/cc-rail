@@ -1524,12 +1524,41 @@ namespace RecoNet
             link.QuotaCode = quotaCode;
             link.QuotaName = quotaName;
             link.QuotaUnit = GetRowValue(row, "单位", "定额单位", "计量单位");
-            decimal unitPrice;
-            if (Decimal.TryParse(GetRowValue(row, "单价", "定额单价"), NumberStyles.Float,
-                CultureInfo.InvariantCulture, out unitPrice)) link.UnitPrice = unitPrice;
+            decimal gridUnitPrice;
+            if (!Decimal.TryParse(GetRowValue(row, "单价", "定额单价"), NumberStyles.Float,
+                CultureInfo.InvariantCulture, out gridUnitPrice)) gridUnitPrice = 0m;
+            link.UnitPrice = LoadQuotaUnitPriceForLearning(conn, quotaSequence, gridUnitPrice);
             link.SourceEndpointIdentity = GetProjectConnectionIdentity(conn);
             PopulateExcelQuotaLinkLearningContext(conn, link);
             return true;
+        }
+
+        private static decimal LoadQuotaUnitPriceForLearning(SqlConnection conn, long quotaSequence,
+            decimal gridUnitPrice)
+        {
+            if (conn == null || quotaSequence <= 0) return gridUnitPrice;
+            try
+            {
+                using (SqlCommand cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "select 单价 from 定额输入 where 定额序号=@id";
+                    cmd.Parameters.AddWithValue("@id", quotaSequence);
+                    object value = cmd.ExecuteScalar();
+                    decimal databaseUnitPrice;
+                    if (value != null && value != DBNull.Value &&
+                        Decimal.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), NumberStyles.Float,
+                            CultureInfo.InvariantCulture, out databaseUnitPrice))
+                    {
+                        return databaseUnitPrice != 0m || gridUnitPrice == 0m ? databaseUnitPrice : gridUnitPrice;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Quota unit price readback failed: quotaSequence=" +
+                    quotaSequence.ToString(CultureInfo.InvariantCulture) + " error=" + ex.GetType().Name);
+            }
+            return gridUnitPrice;
         }
 
         private static long ResolveQuotaSequence(SqlConnection conn, QuotaKey key)

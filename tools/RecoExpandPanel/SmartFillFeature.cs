@@ -891,9 +891,7 @@ namespace RecoNet
                 {
                     foreach (SmartBoxTarget target in entry.Targets)
                     {
-                        if (target != null && String.Equals(target.Kind ?? "quota", "quota", StringComparison.OrdinalIgnoreCase) &&
-                            !IsContextSensitiveLearningCode(target.Code) &&
-                            !String.IsNullOrWhiteSpace(target.Code)) requiredCodes.Add(target.Code.Trim());
+                        if (ShouldLoadCurrentSmartQuotaTarget(target)) requiredCodes.Add(target.Code.Trim());
                     }
                 }
             }
@@ -936,6 +934,16 @@ namespace RecoNet
                 Log("Smart fill current quota metadata failed: " + ex.Message);
             }
             return result;
+        }
+
+        private static bool ShouldLoadCurrentSmartQuotaTarget(SmartBoxTarget target)
+        {
+            if (target == null ||
+                !String.Equals(String.IsNullOrWhiteSpace(target.Kind) ? "quota" : target.Kind.Trim(),
+                    "quota", StringComparison.OrdinalIgnoreCase) ||
+                String.IsNullOrWhiteSpace(target.Code)) return false;
+            return !IsContextSensitiveLearningCode(target.Code) ||
+                !String.IsNullOrWhiteSpace(target.Name) && !String.IsNullOrWhiteSpace(target.Unit);
         }
 
         private static string BuildSmartCurrentQuotaKey(string code, string name, string unit)
