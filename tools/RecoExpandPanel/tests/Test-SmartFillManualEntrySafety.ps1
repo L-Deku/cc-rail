@@ -92,6 +92,27 @@ if (-not $feature.Contains('out bool succeeded') -or
 if (-not $panel.Contains('smartOnly ? "推荐定额" : "模板铺量"')) {
     throw '推荐定额异常弹框标题仍被硬编码成模板铺量'
 }
+$currentEntryStart = $panel.IndexOf('private bool TryResolveCurrentSmartEntry', [StringComparison]::Ordinal)
+$currentEntryEnd = $panel.IndexOf('private static TreeNode ResolveSmartHostTreeNode', $currentEntryStart, [StringComparison]::Ordinal)
+if ($currentEntryStart -lt 0 -or $currentEntryEnd -le $currentEntryStart) {
+    throw '缺少推荐定额当前条目解析入口'
+}
+$currentEntryBody = $panel.Substring($currentEntryStart, $currentEntryEnd - $currentEntryStart)
+foreach ($marker in @(
+    'ResolveChapterNo(mainForm, conn, node)',
+    'from 章节表 where 条目编号=@code',
+    'IsOptionalSmartTreeSequenceConsistent(seqText, sequence)'
+)) {
+    if (-not $currentEntryBody.Contains($marker)) {
+        throw "当前条目没有按界面条目编号回查项目章节表：$marker"
+    }
+}
+if ([regex]::Matches($currentEntryBody, 'from 章节表').Count -ne 1) {
+    throw '当前条目解析应只执行一次章节表查询，不得增加逐行或重复往返'
+}
+if ($currentEntryBody.Contains('当前树节点缺少可核对的条目序号')) {
+    throw '树节点未暴露条目序号时仍会被直接拒绝'
+}
 
 foreach ($forbidden in @(
     'EntryByQuota',
@@ -121,8 +142,10 @@ $buildL2 = $formType.GetMethod('BuildSmartFillL2Row', $flags)
 $panelType = $formType.GetNestedType('TemplateFillPanel', $nested)
 $resolveTreeNode = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('ResolveSmartHostTreeNode', $flags) }
 $isEditableGrid = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsEditableAgentQuotaGrid', $flags) }
+$isOptionalTreeSequenceConsistent = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsOptionalSmartTreeSequenceConsistent', $flags) }
 if ($null -eq $itemType -or $null -eq $planType -or $null -eq $recordType -or
-    $null -eq $classify -or $null -eq $buildL2 -or $null -eq $resolveTreeNode -or $null -eq $isEditableGrid) {
+    $null -eq $classify -or $null -eq $buildL2 -or $null -eq $resolveTreeNode -or $null -eq $isEditableGrid -or
+    $null -eq $isOptionalTreeSequenceConsistent) {
     throw '缺少 L2 构造或 L3 结构化确认的可测试行为入口'
 }
 
@@ -166,6 +189,17 @@ if ([bool]$isEditableGrid.Invoke($null, $gridArgs)) {
 }
 $agentGrid.Dispose()
 Write-Host 'PASS 宿主自管空白行与实际定额粘贴路径采用同一可写判定'
+
+if (-not [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @('', [long]8123)) -or
+    -not [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @($null, [long]8123)) -or
+    -not [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @('8123', [long]8123))) {
+    throw '条目编号唯一命中时，树节点缺少序号或序号相同未被接受'
+}
+if ([bool]$isOptionalTreeSequenceConsistent.Invoke($null, @('8124', [long]8123)) -or
+    [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @('invalid', [long]8123))) {
+    throw '树节点序号与项目章节表不一致时没有拒绝'
+}
+Write-Host 'PASS 树节点序号为可选交叉校验，条目编号唯一命中即可解析'
 
 function New-Item([string]$Code, [string]$Name, [string]$Unit, [string]$Quantity) {
     $item = [Activator]::CreateInstance($itemType).PSObject.BaseObject

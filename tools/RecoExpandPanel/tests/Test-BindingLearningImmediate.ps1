@@ -36,6 +36,7 @@ if ($smartFill.Contains('MergePendingLocalMappingsIntoSmartSnapshot') -or $smart
 Assert-Contains $smartFill 'LoadCurrentSmartQuotaMetadata' '推荐预览没有从当前运行版本读取定额元数据。'
 if ($smartFill.Contains('BuildNameDrivenQtyText(row.QuantityText, row.Unit, target.Unit)')) { throw '推荐数量仍在使用 SQL 历史 target_unit 换算。' }
 Assert-Contains $templatePanel 'FeedbackNameMatches(groupLeader.TemplateName, replacements' '模板铺量右键绑定后没有立即写入学习关系。'
+Assert-Contains $templatePanel 'target.ChosenItemName = link.EntryName;' '右键绑定没有按每条被绑定定额保存目标级条目名称。'
 
 $dll = if (-not [String]::IsNullOrWhiteSpace($env:RECO_EXPAND_DLL)) { $env:RECO_EXPAND_DLL } else { Join-Path $repoRoot 'RecoQuotaRecommend\bin\RecoExpandPanel.dll' }
 if (-not (Test-Path -LiteralPath $dll)) { throw "找不到 $dll，先构建" }

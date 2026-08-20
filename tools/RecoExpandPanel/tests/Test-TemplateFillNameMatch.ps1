@@ -319,7 +319,27 @@ $itemType.GetField('TargetUnit', $flags).SetValue($manualLearningItem, 'm')
 $itemType.GetField('QuotaCode', $flags).SetValue($manualLearningItem, 'TEST-Q')
 $itemType.GetField('SourceName', $flags).SetValue($manualLearningItem, '测试定额')
 $itemType.GetField('Unit', $flags).SetValue($manualLearningItem, 'm')
+$itemType.GetField('ChosenItemNo', $flags).SetValue($manualLearningItem, '0309-01-03-04')
+$itemType.GetField('ChosenItemName', $flags).SetValue($manualLearningItem, '（四）附属工程')
 $manualLearningItems.Add($manualLearningItem)
+$buildRightClickFeedback = $type.GetMethod('BuildTemplateRightClickFeedbackGroup', $flags)
+if ($null -eq $buildRightClickFeedback) { throw '缺少右键绑定目标级学习组构造入口' }
+$buildFeedbackArgs = [object[]]::new(8)
+$buildFeedbackArgs[0] = $manualLearningItems.PSObject.BaseObject
+$buildFeedbackArgs[1] = 'test.xlsx'
+$buildFeedbackArgs[2] = 'Sheet1'
+$buildFeedbackArgs[3] = $null
+$buildFeedbackArgs[4] = 0
+$buildFeedbackArgs[5] = 1
+$buildFeedbackArgs[6] = 0
+$buildFeedbackArgs[7] = 'correction'
+$builtFeedback = $buildRightClickFeedback.Invoke($null, $buildFeedbackArgs)
+$feedbackTargets = $builtFeedback.GetType().GetField('Targets', $flags).GetValue($builtFeedback)
+if ($feedbackTargets.Count -ne 1 -or $feedbackTargets[0].EntryCode -ne '0309-01-03-04' -or
+    $feedbackTargets[0].EntryName -ne '（四）附属工程') {
+    throw '右键绑定没有按每个目标保留定额所在条目编号和名称'
+}
+Write-Host 'PASS 右键绑定按每个目标保留定额所在条目证据'
 $feedbackNameMatches = $type.GetMethod('FeedbackNameMatches', $flags)
 if ($null -eq $feedbackNameMatches) { throw '缺少名字驱动人工绑定反馈入口' }
 $manualLearningArgs = [object[]]::new(6)
