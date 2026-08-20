@@ -65,6 +65,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 默认加载 `RecoQuotaRecommend/bin/RecoExpandPanel.dll`，不会自动编译当前源码；做源码级红绿回归时，应先把 `tools/RecoExpandPanel/` 当前全部 C# 源文件编译到工作区验证目录并设置 `RECO_EXPAND_DLL`，避免把旧 DLL 的结果误判为新代码结果。
 - `build.ps1 -BuildOnly` 输出目录按白名单只含两个插件 DLL 和清单，不携带 NPOI 运行依赖；反射测试新 `RecoExpandPanel.dll` 前应在工作区 `artifacts/test-runtime/` 创建隔离测试目录，仅复制该 DLL 与既有 NPOI 依赖。测试依赖不得复制到运行目录或发布包。
 - BuildOnly 清单中的源码哈希必须来自实际传给编译器的只读快照，不得在编译后重新哈希可能已被并行修改的工作树原文件；`source_commit` 只表示基线 HEAD，dirty 工作树必须另行显式标记。
+- 当前 .NET Framework `csc.exe` 构建不是确定性编译，两次独立编译即使源码完全相同，DLL SHA256 也可能因程序集标识变化而不同；应用 BuildOnly 的 `source_commit`、`source_file_hashes`和回归结果证明源与行为一致，然后对实际部署的同一候选 DLL 做全链路哈希一致性核对，不得要求跨编译 DLL 哈希相等。
 - `build.ps1 -BuildOnly` 的构建清单文件名是 `artifact-manifest.json`；构建后校验提交、dirty 标记和 DLL 哈希时应读取该文件，不要猜成 `build-manifest.json`。
 - 从独立 Git worktree 做干净 `BuildOnly` 时，Git 不会带出被忽略的本地编译依赖；开始构建前应从当前工作区只读复制 NPOI 运行依赖和 `RecoQuotaRecommend/packages/Lib.Harmony.2.3.3/package/lib/net452/0Harmony.dll` 到隔离 worktree，并用一个隔离的软件 EXE 标记目录供构建脚本发现引用，不得因此把依赖写入运行目录或提交仓库。
 - `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 在非交互 WinForms 环境可能卡在“定额候选下拉与组件组界面确认”之后的滚动视口用例；连续停在该位置时应按“综合回归未完成”报告，终止并核对本次测试启动的精确进程，不得把前半段 PASS 当作全部通过，也不要反复无上限重跑。
