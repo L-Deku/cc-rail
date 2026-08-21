@@ -318,6 +318,7 @@ namespace RecoNet
         private static void UpsertSmartBoxTarget(SmartMapEntry entry, string kind, string code, string name, string unit, decimal unitPrice)
         {
             if (entry == null || String.IsNullOrWhiteSpace(code)) return;
+            unitPrice = FilterLearningTargetUnitPrice(code, unitPrice);
             SmartBoxTarget existing = entry.Targets.FirstOrDefault(target =>
                 String.Equals(target.Kind ?? "", kind ?? "", StringComparison.OrdinalIgnoreCase) &&
                 String.Equals(target.Code ?? "", code ?? "", StringComparison.OrdinalIgnoreCase));
@@ -756,7 +757,8 @@ namespace RecoNet
                                 string sourceDb = ResolveSmartSourceDatabaseName(sourceProjectId, sourceEndpointIdentity);
                                 string identity = BuildLearningTargetIdentityKey(kind, code, name, unit);
                                 decimal unitPrice;
-                                if (!snapshot.UnitPriceByTargetIdentity.ContainsKey(identity) &&
+                                if (IsContextSensitiveLearningCode(code) &&
+                                    !snapshot.UnitPriceByTargetIdentity.ContainsKey(identity) &&
                                     Decimal.TryParse(GetFlat(extra, "unit_price"), NumberStyles.Float,
                                         CultureInfo.InvariantCulture, out unitPrice) && unitPrice != 0m)
                                 {
@@ -791,7 +793,8 @@ namespace RecoNet
                         {
                             decimal unitPrice;
                             string identity = BuildLearningTargetIdentityKey(target.Kind, target.Code, target.Name, target.Unit);
-                            if (snapshot.UnitPriceByTargetIdentity.TryGetValue(identity, out unitPrice)) target.UnitPrice = unitPrice;
+                            if (IsContextSensitiveLearningCode(target.Code) &&
+                                snapshot.UnitPriceByTargetIdentity.TryGetValue(identity, out unitPrice)) target.UnitPrice = unitPrice;
                         }
                     }
                 }
@@ -948,9 +951,9 @@ namespace RecoNet
 
         private static decimal ResolveSmartPreviewUnitPrice(SmartBoxTarget target, ProjectQuota currentQuota)
         {
-            decimal learnedUnitPrice = target == null ? 0m : target.UnitPrice;
-            if (target != null && IsContextSensitiveLearningCode(target.Code) &&
-                currentQuota != null && currentQuota.UnitPrice != 0m) return currentQuota.UnitPrice;
+            if (target == null || !IsContextSensitiveLearningCode(target.Code)) return 0m;
+            decimal learnedUnitPrice = target.UnitPrice;
+            if (currentQuota != null && currentQuota.UnitPrice != 0m) return currentQuota.UnitPrice;
             return learnedUnitPrice;
         }
 

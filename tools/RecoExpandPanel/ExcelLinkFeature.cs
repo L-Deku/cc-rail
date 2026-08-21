@@ -1524,10 +1524,14 @@ namespace RecoNet
             link.QuotaCode = quotaCode;
             link.QuotaName = quotaName;
             link.QuotaUnit = GetRowValue(row, "单位", "定额单位", "计量单位");
+            link.TargetKind = ResolveLearningTargetKind("", quotaCode);
             decimal gridUnitPrice;
             if (!Decimal.TryParse(GetRowValue(row, "单价", "定额单价"), NumberStyles.Float,
                 CultureInfo.InvariantCulture, out gridUnitPrice)) gridUnitPrice = 0m;
-            link.UnitPrice = LoadQuotaUnitPriceForLearning(conn, quotaSequence, gridUnitPrice);
+            link.UnitPrice = FilterLearningTargetUnitPrice(quotaCode,
+                IsContextSensitiveLearningCode(quotaCode)
+                    ? LoadQuotaUnitPriceForLearning(conn, quotaSequence, gridUnitPrice)
+                    : 0m);
             link.SourceEndpointIdentity = GetProjectConnectionIdentity(conn);
             PopulateExcelQuotaLinkLearningContext(conn, link);
             return true;
@@ -2437,7 +2441,7 @@ namespace RecoNet
                     .FirstOrDefault(link => !String.IsNullOrWhiteSpace(link.EntryCode)) ?? first.Key;
                 source.FallbackName = sourceGroup.Select(pair => pair.Value).FirstOrDefault(name => !String.IsNullOrWhiteSpace(name)) ?? "";
                 source.Targets = sourceGroup.Select(pair => pair.Key)
-                    .GroupBy(link => BuildMappingTargetKey("quota", link.QuotaCode), StringComparer.OrdinalIgnoreCase)
+                    .GroupBy(link => BuildMappingTargetKey(link.TargetKind, link.QuotaCode), StringComparer.OrdinalIgnoreCase)
                     .Select(group => group.First())
                     .ToList();
                 string expression = String.IsNullOrWhiteSpace(source.Link.Expression) ? source.Link.CellAddress : source.Link.Expression;
@@ -2547,7 +2551,7 @@ namespace RecoNet
                         }
                         group.Targets.Add(new MappingFeedbackTarget
                         {
-                            Kind = "quota",
+                            Kind = ResolveLearningTargetKind(target.TargetKind, target.QuotaCode),
                             Code = target.QuotaCode,
                             Name = target.QuotaName,
                             Unit = target.QuotaUnit ?? "",
@@ -2556,7 +2560,7 @@ namespace RecoNet
                             FormulaTemplate = formulaTemplate,
                             QuotaSequence = target.QuotaSequence,
                             SourceEndpointIdentity = target.SourceEndpointIdentity,
-                            UnitPrice = target.UnitPrice
+                            UnitPrice = FilterLearningTargetUnitPrice(target.QuotaCode, target.UnitPrice)
                         });
                     }
                     if (group.Targets.Count > 0) groups.Add(group);
@@ -2796,8 +2800,15 @@ namespace RecoNet
         private static string BuildMappingTargetKey(string kind, string code)
         {
             string rawCode = (code ?? "").Trim();
-            string normalizedKind = String.IsNullOrWhiteSpace(kind) ? (rawCode.All(Char.IsDigit) ? "material" : "quota") : kind.Trim().ToLowerInvariant();
+            string normalizedKind = ResolveLearningTargetKind(kind, rawCode);
             return normalizedKind + ":" + rawCode.ToUpperInvariant();
+        }
+
+        private static string ResolveLearningTargetKind(string kind, string code)
+        {
+            if (!String.IsNullOrWhiteSpace(kind)) return kind.Trim().ToLowerInvariant();
+            string baseCode = GetLearningBaseTargetCode(code);
+            return baseCode.Length >= 5 && baseCode.All(Char.IsDigit) ? "material" : "quota";
         }
 
         private static string GetLearningBaseTargetCode(string code)
@@ -2813,6 +2824,11 @@ namespace RecoNet
             return baseCode == "SF" || baseCode == "SH" || baseCode == "SQ" || baseCode == "ZLF" ||
                 baseCode == "LF" || baseCode == "YF" || baseCode == "TLF" || baseCode == "GF" ||
                 baseCode == "JF" || baseCode == "XGT1";
+        }
+
+        private static decimal FilterLearningTargetUnitPrice(string code, decimal unitPrice)
+        {
+            return IsContextSensitiveLearningCode(code) ? unitPrice : 0m;
         }
 
         private static string BuildLearningTargetIdentityKey(string kind, string code, string name, string unit)
@@ -5628,6 +5644,7 @@ namespace RecoNet
             public string QuotaCode { get; set; }
             public string QuotaName { get; set; }
             public string QuotaUnit { get; set; }   // 定额目标单位；与 Excel 工程量单位分开持久化
+            public string TargetKind { get; set; }
             public decimal UnitPrice { get; set; }
             public string SourceEndpointIdentity { get; set; }
             public string ExcelPath { get; set; }

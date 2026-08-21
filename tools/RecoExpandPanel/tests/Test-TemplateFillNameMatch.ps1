@@ -316,9 +316,10 @@ $manualLearningItems = [Activator]::CreateInstance($itemListType)
 $manualLearningItem = New-PreviewItem 35 0 '推荐定额无模板学习回归'
 $itemType.GetField('TargetFullName', $flags).SetValue($manualLearningItem, '推荐定额无模板学习回归')
 $itemType.GetField('TargetUnit', $flags).SetValue($manualLearningItem, 'm')
-$itemType.GetField('QuotaCode', $flags).SetValue($manualLearningItem, 'TEST-Q')
-$itemType.GetField('SourceName', $flags).SetValue($manualLearningItem, '测试定额')
+$itemType.GetField('QuotaCode', $flags).SetValue($manualLearningItem, 'ZLF')
+$itemType.GetField('SourceName', $flags).SetValue($manualLearningItem, '辅助材料')
 $itemType.GetField('Unit', $flags).SetValue($manualLearningItem, 'm')
+$itemType.GetField('ChosenQuotaSeq', $flags).SetValue($manualLearningItem, [long]1234)
 $itemType.GetField('ChosenItemNo', $flags).SetValue($manualLearningItem, '0309-01-03-04')
 $itemType.GetField('ChosenItemName', $flags).SetValue($manualLearningItem, '（四）附属工程')
 $itemType.GetField('LearnedUnitPrice', $flags).SetValue($manualLearningItem, [decimal]123.45)
@@ -337,13 +338,53 @@ $buildFeedbackArgs[6] = 0
 $buildFeedbackArgs[7] = 'correction'
 $builtFeedback = $buildRightClickFeedback.Invoke($null, $buildFeedbackArgs)
 $feedbackTargets = $builtFeedback.GetType().GetField('Targets', $flags).GetValue($builtFeedback)
-if ($feedbackTargets.Count -ne 1 -or $feedbackTargets[0].EntryCode -ne '0309-01-03-04' -or
+if ($feedbackTargets.Count -ne 1 -or $feedbackTargets[0].Code -ne 'ZLF' -or
+    $feedbackTargets[0].Name -ne '辅助材料' -or $feedbackTargets[0].Unit -ne 'm' -or
+    $feedbackTargets[0].QuotaSequence -ne 1234 -or $feedbackTargets[0].EntryCode -ne '0309-01-03-04' -or
     $feedbackTargets[0].EntryName -ne '（四）附属工程' -or
     $feedbackTargets[0].UnitPrice -ne [decimal]123.45 -or
     $feedbackTargets[0].SourceEndpointIdentity -ne 'server|database') {
-    throw '右键绑定没有按每个目标保留条目、单价和来源端点证据'
+    throw '右键绑定没有按每个目标保留完整关系、辅助码单价和来源端点证据'
 }
-Write-Host 'PASS 右键绑定按每个目标保留条目、单价和来源端点证据'
+Write-Host 'PASS 右键绑定按每个目标保留完整关系、辅助码单价和来源端点证据'
+
+foreach ($numberedDefinition in @(
+    [pscustomobject]@{ Kind = 'quota'; Code = 'PY-393'; Name = '顶管工作坑'; Unit = '10m3' },
+    [pscustomobject]@{ Kind = 'material'; Code = '1009001003'; Name = '商品混凝土'; Unit = 'm3' }
+)) {
+    $numberedItems = [Activator]::CreateInstance($itemListType)
+    $numberedItem = New-PreviewItem 36 0 '编号目标不学习单价'
+    $itemType.GetField('TargetFullName', $flags).SetValue($numberedItem, '编号目标不学习单价')
+    $itemType.GetField('TargetUnit', $flags).SetValue($numberedItem, 'm3')
+    $itemType.GetField('TargetKind', $flags).SetValue($numberedItem, $numberedDefinition.Kind)
+    $itemType.GetField('QuotaCode', $flags).SetValue($numberedItem, $numberedDefinition.Code)
+    $itemType.GetField('SourceName', $flags).SetValue($numberedItem, $numberedDefinition.Name)
+    $itemType.GetField('Unit', $flags).SetValue($numberedItem, $numberedDefinition.Unit)
+    $itemType.GetField('ChosenQuotaSeq', $flags).SetValue($numberedItem, [long]5678)
+    $itemType.GetField('ChosenItemNo', $flags).SetValue($numberedItem, '0309-01-03-04')
+    $itemType.GetField('ChosenItemName', $flags).SetValue($numberedItem, '（四）附属工程')
+    $itemType.GetField('LearnedUnitPrice', $flags).SetValue($numberedItem, [decimal]987.65)
+    $itemType.GetField('SourceEndpointIdentity', $flags).SetValue($numberedItem, 'server|database')
+    $numberedItems.Add($numberedItem)
+    $numberedArgs = [object[]]::new(8)
+    $numberedArgs[0] = $numberedItems.PSObject.BaseObject
+    $numberedArgs[1] = 'test.xlsx'
+    $numberedArgs[2] = 'Sheet1'
+    $numberedArgs[3] = $null
+    $numberedArgs[4] = 0
+    $numberedArgs[5] = 1
+    $numberedArgs[6] = 0
+    $numberedArgs[7] = 'correction'
+    $numberedFeedback = $buildRightClickFeedback.Invoke($null, $numberedArgs)
+    $numberedTarget = $numberedFeedback.GetType().GetField('Targets', $flags).GetValue($numberedFeedback)[0]
+    if ($numberedTarget.Kind -ne $numberedDefinition.Kind -or $numberedTarget.Code -ne $numberedDefinition.Code -or
+        $numberedTarget.Name -ne $numberedDefinition.Name -or $numberedTarget.Unit -ne $numberedDefinition.Unit -or
+        $numberedTarget.QuotaSequence -ne 5678 -or $numberedTarget.SourceEndpointIdentity -ne 'server|database' -or
+        $numberedTarget.UnitPrice -ne 0) {
+        throw "编号目标 $($numberedDefinition.Code) 未保留完整绑定关系或错误学习了单价"
+    }
+}
+Write-Host 'PASS 正式定额和编号材料保留完整绑定关系但不学习单价'
 $feedbackNameMatches = $type.GetMethod('FeedbackNameMatches', $flags)
 if ($null -eq $feedbackNameMatches) { throw '缺少名字驱动人工绑定反馈入口' }
 $manualLearningArgs = [object[]]::new(6)

@@ -177,7 +177,8 @@ foreach ($marker in @('ResolveSmartPreviewUnitPrice',
 }
 foreach ($marker in @('LoadQuotaUnitPriceForLearning',
     'select 单价 from 定额输入 where 定额序号=@id',
-    'link.UnitPrice = LoadQuotaUnitPriceForLearning(conn, quotaSequence, gridUnitPrice);')) {
+    'link.UnitPrice = FilterLearningTargetUnitPrice(quotaCode,',
+    'IsContextSensitiveLearningCode(quotaCode)')) {
     if (-not $excelLink.Contains($marker)) {
         throw "右键绑定未按定额序号从当前项目行回读单价：$marker"
     }
@@ -216,6 +217,8 @@ $shouldLoadCurrentQuotaTarget = $formType.GetMethod('ShouldLoadCurrentSmartQuota
 $smartTargetType = $formType.GetNestedType('SmartBoxTarget', $nested)
 $projectQuotaType = $formType.GetNestedType('ProjectQuota', $nested)
 $resolveSmartPreviewUnitPrice = $formType.GetMethod('ResolveSmartPreviewUnitPrice', $flags)
+$filterLearningTargetUnitPrice = $formType.GetMethod('FilterLearningTargetUnitPrice', $flags)
+$resolveLearningTargetKind = $formType.GetMethod('ResolveLearningTargetKind', $flags)
 $panelType = $formType.GetNestedType('TemplateFillPanel', $nested)
 $resolveTreeNode = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('ResolveSmartHostTreeNode', $flags) }
 $isEditableGrid = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsEditableAgentQuotaGrid', $flags) }
@@ -225,7 +228,8 @@ if ($null -eq $itemType -or $null -eq $planType -or $null -eq $recordType -or
     $null -eq $isSameNativeTargetItem -or $null -eq $findNativeColumn -or
     $null -eq $findNativeInputRow -or $null -eq $shouldLoadCurrentQuotaTarget -or
     $null -eq $smartTargetType -or $null -eq $projectQuotaType -or
-    $null -eq $resolveSmartPreviewUnitPrice -or
+    $null -eq $resolveSmartPreviewUnitPrice -or $null -eq $filterLearningTargetUnitPrice -or
+    $null -eq $resolveLearningTargetKind -or
     $null -eq $resolveTreeNode -or $null -eq $isEditableGrid -or
     $null -eq $isOptionalTreeSequenceConsistent) {
     throw '缺少 L2 构造或 L3 结构化确认的可测试行为入口'
@@ -237,6 +241,24 @@ if (-not [bool]$isSameNativeTargetItem.Invoke($null, @('0309-01-03-05', '0309-01
     throw '正式编号原生输入没有稳定核对当前已选条目与目标条目'
 }
 Write-Host 'PASS 正式编号优先复用与目标编号一致的当前已选条目'
+
+foreach ($auxiliaryCode in @('ZLF', 'SH', 'SF', 'LF', 'SQ', 'YF', 'TLF', 'GF', 'JF', 'XGT1')) {
+    if ([decimal]$filterLearningTargetUnitPrice.Invoke($null, @($auxiliaryCode, [decimal]58.5)) -ne [decimal]58.5) {
+        throw "辅助码 $auxiliaryCode 的软件行单价未进入学习链"
+    }
+}
+foreach ($numberedTarget in @('PY-393', 'BC00-4', '1009001003', '1009001003*1.02')) {
+    if ([decimal]$filterLearningTargetUnitPrice.Invoke($null, @($numberedTarget, [decimal]58.5)) -ne 0) {
+        throw "正式定额或编号材料 $numberedTarget 被错误学习单价"
+    }
+}
+Write-Host 'PASS 单价学习仅限辅助码，正式定额和编号材料统一归零'
+if ($resolveLearningTargetKind.Invoke($null, @('', 'PY-393')) -ne 'quota' -or
+    $resolveLearningTargetKind.Invoke($null, @('', '1009001003')) -ne 'material' -or
+    $resolveLearningTargetKind.Invoke($null, @('', '1009001003*1.02')) -ne 'material') {
+    throw '右键绑定完整关系未正确区分正式定额与编号材料'
+}
+Write-Host 'PASS 右键绑定完整关系保留目标类型'
 
 $zlfTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
 $smartTargetType.GetField('Kind', $flags).SetValue($zlfTarget, 'quota')
@@ -264,6 +286,17 @@ $projectQuotaType.GetField('UnitPrice', $flags).SetValue($currentZlf, [decimal]0
 $smartTargetType.GetField('UnitPrice', $flags).SetValue($zlfTarget, [decimal]12.5)
 if ([decimal]$resolveSmartPreviewUnitPrice.Invoke($null, $previewPriceArgs) -ne [decimal]12.5) {
     throw 'ZLF 当前项目行为 0 时未回退学习库非零单价'
+}
+$formalTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
+$smartTargetType.GetField('Kind', $flags).SetValue($formalTarget, 'quota')
+$smartTargetType.GetField('Code', $flags).SetValue($formalTarget, 'PY-393')
+$smartTargetType.GetField('UnitPrice', $flags).SetValue($formalTarget, [decimal]999)
+$projectQuotaType.GetField('UnitPrice', $flags).SetValue($currentZlf, [decimal]888)
+$formalPriceArgs = New-Object 'object[]' 2
+$formalPriceArgs[0] = $formalTarget
+$formalPriceArgs[1] = $currentZlf
+if ([decimal]$resolveSmartPreviewUnitPrice.Invoke($null, $formalPriceArgs) -ne 0) {
+    throw '正式定额错误读取了历史或当前项目的学习单价'
 }
 $smartTargetType.GetField('Unit', $flags).SetValue($zlfTarget, '')
 if ([bool]$shouldLoadCurrentQuotaTarget.Invoke($null, $zlfArgs)) {

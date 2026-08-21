@@ -10,19 +10,21 @@ $flags = [System.Reflection.BindingFlags]'Public,NonPublic,Static,Instance'
 $linkType = $panelType.GetNestedType('ExcelQuotaLink', $flags)
 $storeType = $panelType.GetNestedType('ExcelLinkStore', $flags)
 $quotaUnitProperty = $linkType.GetProperty('QuotaUnit', $flags)
+$targetKindProperty = $linkType.GetProperty('TargetKind', $flags)
 if ($null -eq $quotaUnitProperty) { throw 'ExcelQuotaLink.QuotaUnit is missing' }
 $entryCodeProperty = $linkType.GetProperty('EntryCode', $flags)
 $entryNameProperty = $linkType.GetProperty('EntryName', $flags)
 $methodProperty = $linkType.GetProperty('Method', $flags)
 $unitPriceProperty = $linkType.GetProperty('UnitPrice', $flags)
 $sourceEndpointProperty = $linkType.GetProperty('SourceEndpointIdentity', $flags)
-if ($null -eq $entryCodeProperty -or $null -eq $entryNameProperty -or $null -eq $methodProperty -or
+if ($null -eq $targetKindProperty -or $null -eq $entryCodeProperty -or $null -eq $entryNameProperty -or $null -eq $methodProperty -or
     $null -eq $unitPriceProperty -or $null -eq $sourceEndpointProperty) { throw 'ExcelQuotaLink learning source context is missing' }
 
 $link = [Activator]::CreateInstance($linkType).PSObject.BaseObject
-$linkType.GetProperty('QuotaCode', $flags).SetValue($link, 'QY-317', $null)
-$linkType.GetProperty('QuotaName', $flags).SetValue($link, 'cover rebar', $null)
+$linkType.GetProperty('QuotaCode', $flags).SetValue($link, 'ZLF', $null)
+$linkType.GetProperty('QuotaName', $flags).SetValue($link, 'auxiliary material', $null)
 $quotaUnitProperty.SetValue($link, 't', $null)
+$targetKindProperty.SetValue($link, 'quota', $null)
 $entryCodeProperty.SetValue($link, '0101-01', $null)
 $entryNameProperty.SetValue($link, 'entry name', $null)
 $methodProperty.SetValue($link, '2024', $null)
@@ -37,7 +39,9 @@ $stream = New-Object System.IO.MemoryStream
 $serializer.Serialize($stream, $store)
 $xml = [System.Text.Encoding]::UTF8.GetString($stream.ToArray())
 $stream.Dispose()
-if (-not $xml.Contains('<QuotaUnit>t</QuotaUnit>')) { throw 'New XML did not persist QuotaUnit' }
+if (-not $xml.Contains('<QuotaUnit>t</QuotaUnit>') -or -not $xml.Contains('<TargetKind>quota</TargetKind>')) {
+    throw 'New XML did not persist QuotaUnit/TargetKind'
+}
 if (-not $xml.Contains('<EntryCode>0101-01</EntryCode>') -or -not $xml.Contains('<EntryName>entry name</EntryName>') -or -not $xml.Contains('<Method>2024</Method>')) {
     throw 'New XML did not persist method/entry context'
 }
@@ -46,6 +50,7 @@ if (-not $xml.Contains('<UnitPrice>12.5</UnitPrice>') -or -not $xml.Contains('<S
 }
 
 $legacyXml = [regex]::Replace($xml, '<QuotaUnit>.*?</QuotaUnit>', '')
+$legacyXml = [regex]::Replace($legacyXml, '<TargetKind>.*?</TargetKind>', '')
 $legacyXml = [regex]::Replace($legacyXml, '<EntryCode>.*?</EntryCode>', '')
 $legacyXml = [regex]::Replace($legacyXml, '<EntryName>.*?</EntryName>', '')
 $legacyXml = [regex]::Replace($legacyXml, '<Method>.*?</Method>', '')
@@ -59,6 +64,9 @@ $legacyLinks = $storeType.GetProperty('Links', $flags).GetValue($legacyStore, $n
 $legacyLink = $legacyLinks[0].PSObject.BaseObject
 $legacyUnit = [string]$quotaUnitProperty.GetValue($legacyLink, $null)
 if (-not [String]::IsNullOrEmpty($legacyUnit)) { throw "Legacy XML should load with an empty QuotaUnit, got '$legacyUnit'" }
+if (-not [String]::IsNullOrEmpty([string]$targetKindProperty.GetValue($legacyLink, $null))) {
+    throw 'Legacy XML should load missing TargetKind as empty'
+}
 foreach ($property in @($entryCodeProperty, $entryNameProperty, $methodProperty)) {
     if (-not [String]::IsNullOrEmpty([string]$property.GetValue($legacyLink, $null))) { throw "Legacy XML should load missing $($property.Name) as empty" }
 }
@@ -67,4 +75,4 @@ if ([decimal]$unitPriceProperty.GetValue($legacyLink, $null) -ne 0 -or
     throw 'Legacy XML should load missing unit price/source endpoint as zero/empty'
 }
 
-Write-Host 'Test-ExcelLinkQuotaUnitPersistence: PASS (new XML persists unit/method/entry/source/price; legacy XML remains compatible)'
+Write-Host 'Test-ExcelLinkQuotaUnitPersistence: PASS (new XML persists unit/method/entry/source/auxiliary price; legacy XML remains compatible)'

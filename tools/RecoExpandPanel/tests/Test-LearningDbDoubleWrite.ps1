@@ -10,6 +10,10 @@ foreach ($marker in @('flat["quota_sequence"]', 'flat["source_endpoint_identity"
     'flat["unit_price"]', 'flat["entry_source"]')) {
     if (-not $learning.Contains($marker)) { throw "BindingLog.extra 缺少来源行/L2 回流字段：$marker" }
 }
+if (-not $learning.Contains('if (IsContextSensitiveLearningCode(target.Code))') -or
+    -not $learning.Contains('FilterLearningTargetUnitPrice(target.Code, target.UnitPrice)')) {
+    throw 'BindingLog/聚合单价没有限制为辅助码专属字段'
+}
 if (-not $schema.Contains('unit_price DECIMAL(18,6) NOT NULL') -or
     -not $schema.Contains("COL_LENGTH('dbo.QuotaBoxTarget','unit_price')")) {
     throw 'QuotaBoxTarget 缺少辅助码单价的初始结构或幂等迁移'

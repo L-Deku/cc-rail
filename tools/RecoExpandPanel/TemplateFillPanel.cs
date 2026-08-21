@@ -2033,7 +2033,8 @@ namespace RecoNet
                         target.ChosenQuotaSeq = link.QuotaSequence;
                         target.QuotaCode = link.QuotaCode;
                         target.SourceName = link.QuotaName;
-                        target.LearnedUnitPrice = link.UnitPrice;
+                        target.TargetKind = ResolveLearningTargetKind(link.TargetKind, link.QuotaCode);
+                        target.LearnedUnitPrice = FilterLearningTargetUnitPrice(link.QuotaCode, link.UnitPrice);
                         target.SourceDb = conn.Database;
                         target.SourceDbQuotaSeq = link.QuotaSequence;
                         target.SourceEndpointIdentity = link.SourceEndpointIdentity;

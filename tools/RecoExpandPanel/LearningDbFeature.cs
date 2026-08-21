@@ -218,7 +218,11 @@ namespace RecoNet
                                     if (!String.IsNullOrWhiteSpace(group.UserAction)) flat["user_action"] = group.UserAction;
                                     if (target.QuotaSequence > 0) flat["quota_sequence"] = target.QuotaSequence.ToString(CultureInfo.InvariantCulture);
                                     if (!String.IsNullOrWhiteSpace(target.SourceEndpointIdentity)) flat["source_endpoint_identity"] = target.SourceEndpointIdentity;
-                                    flat["unit_price"] = target.UnitPrice.ToString(CultureInfo.InvariantCulture);
+                                    if (IsContextSensitiveLearningCode(target.Code))
+                                    {
+                                        flat["unit_price"] = FilterLearningTargetUnitPrice(target.Code, target.UnitPrice)
+                                            .ToString(CultureInfo.InvariantCulture);
+                                    }
                                     if (!String.IsNullOrWhiteSpace(target.EntrySource)) flat["entry_source"] = target.EntrySource;
                                     string formulaEntryCode = LearningPartitionIdentity.NormalizeLearningEntryCode(
                                         GetMappingFeedbackTargetEntryCode(group, target));
@@ -704,7 +708,11 @@ namespace RecoNet
                     row[targetPrefix + "formula"] = target.FormulaTemplate ?? "";
                     row[targetPrefix + "quota_sequence"] = target.QuotaSequence.ToString(CultureInfo.InvariantCulture);
                     row[targetPrefix + "source_endpoint_identity"] = target.SourceEndpointIdentity ?? "";
-                    row[targetPrefix + "unit_price"] = target.UnitPrice.ToString(CultureInfo.InvariantCulture);
+                    if (IsContextSensitiveLearningCode(target.Code))
+                    {
+                        row[targetPrefix + "unit_price"] = FilterLearningTargetUnitPrice(target.Code, target.UnitPrice)
+                            .ToString(CultureInfo.InvariantCulture);
+                    }
                     row[targetPrefix + "entry_source"] = target.EntrySource ?? "";
                 }
                 row[prefix + "operand_count"] = (group.FormulaOperands == null ? 0 : group.FormulaOperands.Count).ToString(CultureInfo.InvariantCulture);
@@ -1080,7 +1088,8 @@ namespace RecoNet
                     cmd.Parameters.AddWithValue("@code", TrimLearningText(target.Code, 100));
                     cmd.Parameters.AddWithValue("@name", TrimLearningText(target.Name, 500));
                     cmd.Parameters.AddWithValue("@unit", TrimLearningText(target.Unit, 50));
-                    if (targetHasUnitPrice) cmd.Parameters.AddWithValue("@price", target.UnitPrice);
+                    if (targetHasUnitPrice) cmd.Parameters.AddWithValue("@price",
+                        FilterLearningTargetUnitPrice(target.Code, target.UnitPrice));
                     cmd.ExecuteNonQuery();
                 }
             }

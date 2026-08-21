@@ -1368,7 +1368,7 @@ namespace RecoNet
             {
                 mappingGroup.Targets.Add(new MappingFeedbackTarget
                 {
-                    Kind = String.IsNullOrWhiteSpace(item.TargetKind) ? "quota" : item.TargetKind,
+                    Kind = ResolveLearningTargetKind(item.TargetKind, item.QuotaCode),
                     Code = item.QuotaCode,
                     Name = item.SourceName,
                     Unit = item.Unit,
@@ -1379,7 +1379,7 @@ namespace RecoNet
                     SourceEndpointIdentity = item.WrittenQuotaSequence > 0
                         ? GetProjectConnectionIdentity(projectConn)
                         : item.SourceEndpointIdentity,
-                    UnitPrice = item.LearnedUnitPrice,
+                    UnitPrice = FilterLearningTargetUnitPrice(item.QuotaCode, item.LearnedUnitPrice),
                     EntrySource = item.EntrySource ?? ""
                 });
             }

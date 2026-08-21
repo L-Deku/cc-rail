@@ -23,9 +23,11 @@ Assert-Contains $excelLink 'GetMappingFeedbackTargetEntryCode(group, target));' 
 Assert-Contains $excelLink 'EntryCode = !String.IsNullOrWhiteSpace(target.EntryCode) ? target.EntryCode : group.EntryCode ?? ""' '绑定学习组没有优先传递 ExcelQuotaLink 的目标条目或兼容空值旧字段。'
 Assert-Contains $excelLink 'group.Targets.Add' '表达式学习组没有保留完整组件框目标。'
 Assert-Contains $excelLink 'public string QuotaUnit { get; set; }' 'ExcelQuotaLink 没有持久化定额单位。'
+Assert-Contains $excelLink 'public string TargetKind { get; set; }' 'ExcelQuotaLink 没有持久化完整目标类型。'
 Assert-Contains $excelLink 'public string EntryName { get; set; }' 'ExcelQuotaLink 没有持久化条目名称。'
 Assert-Contains $excelLink 'PopulateExcelQuotaLinkLearningContext(conn, link);' '手动/批量绑定没有补齐编制办法和条目上下文。'
 Assert-Contains $excelLink 'link.QuotaUnit = GetRowValue(row, "单位", "定额单位", "计量单位");' '手动/批量/快速绑定没有传递定额单位。'
+Assert-Contains $excelLink 'link.TargetKind = ResolveLearningTargetKind("", quotaCode);' '右键绑定没有区分正式定额与编号材料。'
 Assert-Contains $excelLink 'item.Link.QuotaUnit = item.QuotaUnit;' '自动匹配预览保存时没有把定额单位写入 ExcelQuotaLink。'
 Assert-Contains $autoMatch 'link.QuotaUnit = quotaUnit;' '自动匹配绑定没有传递定额单位。'
 Assert-Contains $autoMatch 'link.EntryName = ReadAutoMatchReaderText(reader, 9);' '自动匹配绑定没有传递条目名称。'
@@ -37,7 +39,8 @@ Assert-Contains $smartFill 'LoadCurrentSmartQuotaMetadata' '推荐预览没有�
 if ($smartFill.Contains('BuildNameDrivenQtyText(row.QuantityText, row.Unit, target.Unit)')) { throw '推荐数量仍在使用 SQL 历史 target_unit 换算。' }
 Assert-Contains $templatePanel 'FeedbackNameMatches(groupLeader.TemplateName, replacements' '模板铺量右键绑定后没有立即写入学习关系。'
 Assert-Contains $templatePanel 'target.ChosenItemName = link.EntryName;' '右键绑定没有按每条被绑定定额保存目标级条目名称。'
-Assert-Contains $templatePanel 'target.LearnedUnitPrice = link.UnitPrice;' '右键绑定没有把软件定额行单价传入预览和 SQL 学习链。'
+Assert-Contains $templatePanel 'target.TargetKind = ResolveLearningTargetKind(link.TargetKind, link.QuotaCode);' '右键绑定预览没有传递完整目标类型。'
+Assert-Contains $templatePanel 'target.LearnedUnitPrice = FilterLearningTargetUnitPrice(link.QuotaCode, link.UnitPrice);' '右键绑定没有把辅助码软件行单价按业务边界传入预览和 SQL 学习链。'
 Assert-Contains $templatePanel 'target.SourceEndpointIdentity = link.SourceEndpointIdentity;' '右键绑定没有保存可核验的来源端点身份。'
 Assert-Contains $templatePanel 'target.SourceDb = conn.Database;' '右键绑定没有保存来源项目数据库。'
 
@@ -59,7 +62,15 @@ if ($null -eq $extract) { throw '编译结果缺少 ExtractPositiveAdditiveCellA
 $hasRepeatedCellInTerm = $type.GetMethod('HasRepeatedCellReferenceWithinTerm', $flags)
 if ($null -eq $hasRepeatedCellInTerm) { throw '编译结果缺少重复单元格非线性判定。' }
 $tryScaleFactor = $type.GetMethod('TryExtractPositiveCellScaleFactor', $flags)
+$resolveLearningTargetKind = $type.GetMethod('ResolveLearningTargetKind', $flags)
 if ($null -eq $tryScaleFactor) { throw '编译结果缺少线性系数提取入口。' }
+if ($null -eq $resolveLearningTargetKind) { throw '编译结果缺少右键绑定目标类型判定入口。' }
+if ($resolveLearningTargetKind.Invoke($null, @('', 'PY-393')) -ne 'quota' -or
+    $resolveLearningTargetKind.Invoke($null, @('', '1009001003')) -ne 'material' -or
+    $resolveLearningTargetKind.Invoke($null, @('', '1009001003*1.02')) -ne 'material') {
+    throw '右键绑定未正确区分正式定额和编号材料。'
+}
+Write-Host 'PASS 右键绑定完整关系区分正式定额和编号材料'
 
 function Assert-Addresses([string]$Expression, [string[]]$Expected) {
     $actual = @($extract.Invoke($null, @($Expression)))
