@@ -98,6 +98,11 @@ namespace RecoNet
         {
             public string ItemNo;
             public List<AgentQuotaInput> Quotas = new List<AgentQuotaInput>();
+            // 定位插入：AfterOrderNo 有值时插到该单元该条目 顺号=AfterOrderNo 的行之后（后续行整体后移）；
+            // 为 null 时保持历史行为——粘贴到条目末尾（copy_quotas / insert_quotas 走这条）。
+            public long UnitId;
+            public long ItemSequence;
+            public int? AfterOrderNo;
         }
 
         private sealed class AgentUnitCopySpec
@@ -918,6 +923,9 @@ namespace RecoNet
                     case "insert_quotas":
                         BuildInsertPlan(conn, selection, command, plan);
                         break;
+                    case "replace_quotas":
+                        BuildReplaceQuotasPlan(conn, selection, command, unitIds, plan);
+                        break;
                     case "set_transport_scheme":
                         BuildTransportSchemePlan(conn, selection, command, unitIds, plan);
                         break;
@@ -1138,7 +1146,7 @@ namespace RecoNet
         {
             bool append = command.Mode == "append";
             string value = command.Value ?? "";
-            List<AgentTargetRow> targets = ResolveAgentTargetRows(conn, selection, command.Items, command.IncludeChildren, command.QuotaFilter, unitIds);
+            List<AgentTargetRow> targets = ResolveAgentValueTargetRows(conn, selection, command, unitIds);
             int skipped = 0;
             foreach (AgentTargetRow row in targets)
             {
@@ -1183,7 +1191,7 @@ namespace RecoNet
             string fragment = command.RemoveText;
             List<AgentTargetRow> targets = command.Target == "quantity"
                 ? ResolveAgentValueTargetRows(conn, selection, command, unitIds)
-                : ResolveAgentTargetRows(conn, selection, command.Items, command.IncludeChildren, command.QuotaFilter, unitIds);
+                : ResolveAgentValueTargetRows(conn, selection, command, unitIds);
             int skipped = 0;
             int emptyCode = 0;
             foreach (AgentTargetRow row in targets)
@@ -1285,19 +1293,21 @@ namespace RecoNet
             }
         }
 
-        private static List<AgentTargetRow> ResolveAgentValueTargetRows(SqlConnection conn, AgentSelectionSnapshot selection,
-            AgentCommand command, List<long> unitIds)
+        // 统一的目标行解析：command.QuotaName 非空时按精确定额名称定位，否则按编号过滤。
+        // items/includeChildren/quotaFilter 显式传入，好让复制/移动/替换用自己的来源条目和编号集合。
+        private static List<AgentTargetRow> ResolveAgentScopeRows(SqlConnection conn, AgentSelectionSnapshot selection,
+            AgentCommand command, List<string> items, bool includeChildren, List<string> quotaFilter, List<long> unitIds)
         {
             if (String.IsNullOrEmpty(command.QuotaName))
             {
-                return ResolveAgentTargetRows(conn, selection, command.Items, command.IncludeChildren, command.QuotaFilter, unitIds);
+                return ResolveAgentTargetRows(conn, selection, items, includeChildren, quotaFilter, unitIds);
             }
 
             List<string> quotaNames = SplitAgentExactNameList(command.QuotaName);
             HashSet<string> quotaNameSet = new HashSet<string>(quotaNames, StringComparer.Ordinal);
-            if (command.Items != null && command.Items.Count > 0)
+            if (items != null && items.Count > 0)
             {
-                List<AgentTargetRow> itemMatched = ResolveAgentTargetRows(conn, selection, command.Items, command.IncludeChildren, new List<string>(), unitIds)
+                List<AgentTargetRow> itemMatched = ResolveAgentTargetRows(conn, selection, items, includeChildren, new List<string>(), unitIds)
                     .Where(row => quotaNameSet.Contains((row.ItemName ?? "").Trim()))
                     .ToList();
                 HashSet<string> itemMatchedNames = new HashSet<string>(
@@ -1344,6 +1354,12 @@ namespace RecoNet
             }
 
             return matched;
+        }
+
+        private static List<AgentTargetRow> ResolveAgentValueTargetRows(SqlConnection conn, AgentSelectionSnapshot selection,
+            AgentCommand command, List<long> unitIds)
+        {
+            return ResolveAgentScopeRows(conn, selection, command, command.Items, command.IncludeChildren, command.QuotaFilter, unitIds);
         }
 
         private static string RemoveAgentQuantityFragment(string oldExpr, string fragment)
@@ -1425,7 +1441,7 @@ namespace RecoNet
 
         private static void BuildClearQuantityPlan(SqlConnection conn, AgentSelectionSnapshot selection, AgentCommand command, List<long> unitIds, AgentPlan plan)
         {
-            List<AgentTargetRow> targets = ResolveAgentTargetRows(conn, selection, command.Items, command.IncludeChildren, command.QuotaFilter, unitIds);
+            List<AgentTargetRow> targets = ResolveAgentValueTargetRows(conn, selection, command, unitIds);
             foreach (AgentTargetRow row in targets)
             {
                 if (String.IsNullOrEmpty(row.QuantityInput) && row.Quantity == DBNull.Value)
@@ -1477,9 +1493,223 @@ namespace RecoNet
             plan.NeedsRecalc = true;
         }
 
+        // 定额编号是否命中被替换列表：整号相同，或整号后紧跟乘除系数后缀（LY-21*9）。
+        // 命中时 suffix 返回该后缀（无后缀为空串）。避免 LY-2 误命中 LY-21。
+        private static bool AgentQuotaCodeMatchWithSuffix(string quotaCode, List<string> fromCodes, out string suffix)
+        {
+            suffix = "";
+            string code = (quotaCode ?? "").Trim();
+            if (code.Length == 0)
+            {
+                return false;
+            }
+
+            foreach (string raw in fromCodes)
+            {
+                string from = (raw ?? "").Trim();
+                if (from.Length == 0)
+                {
+                    continue;
+                }
+
+                if (String.Equals(code, from, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                if (code.Length > from.Length && code.StartsWith(from, StringComparison.OrdinalIgnoreCase))
+                {
+                    char next = code[from.Length];
+                    if (next == '*' || next == '/')
+                    {
+                        suffix = code.Substring(from.Length);
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        // 替换定额（点选界面专用）：支持 1→1 / 1→多 / 多→1。
+        // 同一 (单元, 条目) 内的命中行算一组，组内按顺号排序：
+        //   第一条（锚行）改成新定额的第 1 项；新定额多出来的项插到锚行后面；组内其余命中行删除。
+        private static void BuildReplaceQuotasPlan(SqlConnection conn, AgentSelectionSnapshot selection, AgentCommand command, List<long> unitIds, AgentPlan plan)
+        {
+            // 被替换的目标有两种给法：按编号（FromCodes）或按精确名称（QuotaName）。
+            bool byName = !String.IsNullOrEmpty(command.QuotaName);
+            if (!byName && (command.FromCodes == null || command.FromCodes.Count == 0))
+            {
+                throw new AgentPlanException("替换定额缺少要被替换的定额编号或名称。");
+            }
+
+            if (command.ToQuotas == null || command.ToQuotas.Count == 0)
+            {
+                throw new AgentPlanException("替换定额缺少替换成的定额编号。");
+            }
+
+            foreach (AgentQuotaInput to in command.ToQuotas)
+            {
+                if (String.IsNullOrEmpty((to.Code ?? "").Trim()))
+                {
+                    throw new AgentPlanException("替换成的定额编号不能为空。");
+                }
+            }
+
+            List<AgentTargetRow> matched = new List<AgentTargetRow>();
+            Dictionary<long, string> suffixes = new Dictionary<long, string>();
+            if (byName)
+            {
+                // 名称模式：行本身就是精确匹配出来的，没有"整号+系数后缀"的概念。
+                foreach (AgentTargetRow row in ResolveAgentScopeRows(conn, selection, command, command.Items,
+                    command.IncludeChildren, new List<string>(), unitIds))
+                {
+                    matched.Add(row);
+                    suffixes[row.QuotaSequence] = "";
+                }
+            }
+            else
+            {
+                foreach (AgentTargetRow row in ResolveAgentTargetRows(conn, selection, command.Items,
+                    command.IncludeChildren, command.FromCodes, unitIds))
+                {
+                    string suffix;
+                    if (!AgentQuotaCodeMatchWithSuffix(row.QuotaCode, command.FromCodes, out suffix))
+                    {
+                        continue;
+                    }
+
+                    matched.Add(row);
+                    suffixes[row.QuotaSequence] = suffix;
+                }
+            }
+
+            if (matched.Count == 0)
+            {
+                throw new AgentPlanException("在指定范围内没有找到要替换的定额：" +
+                    (byName ? command.QuotaName : String.Join("、", command.FromCodes.ToArray())));
+            }
+
+            // 只有按编号 1→1 且不改数量时保留原来的乘除系数后缀（与旧的“替换定额”行为一致）。
+            bool keepSuffix = !byName && command.FromCodes.Count == 1 && command.ToQuotas.Count == 1 &&
+                String.IsNullOrEmpty((command.ToQuotas[0].Quantity ?? "").Trim());
+            bool hasExtraInserts = command.ToQuotas.Count > 1;
+            bool suffixDropped = false;
+
+            // 按 (单元, 条目) 分组，组内按顺号升序。
+            List<string> groupKeys = new List<string>();
+            Dictionary<string, List<AgentTargetRow>> groups = new Dictionary<string, List<AgentTargetRow>>();
+            foreach (AgentTargetRow row in matched)
+            {
+                string key = row.UnitId.ToString(CultureInfo.InvariantCulture) + "|" +
+                    row.ItemSequence.ToString(CultureInfo.InvariantCulture);
+                if (!groups.ContainsKey(key))
+                {
+                    groups[key] = new List<AgentTargetRow>();
+                    groupKeys.Add(key);
+                }
+
+                groups[key].Add(row);
+            }
+
+            if (hasExtraInserts)
+            {
+                // 新增行靠主程序粘贴落库，只能粘到当前正在显示的单元，跨单元会插错地方。
+                List<long> insertUnits = matched.Select(r => r.UnitId).Distinct().ToList();
+                if (insertUnits.Count > 1)
+                {
+                    throw new AgentPlanException("一条定额拆成多条时只能作用于一个单元（新增行要靠主程序粘贴落库）。请把单元限定为一个后重试。");
+                }
+
+                if (selection.CurrentUnitId > 0 && insertUnits[0] != selection.CurrentUnitId)
+                {
+                    throw new AgentPlanException("一条定额拆成多条时只能作用于当前正在显示的单元。请先在主程序里切换到目标单元后重试。");
+                }
+            }
+
+            foreach (string key in groupKeys)
+            {
+                List<AgentTargetRow> group = groups[key];
+                group.Sort(delegate(AgentTargetRow a, AgentTargetRow b) { return a.OrderNo.CompareTo(b.OrderNo); });
+                AgentTargetRow anchor = group[0];
+
+                string anchorSuffix = keepSuffix ? suffixes[anchor.QuotaSequence] : "";
+                if (!keepSuffix && !String.IsNullOrEmpty(suffixes[anchor.QuotaSequence]))
+                {
+                    suffixDropped = true;
+                }
+
+                string newCode = command.ToQuotas[0].Code.Trim() + anchorSuffix;
+                string newQuantityInput = (command.ToQuotas[0].Quantity ?? "").Trim();
+
+                Dictionary<string, object> newValues = new Dictionary<string, object>();
+                Dictionary<string, object> oldValues = new Dictionary<string, object>();
+                newValues["定额编号"] = newCode;
+                oldValues["定额编号"] = anchor.QuotaCode;
+                string newDisplay = newCode;
+                if (newQuantityInput.Length > 0)
+                {
+                    object newQuantity;
+                    try
+                    {
+                        newQuantity = Convert.ToDouble(EvaluateDecimal(newQuantityInput), CultureInfo.InvariantCulture);
+                    }
+                    catch (Exception)
+                    {
+                        throw new AgentPlanException("替换定额的数量无法计算：" + newQuantityInput);
+                    }
+
+                    newValues["工程数量输入"] = newQuantityInput;
+                    newValues["工程数量"] = newQuantity;
+                    oldValues["工程数量输入"] = anchor.QuantityInput;
+                    oldValues["工程数量"] = anchor.Quantity;
+                    newDisplay = newCode + " 数量 " + newQuantityInput;
+                }
+
+                plan.FieldUpdates.Add(BuildQuotaFieldUpdate(anchor, "替换定额", newValues, oldValues,
+                    anchor.QuotaCode, newDisplay));
+
+                for (int i = 1; i < group.Count; i++)
+                {
+                    plan.Deletes.Add(new AgentDeleteRow
+                    {
+                        QuotaSequence = group[i].QuotaSequence,
+                        UnitId = group[i].UnitId,
+                        ItemNo = group[i].ItemNo,
+                        ItemName = group[i].ItemName,
+                        QuotaCode = group[i].QuotaCode
+                    });
+                }
+
+                if (hasExtraInserts)
+                {
+                    AgentInsertGroup insert = new AgentInsertGroup();
+                    insert.ItemNo = anchor.ItemNo;
+                    insert.UnitId = anchor.UnitId;
+                    insert.ItemSequence = anchor.ItemSequence;
+                    insert.AfterOrderNo = anchor.OrderNo;
+                    for (int i = 1; i < command.ToQuotas.Count; i++)
+                    {
+                        AgentQuotaInput quota = new AgentQuotaInput();
+                        quota.Code = command.ToQuotas[i].Code.Trim();
+                        quota.Quantity = (command.ToQuotas[i].Quantity ?? "").Trim();
+                        insert.Quotas.Add(quota);
+                    }
+
+                    plan.Inserts.Add(insert);
+                }
+            }
+
+            if (suffixDropped)
+            {
+                plan.Warnings.Add("原定额编号上的乘除系数后缀（如 *9）在本次替换中不会保留，需要时请替换后重新填写。");
+            }
+
+            plan.NeedsRecalc = true;
+        }
         private static void BuildDeletePlan(SqlConnection conn, AgentSelectionSnapshot selection, AgentCommand command, List<long> unitIds, AgentPlan plan)
         {
-            List<AgentTargetRow> targets = ResolveAgentTargetRows(conn, selection, command.Items, command.IncludeChildren, command.QuotaFilter, unitIds);
+            List<AgentTargetRow> targets = ResolveAgentValueTargetRows(conn, selection, command, unitIds);
             foreach (AgentTargetRow row in targets)
             {
                 plan.Deletes.Add(new AgentDeleteRow
@@ -1495,7 +1725,7 @@ namespace RecoNet
 
         private static void BuildCopyPlan(SqlConnection conn, AgentSelectionSnapshot selection, AgentCommand command, List<long> unitIds, AgentPlan plan)
         {
-            List<AgentTargetRow> source = ResolveAgentTargetRows(conn, selection, new List<string> { command.SourceItem }, false, command.QuotaFilter, unitIds);
+            List<AgentTargetRow> source = ResolveAgentScopeRows(conn, selection, command, new List<string> { command.SourceItem }, false, command.QuotaFilter, unitIds);
             if (source.Count == 0)
             {
                 throw new AgentPlanException("来源条目 " + command.SourceItem + " 下没有可复制的定额。");
@@ -1551,7 +1781,7 @@ namespace RecoNet
             string targetItemName;
             ResolveAgentExactItem(conn, targetItem, out targetItemSequence, out targetItemName);
 
-            List<AgentTargetRow> source = ResolveAgentTargetRows(conn, selection,
+            List<AgentTargetRow> source = ResolveAgentScopeRows(conn, selection, command,
                 new List<string> { command.SourceItem }, false, command.QuotaFilter, unitIds)
                 .OrderBy(row => row.UnitId)
                 .ThenBy(row => row.OrderNo)
@@ -1804,6 +2034,7 @@ namespace RecoNet
                     plan.PreviewRows.Add(new AgentPlanRow
                     {
                         Action = "插入",
+                        UnitId = group.UnitId,
                         ItemNo = group.ItemNo,
                         ItemName = quota.Name ?? "",
                         QuotaCode = quota.Code,
@@ -2404,9 +2635,121 @@ namespace RecoNet
                 return "条目 " + group.ItemNo + "：已发送粘贴，但数据库中暂未检测到新行（主程序可能尚未落库）。请在界面上核对，该部分插入暂不支持撤销。";
             }
 
-            return "条目 " + group.ItemNo + "：已插入 " + added.Count.ToString(CultureInfo.InvariantCulture) + " 条定额。";
+            string reordered = "";
+            try
+            {
+                reordered = ReorderAgentInsertedRows(conn, group, added, undo);
+            }
+            catch (Exception ex)
+            {
+                Log("Agent reorder failed: " + ex);
+                reordered = "新增行已插入，但调整到原定额后面时失败（" + ex.Message + "），顺序需要手工核对。";
+            }
+
+            return "条目 " + group.ItemNo + "：已插入 " + added.Count.ToString(CultureInfo.InvariantCulture) + " 条定额。" + reordered;
         }
 
+        // 粘贴插入的新行默认落在条目末尾。group.AfterOrderNo 有值时把它们挪到锚行紧后面：
+        // 先把锚行之后的原有行整体后移 N 位（记进撤销），再把新行按顺序占住腾出来的位置。
+        // 新行本身是 Kind="I" 的撤销记录（撤销时整行删除），所以它们的顺号变化不用单独记。
+        private static string ReorderAgentInsertedRows(SqlConnection conn, AgentInsertGroup group, List<long> added, AgentUndoRecord undo)
+        {
+            if (!group.AfterOrderNo.HasValue || added == null || added.Count == 0 ||
+                group.UnitId <= 0 || group.ItemSequence <= 0)
+            {
+                return "";
+            }
+
+            int after = group.AfterOrderNo.Value;
+            HashSet<long> addedSet = new HashSet<long>(added);
+
+            // 只处理确实落在目标单元+条目里的新行；粘错单元时不动顺号，避免把无关行搅乱。
+            List<long> ordered = new List<long>();
+            List<KeyValuePair<long, int>> existing = new List<KeyValuePair<long, int>>();
+            using (SqlCommand cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "select 定额序号, 顺号 from 定额输入 where 总概算序号=@z and 条目序号=@t order by 顺号";
+                cmd.Parameters.AddWithValue("@z", group.UnitId);
+                cmd.Parameters.AddWithValue("@t", group.ItemSequence);
+                using (SqlDataReader reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        long id = Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture);
+                        int shun = reader.IsDBNull(1) ? 0 : Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture);
+                        if (addedSet.Contains(id))
+                        {
+                            ordered.Add(id);
+                        }
+                        else if (shun > after)
+                        {
+                            existing.Add(new KeyValuePair<long, int>(id, shun));
+                        }
+                    }
+                }
+            }
+
+            if (ordered.Count == 0)
+            {
+                Log("Agent reorder skipped: pasted rows not found in target unit/item.");
+                return "";
+            }
+
+            int shift = ordered.Count;
+            using (SqlTransaction transaction = conn.BeginTransaction())
+            {
+                try
+                {
+                    // 从大到小移，避免中途撞上唯一约束（若存在 单元+条目+顺号 唯一索引）。
+                    existing.Sort(delegate(KeyValuePair<long, int> a, KeyValuePair<long, int> b)
+                    {
+                        return b.Value.CompareTo(a.Value);
+                    });
+
+                    foreach (KeyValuePair<long, int> pair in existing)
+                    {
+                        Dictionary<string, object> keyValues = new Dictionary<string, object>();
+                        keyValues["@k0"] = pair.Key;
+                        Dictionary<string, object> newValues = new Dictionary<string, object>();
+                        newValues["顺号"] = pair.Value + shift;
+                        Dictionary<string, object> oldValues = new Dictionary<string, object>();
+                        oldValues["顺号"] = pair.Value;
+
+                        undo.Rows.Add(new AgentUndoRow
+                        {
+                            Kind = "F",
+                            QuotaSequence = pair.Key,
+                            Table = "定额输入",
+                            KeyClause = "定额序号=@k0",
+                            KeyValues = new Dictionary<string, object>(keyValues),
+                            OldValues = new Dictionary<string, object>(oldValues),
+                            NewValues = new Dictionary<string, object>(newValues)
+                        });
+                        ExecuteAgentFieldUpdate(conn, transaction, "定额输入", "定额序号=@k0", keyValues, newValues);
+                    }
+
+                    for (int i = 0; i < ordered.Count; i++)
+                    {
+                        Dictionary<string, object> keyValues = new Dictionary<string, object>();
+                        keyValues["@k0"] = ordered[i];
+                        Dictionary<string, object> newValues = new Dictionary<string, object>();
+                        newValues["顺号"] = after + 1 + i;
+                        ExecuteAgentFieldUpdate(conn, transaction, "定额输入", "定额序号=@k0", keyValues, newValues);
+                    }
+
+                    transaction.Commit();
+                }
+                catch
+                {
+                    transaction.Rollback();
+                    throw;
+                }
+            }
+
+            Log("Agent reorder: moved " + ordered.Count.ToString(CultureInfo.InvariantCulture) +
+                " pasted rows after 顺号 " + after.ToString(CultureInfo.InvariantCulture));
+            return "已把新增的 " + ordered.Count.ToString(CultureInfo.InvariantCulture) + " 条定额移到原定额后面。";
+        }
         private static string CleanAgentCell(string value)
         {
             return (value ?? "").Replace("\r", " ").Replace("\n", " ").Replace("\t", " ").Trim();

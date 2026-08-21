@@ -25,6 +25,96 @@ namespace RecoNet
             public bool TreeTruncated;
         }
 
+        // 一个单元（总概算）候选项：点选界面的下拉框和 AI 上下文共用同一份数据。
+        private sealed class AgentUnitOption
+        {
+            public long UnitId;
+            public string Code = "";     // 总概算编号，如 _ZGS_03
+            public string Name = "";     // 编制范围，即单元名称
+
+            public string Display
+            {
+                get
+                {
+                    string code = (Code ?? "").Trim();
+                    string name = (Name ?? "").Trim();
+                    if (code.Length == 0 && name.Length == 0)
+                    {
+                        return UnitId.ToString(CultureInfo.InvariantCulture);
+                    }
+
+                    return name.Length == 0 ? code : (code + " " + name);
+                }
+            }
+        }
+
+        // 一个条目候选项。
+        private sealed class AgentItemOption
+        {
+            public string ItemNo = "";
+            public string Name = "";
+
+            public string Display
+            {
+                get
+                {
+                    string name = (Name ?? "").Trim();
+                    return name.Length == 0 ? ItemNo : (ItemNo + "  " + name);
+                }
+            }
+        }
+
+        // 项目全部单元，按总概算序号排序。
+        private static List<AgentUnitOption> LoadAgentUnitOptions(SqlConnection conn)
+        {
+            List<AgentUnitOption> units = new List<AgentUnitOption>();
+            using (SqlCommand cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "select 总概算序号, 总概算编号, 编制范围 from 总概算信息 order by 总概算序号";
+                using (SqlDataReader reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        AgentUnitOption unit = new AgentUnitOption();
+                        unit.UnitId = reader.IsDBNull(0) ? 0 : Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture);
+                        unit.Code = reader.IsDBNull(1) ? "" : Convert.ToString(reader.GetValue(1)).Trim();
+                        unit.Name = reader.IsDBNull(2) ? "" : Convert.ToString(reader.GetValue(2)).Trim();
+                        units.Add(unit);
+                    }
+                }
+            }
+
+            return units;
+        }
+
+        // 项目全部条目，按条目编号排序。下拉框要的是完整列表，不走 PruneAgentTree 的 400 行裁剪。
+        private static List<AgentItemOption> LoadAgentItemOptions(SqlConnection conn)
+        {
+            List<AgentItemOption> items = new List<AgentItemOption>();
+            using (SqlCommand cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "select 条目编号, 工程或费用项目名称 from 章节表 order by 条目编号";
+                using (SqlDataReader reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        string no = reader.IsDBNull(0) ? "" : Convert.ToString(reader.GetValue(0)).Trim();
+                        if (no.Length == 0)
+                        {
+                            continue;
+                        }
+
+                        AgentItemOption item = new AgentItemOption();
+                        item.ItemNo = no;
+                        item.Name = reader.IsDBNull(1) ? "" : Convert.ToString(reader.GetValue(1)).Trim();
+                        items.Add(item);
+                    }
+                }
+            }
+
+            return items;
+        }
+
         // 采集项目上下文（纯数据库 + 快照，无 UI 访问；调用方必须在 UI 线程借用宿主连接）。
         private static AgentContext CollectAgentContext(SqlConnection conn, AgentSelectionSnapshot selection, string userText)
         {
@@ -34,37 +124,17 @@ namespace RecoNet
             context.SelectedUnitId = selection.CurrentUnitId;
             context.SelectedQuotaCodes = selection.QuotaCodes;
 
-            using (SqlCommand cmd = conn.CreateCommand())
+            foreach (AgentUnitOption option in LoadAgentUnitOptions(conn))
             {
-                cmd.CommandText = "select 总概算序号, 总概算编号, 编制范围 from 总概算信息 order by 总概算序号";
-                using (SqlDataReader reader = cmd.ExecuteReader())
-                {
-                    while (reader.Read())
-                    {
-                        context.UnitLines.Add(
-                            Convert.ToString(reader.GetValue(0), CultureInfo.InvariantCulture) + " " +
-                            Convert.ToString(reader.GetValue(1)).Trim() + " " +
-                            Convert.ToString(reader.GetValue(2)).Trim());
-                    }
-                }
+                context.UnitLines.Add(
+                    option.UnitId.ToString(CultureInfo.InvariantCulture) + " " +
+                    option.Code + " " + option.Name);
             }
 
             List<string[]> allItems = new List<string[]>();
-            using (SqlCommand cmd = conn.CreateCommand())
+            foreach (AgentItemOption option in LoadAgentItemOptions(conn))
             {
-                cmd.CommandText = "select 条目编号, 工程或费用项目名称 from 章节表 order by 条目编号";
-                using (SqlDataReader reader = cmd.ExecuteReader())
-                {
-                    while (reader.Read())
-                    {
-                        string no = reader.IsDBNull(0) ? "" : Convert.ToString(reader.GetValue(0)).Trim();
-                        string name = reader.IsDBNull(1) ? "" : Convert.ToString(reader.GetValue(1)).Trim();
-                        if (no.Length > 0)
-                        {
-                            allItems.Add(new string[] { no, name });
-                        }
-                    }
-                }
+                allItems.Add(new string[] { option.ItemNo, option.Name });
             }
 
             if (allItems.Count <= AgentTreeLineBudget)

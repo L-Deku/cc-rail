@@ -168,8 +168,8 @@ if ($previewStart -lt 0) { throw 'Missing SmartFill preview method.' }
 $smartPreview = $smartFill.Substring($previewStart)
 $templateNameMatch = [IO.File]::ReadAllText((Join-Path $sourceDir 'TemplateFillNameMatch.cs'))
 $projectQuotas = Get-Section $templateNameMatch 'private static List<ProjectQuota> LoadProjectQuotas' 'private static string BuildNameBindingTargetSetSignature'
-$agentChat = [IO.File]::ReadAllText((Join-Path $sourceDir 'AgentChatFeature.cs'))
-$chatInput = Get-Section $agentChat 'private void HandleUserInput' 'private void RunAgentPipeline'
+$agentPanel = [IO.File]::ReadAllText((Join-Path $sourceDir 'AgentPanelFeature.cs'))
+$chatInput = Get-Section $agentPanel 'private void RunPipeline' 'private void OnPipelineDone'
 foreach ($case in @(
     @($learningScopes, 'projectConn'), @($smartPreview, 'conn'),
     @($projectQuotas, 'conn'), @($chatInput, 'expectedConnection')
@@ -185,7 +185,7 @@ foreach ($case in @(
     }
 }
 
-$pipeline = Get-Section $agentChat 'private void RunAgentPipeline' 'private void OnPipelineDone'
+$pipeline = Get-Section $agentPanel 'private void RunPipeline' 'private void OnPipelineDone'
 if ($pipeline.Contains('AgentCreateWorkConnection(mainForm)') -or
     ([regex]::Matches($pipeline, 'WithOpenProjectConnectionOnUi\s*\(').Count -ne 2) -or
     ([regex]::Matches($pipeline, 'RequestAgentParse\s*\(').Count -ne 1) -or

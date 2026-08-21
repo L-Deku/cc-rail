@@ -44,6 +44,8 @@ namespace RecoNet
             public string TransportParam;                     // set_transport_scheme 可选：同时设参数调整(运输参数,如PH0)
             public string SchemeKind = "材料";                // set_material_scheme: 材料/机械/设备/工费
             public string SchemeName;                         // set_material_scheme 用
+            public List<string> FromCodes = new List<string>();                    // replace_quotas: 被替换的定额编号(1或多个)
+            public List<AgentQuotaInput> ToQuotas = new List<AgentQuotaInput>();   // replace_quotas: 替换成的定额(1或多个)，Quantity 为空=不改数量
 
             private string TargetLabel
             {
@@ -100,6 +102,21 @@ namespace RecoNet
                         return "把条目 " + SourceItem + " 的定额复制到 " + String.Join(",", TargetItems.ToArray()) + filter;
                     case "move_quotas":
                         return "把条目 " + SourceItem + " 的定额移动到 " + String.Join(",", TargetItems.ToArray()) + filter;
+                    case "replace_quotas":
+                        StringBuilder rb = new StringBuilder();
+                        foreach (AgentQuotaInput rq in ToQuotas)
+                        {
+                            if (rb.Length > 0)
+                            {
+                                rb.Append("、");
+                            }
+                            rb.Append(rq.Code);
+                            if (!String.IsNullOrEmpty(rq.Quantity))
+                            {
+                                rb.Append("(").Append(rq.Quantity).Append(")");
+                            }
+                        }
+                        return "把定额 " + String.Join("、", FromCodes.ToArray()) + " 换成 " + rb + filter;
                     case "insert_quotas":
                         StringBuilder sb = new StringBuilder();
                         foreach (AgentQuotaInput q in Quotas)
