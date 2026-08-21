@@ -6,6 +6,7 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
@@ -1386,29 +1387,57 @@ namespace RecoNet
             return -1;
         }
 
-        private static string BuildSmartNativeSendKeysText(string value)
+        private const uint KeyEventFlagKeyUp = 0x0002;
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern short VkKeyScan(char ch);
+
+        [DllImport("user32.dll")]
+        private static extern void keybd_event(byte virtualKey, byte scanCode, uint flags, UIntPtr extraInfo);
+
+        private static int[] BuildSmartNativeVirtualKeyPlan(string value)
         {
-            StringBuilder keys = new StringBuilder();
+            List<int> plan = new List<int>();
             foreach (char ch in (value ?? "").Trim())
             {
-                switch (ch)
-                {
-                    case '{': keys.Append("{{}"); break;
-                    case '}': keys.Append("{}}"); break;
-                    case '+':
-                    case '^':
-                    case '%':
-                    case '~':
-                    case '(':
-                    case ')':
-                        keys.Append('{').Append(ch).Append('}');
-                        break;
-                    default:
-                        keys.Append(ch);
-                        break;
-                }
+                short mapped = VkKeyScan(ch);
+                if (mapped == -1) return null;
+                plan.Add((ushort)mapped);
             }
-            return keys.ToString();
+            return plan.ToArray();
+        }
+
+        private static bool TrySendSmartNativeKeyCommand(string value, out string error)
+        {
+            error = "";
+            int[] plan = BuildSmartNativeVirtualKeyPlan(value);
+            if (plan == null || plan.Length == 0)
+            {
+                error = plan == null ? "宿主键盘布局无法映射输入内容" : "原生键盘输入内容为空";
+                return false;
+            }
+            foreach (int mapped in plan)
+            {
+                byte virtualKey = (byte)(mapped & 0xFF);
+                byte modifiers = (byte)((mapped >> 8) & 0xFF);
+                if ((modifiers & ~7) != 0)
+                {
+                    error = "宿主键盘布局返回了不支持的修饰键";
+                    return false;
+                }
+                if ((modifiers & 2) != 0) keybd_event((byte)Keys.ControlKey, 0, 0, UIntPtr.Zero);
+                if ((modifiers & 4) != 0) keybd_event((byte)Keys.Menu, 0, 0, UIntPtr.Zero);
+                if ((modifiers & 1) != 0) keybd_event((byte)Keys.ShiftKey, 0, 0, UIntPtr.Zero);
+                keybd_event(virtualKey, 0, 0, UIntPtr.Zero);
+                keybd_event(virtualKey, 0, KeyEventFlagKeyUp, UIntPtr.Zero);
+                if ((modifiers & 1) != 0) keybd_event((byte)Keys.ShiftKey, 0, KeyEventFlagKeyUp, UIntPtr.Zero);
+                if ((modifiers & 4) != 0) keybd_event((byte)Keys.Menu, 0, KeyEventFlagKeyUp, UIntPtr.Zero);
+                if ((modifiers & 2) != 0) keybd_event((byte)Keys.ControlKey, 0, KeyEventFlagKeyUp, UIntPtr.Zero);
+            }
+            keybd_event((byte)Keys.Enter, 0, 0, UIntPtr.Zero);
+            keybd_event((byte)Keys.Enter, 0, KeyEventFlagKeyUp, UIntPtr.Zero);
+            Application.DoEvents();
+            return true;
         }
 
         private static bool TryCommitSmartNativeCellViaSingleEnter(DataGridView grid, int rowIndex,
@@ -1436,8 +1465,12 @@ namespace RecoNet
                             grid.CurrentCell.ColumnIndex.ToString(CultureInfo.InvariantCulture)) + "）";
                     return false;
                 }
-                SendKeys.SendWait(BuildSmartNativeSendKeysText(value) + "{ENTER}");
-                Application.DoEvents();
+                string keyError;
+                if (!TrySendSmartNativeKeyCommand(value, out keyError))
+                {
+                    error = keyError;
+                    return false;
+                }
                 return true;
             }
             catch (Exception ex)

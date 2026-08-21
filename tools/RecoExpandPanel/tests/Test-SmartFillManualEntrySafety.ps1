@@ -48,7 +48,8 @@ $requiredFeature = @(
     'stableCount >= 2',
     'TryCommitSmartNativeQuotaViaSingleEnter',
     'TryCommitSmartNativeCellViaSingleEnter',
-    'BuildSmartNativeSendKeysText',
+    'BuildSmartNativeVirtualKeyPlan',
+    'TrySendSmartNativeKeyCommand',
     'FindSmartNativeColumnIndex',
     'FindSmartNativeInputRowIndex',
     'IsSmartFillSourceIdentityMatch',
@@ -164,14 +165,23 @@ if ($nativeCellStart -lt 0 -or $nativeCellEnd -le $nativeCellStart) {
 }
 $nativeCellBody = $feature.Substring($nativeCellStart, $nativeCellEnd - $nativeCellStart)
 foreach ($forbiddenMarker in @('grid.BeginEdit(', 'grid.EditingControl', 'TextBoxBase',
-    'grid.NotifyCurrentCellDirty(')) {
+    'grid.NotifyCurrentCellDirty(', 'SendKeys.SendWait(')) {
     if ($nativeCellBody.Contains($forbiddenMarker)) {
         throw "宿主只读 DataGridViewDe 仍被当作普通可编辑表格：$forbiddenMarker"
     }
 }
-foreach ($marker in @('grid.Focus()',
-    'SendKeys.SendWait(BuildSmartNativeSendKeysText(value) + "{ENTER}")', 'Application.DoEvents()')) {
+foreach ($marker in @('grid.Focus()', 'TrySendSmartNativeKeyCommand(value, out keyError)')) {
     if (-not $nativeCellBody.Contains($marker)) { throw "宿主键盘命令提交缺少已验证步骤：$marker" }
+}
+$nativeKeyStart = $feature.IndexOf('private static bool TrySendSmartNativeKeyCommand', [StringComparison]::Ordinal)
+$nativeKeyEnd = $feature.IndexOf('private static bool TryCommitSmartNativeCellViaSingleEnter', $nativeKeyStart, [StringComparison]::Ordinal)
+if ($nativeKeyStart -lt 0 -or $nativeKeyEnd -le $nativeKeyStart) {
+    throw '缺少宿主 Win32 虚拟键发送入口'
+}
+$nativeKeyBody = $feature.Substring($nativeKeyStart, $nativeKeyEnd - $nativeKeyStart)
+foreach ($marker in @('BuildSmartNativeVirtualKeyPlan(value)', 'keybd_event(', 'Keys.Enter',
+    'KeyEventFlagKeyUp', 'Application.DoEvents()')) {
+    if (-not $nativeKeyBody.Contains($marker)) { throw "Win32 虚拟键发送缺少真实按键步骤：$marker" }
 }
 
 foreach ($marker in @('String.Equals(targetConn.Database, candidate.DatabaseName',
@@ -228,7 +238,7 @@ $resolveSourceDatabase = $formType.GetMethod('ResolveSmartSourceDatabaseName', $
 $isSameNativeTargetItem = $formType.GetMethod('IsSameSmartNativeTargetItem', $flags)
 $findNativeColumn = $formType.GetMethod('FindSmartNativeColumnIndex', $flags)
 $findNativeInputRow = $formType.GetMethod('FindSmartNativeInputRowIndex', $flags)
-$buildNativeSendKeysText = $formType.GetMethod('BuildSmartNativeSendKeysText', $flags)
+$buildNativeVirtualKeyPlan = $formType.GetMethod('BuildSmartNativeVirtualKeyPlan', $flags)
 $shouldLoadCurrentQuotaTarget = $formType.GetMethod('ShouldLoadCurrentSmartQuotaTarget', $flags)
 $smartTargetType = $formType.GetNestedType('SmartBoxTarget', $nested)
 $projectQuotaType = $formType.GetNestedType('ProjectQuota', $nested)
@@ -242,7 +252,7 @@ $isOptionalTreeSequenceConsistent = if ($null -eq $panelType) { $null } else { $
 if ($null -eq $itemType -or $null -eq $planType -or $null -eq $recordType -or
     $null -eq $classify -or $null -eq $buildL2 -or $null -eq $resolveSourceDatabase -or
     $null -eq $isSameNativeTargetItem -or $null -eq $findNativeColumn -or
-    $null -eq $findNativeInputRow -or $null -eq $buildNativeSendKeysText -or
+    $null -eq $findNativeInputRow -or $null -eq $buildNativeVirtualKeyPlan -or
     $null -eq $shouldLoadCurrentQuotaTarget -or
     $null -eq $smartTargetType -or $null -eq $projectQuotaType -or
     $null -eq $resolveSmartPreviewUnitPrice -or $null -eq $filterLearningTargetUnitPrice -or
@@ -410,18 +420,23 @@ if ([int]$findNativeInputRow.Invoke($null, $nativeRowArgs) -ne -1) {
 }
 $nativeGrid.Dispose()
 foreach ($case in @(
-    @('PY-415', 'PY-415'),
-    @('QY-215*9', 'QY-215*9'),
-    @('F10/1000+F11/1000', 'F10/1000{+}F11/1000'),
-    @('(1+2)*5%', '{(}1{+}2{)}*5{%}'),
-    @('{V0}^~', '{{}V0{}}{^}{~}')
+    @('PY-415', 6),
+    @('QY-215*9', 8),
+    @('252/10', 6),
+    @('F10/1000+F11/1000', 17)
 )) {
-    $actualKeys = [string]$buildNativeSendKeysText.Invoke($null, @([string]$case[0]))
-    if ($actualKeys -ne [string]$case[1]) {
-        throw "宿主键盘命令转义错误：$($case[0]) => $actualKeys，预期 $($case[1])"
+    [int[]]$keyPlan = $buildNativeVirtualKeyPlan.Invoke($null, @([string]$case[0]))
+    if ($null -eq $keyPlan -or $keyPlan.Length -ne [int]$case[1] -or
+        @($keyPlan | Where-Object { ($_ -band 0xFF) -eq 0 }).Count -gt 0) {
+        throw "宿主虚拟键计划错误：$($case[0]) => $($keyPlan -join ',')"
     }
 }
-Write-Host 'PASS 正式定额键盘命令路径精确定位末尾空白行并安全转义编号/数量'
+[int[]]$shiftPlan = $buildNativeVirtualKeyPlan.Invoke($null, @('pP+*'))
+if (($shiftPlan[0] -shr 8) -ne 0 -or (($shiftPlan[1] -shr 8) -band 1) -eq 0 -or
+    (($shiftPlan[2] -shr 8) -band 1) -eq 0 -or (($shiftPlan[3] -shr 8) -band 1) -eq 0) {
+    throw "宿主虚拟键计划没有正确保留 Shift 修饰键：$($shiftPlan -join ',')"
+}
+Write-Host 'PASS 正式定额 Win32 键盘路径精确定位末尾空白行并映射编号/数量'
 
 if (-not [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @('', [long]8123)) -or
     -not [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @($null, [long]8123)) -or
