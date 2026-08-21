@@ -1391,6 +1391,8 @@ namespace RecoNet
         private const uint KeyEventFlagKeyUp = 0x0002;
         private const uint MouseEventLeftDown = 0x0002;
         private const uint MouseEventLeftUp = 0x0004;
+        private const uint SmartNativeWmKeyDown = 0x0100;
+        private const uint SmartNativeWmKeyUp = 0x0101;
         private static readonly Dictionary<Form, SmartNativeInputTraceFilter> SmartNativeInputTraceFilters =
             new Dictionary<Form, SmartNativeInputTraceFilter>();
         private static bool SmartNativeAutomatedInputActive;
@@ -1406,6 +1408,10 @@ namespace RecoNet
 
         [DllImport("user32.dll")]
         private static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extraInfo);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool PostMessage(IntPtr windowHandle, uint message, IntPtr wordParameter,
+            IntPtr longParameter);
 
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
@@ -1625,8 +1631,6 @@ namespace RecoNet
                 if ((modifiers & 4) != 0) keybd_event((byte)Keys.Menu, 0, KeyEventFlagKeyUp, UIntPtr.Zero);
                 if ((modifiers & 2) != 0) keybd_event((byte)Keys.ControlKey, 0, KeyEventFlagKeyUp, UIntPtr.Zero);
             }
-            keybd_event((byte)Keys.Enter, 0, 0, UIntPtr.Zero);
-            keybd_event((byte)Keys.Enter, 0, KeyEventFlagKeyUp, UIntPtr.Zero);
             Application.DoEvents();
             return true;
         }
@@ -1697,6 +1701,33 @@ namespace RecoNet
             return false;
         }
 
+        private static bool TryPostSmartNativeHostEnter(DataGridView grid, Control editor, out string error)
+        {
+            error = "";
+            if (grid == null || editor == null || editor.IsDisposed || !editor.IsHandleCreated ||
+                !editor.ContainsFocus)
+            {
+                error = "宿主原生编辑框在 Enter 提交前已失去焦点";
+                return false;
+            }
+
+            if (!PostMessage(editor.Handle, SmartNativeWmKeyDown, (IntPtr)Keys.Enter,
+                new IntPtr(0x001C0001)))
+            {
+                error = "无法向宿主原生编辑框投递 Enter 键下消息（Win32=" +
+                    Marshal.GetLastWin32Error().ToString(CultureInfo.InvariantCulture) + "）";
+                return false;
+            }
+            WaitAgentUiIdle(20);
+
+            IntPtr keyUpTarget = GetFocus();
+            if (keyUpTarget == IntPtr.Zero) keyUpTarget = grid.Handle;
+            PostMessage(keyUpTarget, SmartNativeWmKeyUp, (IntPtr)Keys.Enter,
+                new IntPtr(unchecked((long)0xC01C0001u)));
+            Application.DoEvents();
+            return true;
+        }
+
         private static bool TryCommitSmartNativeCellViaSingleEnter(DataGridView grid, int rowIndex,
             int columnIndex, string value, out string error)
         {
@@ -1728,6 +1759,7 @@ namespace RecoNet
                     error = editorError;
                     return false;
                 }
+                Control editor = grid.EditingControl;
                 string keyError;
                 Log("Smart native key dispatch. value=" + (value ?? "") + " " +
                     DescribeSmartNativeInputContext(grid, IntPtr.Zero, null));
@@ -1744,6 +1776,12 @@ namespace RecoNet
                 if (!sent)
                 {
                     error = keyError;
+                    return false;
+                }
+                string enterError;
+                if (!TryPostSmartNativeHostEnter(grid, editor, out enterError))
+                {
+                    error = enterError;
                     return false;
                 }
                 return true;

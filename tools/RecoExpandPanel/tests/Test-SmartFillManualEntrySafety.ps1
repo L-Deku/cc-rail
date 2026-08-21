@@ -174,7 +174,8 @@ foreach ($forbiddenMarker in @('grid.BeginEdit(', 'grid.ReadOnly = false',
     }
 }
 foreach ($marker in @('grid.Focus()', 'TryActivateSmartNativeHostEditor(grid, rowIndex, columnIndex, out editorError)',
-    'TrySendSmartNativeKeyCommand(value, out keyError)')) {
+    'TrySendSmartNativeKeyCommand(value, out keyError)',
+    'TryPostSmartNativeHostEnter(grid, editor, out enterError)')) {
     if (-not $nativeCellBody.Contains($marker)) { throw "宿主键盘命令提交缺少已验证步骤：$marker" }
 }
 if ($nativeCellBody.IndexOf('TryActivateSmartNativeHostEditor(', [StringComparison]::Ordinal) -gt
@@ -200,9 +201,25 @@ if ($nativeKeyStart -lt 0 -or $nativeKeyEnd -le $nativeKeyStart) {
     throw '缺少宿主 Win32 虚拟键发送入口'
 }
 $nativeKeyBody = $feature.Substring($nativeKeyStart, $nativeKeyEnd - $nativeKeyStart)
-foreach ($marker in @('BuildSmartNativeVirtualKeyPlan(value)', 'keybd_event(', 'Keys.Enter',
+foreach ($marker in @('BuildSmartNativeVirtualKeyPlan(value)', 'keybd_event(',
     'KeyEventFlagKeyUp', 'Application.DoEvents()')) {
     if (-not $nativeKeyBody.Contains($marker)) { throw "Win32 虚拟键发送缺少真实按键步骤：$marker" }
+}
+if ($nativeKeyBody.Contains('keybd_event((byte)Keys.Enter')) {
+    throw '实机已证明逐字符 keybd_event 的 Enter 只有 KEYUP，不能继续用它提交定额'
+}
+$nativeEnterStart = $feature.IndexOf('private static bool TryPostSmartNativeHostEnter', [StringComparison]::Ordinal)
+$nativeEnterEnd = $feature.IndexOf('private static bool TryCommitSmartNativeCellViaSingleEnter', $nativeEnterStart, [StringComparison]::Ordinal)
+if ($nativeEnterStart -lt 0 -or $nativeEnterEnd -le $nativeEnterStart) {
+    throw '缺少向宿主编辑框消息队列投递 Enter 的入口'
+}
+$nativeEnterBody = $feature.Substring($nativeEnterStart, $nativeEnterEnd - $nativeEnterStart)
+foreach ($marker in @('PostMessage(', 'SmartNativeWmKeyDown', '(IntPtr)Keys.Enter',
+    'WaitAgentUiIdle(20)')) {
+    if (-not $nativeEnterBody.Contains($marker)) { throw "宿主 Enter 提交缺少人工成功链证据：$marker" }
+}
+if ($nativeEnterBody.Contains('SendMessage(') -or $nativeEnterBody.Contains('grid.EndEdit(')) {
+    throw '宿主 Enter 必须进入消息泵预处理链，不能绕过为同步 WndProc 或直接结束编辑'
 }
 $nativeTraceStart = $feature.IndexOf('private sealed class SmartNativeInputTraceFilter : IMessageFilter', [StringComparison]::Ordinal)
 $nativeTraceEnd = $feature.IndexOf('private static int[] BuildSmartNativeVirtualKeyPlan', $nativeTraceStart, [StringComparison]::Ordinal)
