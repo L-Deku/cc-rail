@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
+using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.IO.Compression;
@@ -1388,6 +1389,8 @@ namespace RecoNet
         }
 
         private const uint KeyEventFlagKeyUp = 0x0002;
+        private const uint MouseEventLeftDown = 0x0002;
+        private const uint MouseEventLeftUp = 0x0004;
         private static readonly Dictionary<Form, SmartNativeInputTraceFilter> SmartNativeInputTraceFilters =
             new Dictionary<Form, SmartNativeInputTraceFilter>();
         private static bool SmartNativeAutomatedInputActive;
@@ -1397,6 +1400,12 @@ namespace RecoNet
 
         [DllImport("user32.dll")]
         private static extern void keybd_event(byte virtualKey, byte scanCode, uint flags, UIntPtr extraInfo);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetCursorPos(int x, int y);
+
+        [DllImport("user32.dll")]
+        private static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extraInfo);
 
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
@@ -1622,6 +1631,72 @@ namespace RecoNet
             return true;
         }
 
+        private static bool TryActivateSmartNativeHostEditor(DataGridView grid, int rowIndex,
+            int columnIndex, out string error)
+        {
+            error = "";
+            if (grid == null || rowIndex < 0 || rowIndex >= grid.Rows.Count ||
+                columnIndex < 0 || columnIndex >= grid.Columns.Count)
+            {
+                error = "宿主原生编辑单元格位置无效";
+                return false;
+            }
+
+            Control existingEditor = grid.EditingControl;
+            if (grid.IsCurrentCellInEditMode && existingEditor != null && existingEditor.ContainsFocus)
+                return true;
+
+            Rectangle cellBounds = grid.GetCellDisplayRectangle(columnIndex, rowIndex, true);
+            if (cellBounds.Width <= 2 || cellBounds.Height <= 2)
+            {
+                error = "宿主原生编辑单元格当前不可见";
+                return false;
+            }
+
+            Point originalCursor = Cursor.Position;
+            Point clickPoint = grid.PointToScreen(new Point(
+                cellBounds.Left + Math.Max(1, cellBounds.Width / 2),
+                cellBounds.Top + Math.Max(1, cellBounds.Height / 2)));
+            try
+            {
+                if (!SetCursorPos(clickPoint.X, clickPoint.Y))
+                {
+                    error = "无法把鼠标定位到宿主原生编辑单元格";
+                    return false;
+                }
+                mouse_event(MouseEventLeftDown, 0, 0, 0, UIntPtr.Zero);
+                mouse_event(MouseEventLeftUp, 0, 0, 0, UIntPtr.Zero);
+                Application.DoEvents();
+
+                DateTime deadline = DateTime.Now.AddMilliseconds(600);
+                while (DateTime.Now < deadline)
+                {
+                    Control editor = grid.EditingControl;
+                    if (grid.IsCurrentCellInEditMode && editor != null)
+                    {
+                        if (!editor.ContainsFocus) editor.Focus();
+                        if (editor.ContainsFocus)
+                        {
+                            Log("Smart native host editor activated. editor=" + editor.GetType().FullName +
+                                " row=" + rowIndex.ToString(CultureInfo.InvariantCulture) +
+                                " column=" + columnIndex.ToString(CultureInfo.InvariantCulture));
+                            return true;
+                        }
+                    }
+                    WaitAgentUiIdle(20);
+                }
+            }
+            finally
+            {
+                SetCursorPos(originalCursor.X, originalCursor.Y);
+            }
+
+            error = "宿主未在真实单击后创建原生编辑框（editingControl=" +
+                (grid.EditingControl == null ? "<null>" : grid.EditingControl.GetType().FullName) +
+                ", currentCellInEditMode=" + (grid.IsCurrentCellInEditMode ? "1" : "0") + "）";
+            return false;
+        }
+
         private static bool TryCommitSmartNativeCellViaSingleEnter(DataGridView grid, int rowIndex,
             int columnIndex, string value, out string error)
         {
@@ -1645,6 +1720,12 @@ namespace RecoNet
                         ", currentCell=" + (grid.CurrentCell == null ? "<null>" :
                             grid.CurrentCell.RowIndex.ToString(CultureInfo.InvariantCulture) + ":" +
                             grid.CurrentCell.ColumnIndex.ToString(CultureInfo.InvariantCulture)) + "）";
+                    return false;
+                }
+                string editorError;
+                if (!TryActivateSmartNativeHostEditor(grid, rowIndex, columnIndex, out editorError))
+                {
+                    error = editorError;
                     return false;
                 }
                 string keyError;

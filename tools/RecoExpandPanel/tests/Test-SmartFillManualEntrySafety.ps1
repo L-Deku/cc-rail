@@ -48,6 +48,7 @@ $requiredFeature = @(
     'stableCount >= 2',
     'TryCommitSmartNativeQuotaViaSingleEnter',
     'TryCommitSmartNativeCellViaSingleEnter',
+    'TryActivateSmartNativeHostEditor',
     'BuildSmartNativeVirtualKeyPlan',
     'TrySendSmartNativeKeyCommand',
     'SmartNativeInputTraceFilter',
@@ -166,14 +167,32 @@ if ($nativeCellStart -lt 0 -or $nativeCellEnd -le $nativeCellStart) {
     throw '缺少可单独核对的原生单元格 Enter 提交入口'
 }
 $nativeCellBody = $feature.Substring($nativeCellStart, $nativeCellEnd - $nativeCellStart)
-foreach ($forbiddenMarker in @('grid.BeginEdit(', 'grid.EditingControl', 'TextBoxBase',
+foreach ($forbiddenMarker in @('grid.BeginEdit(', 'grid.ReadOnly = false',
     'grid.NotifyCurrentCellDirty(', 'SendKeys.SendWait(')) {
     if ($nativeCellBody.Contains($forbiddenMarker)) {
         throw "宿主只读 DataGridViewDe 仍被当作普通可编辑表格：$forbiddenMarker"
     }
 }
-foreach ($marker in @('grid.Focus()', 'TrySendSmartNativeKeyCommand(value, out keyError)')) {
+foreach ($marker in @('grid.Focus()', 'TryActivateSmartNativeHostEditor(grid, rowIndex, columnIndex, out editorError)',
+    'TrySendSmartNativeKeyCommand(value, out keyError)')) {
     if (-not $nativeCellBody.Contains($marker)) { throw "宿主键盘命令提交缺少已验证步骤：$marker" }
+}
+if ($nativeCellBody.IndexOf('TryActivateSmartNativeHostEditor(', [StringComparison]::Ordinal) -gt
+    $nativeCellBody.IndexOf('TrySendSmartNativeKeyCommand(', [StringComparison]::Ordinal)) {
+    throw '必须先让宿主通过真实单击创建编辑框，再发送编号或数量键盘命令'
+}
+$nativeEditorStart = $feature.IndexOf('private static bool TryActivateSmartNativeHostEditor', [StringComparison]::Ordinal)
+$nativeEditorEnd = $feature.IndexOf('private static bool TryCommitSmartNativeCellViaSingleEnter', $nativeEditorStart, [StringComparison]::Ordinal)
+if ($nativeEditorStart -lt 0 -or $nativeEditorEnd -le $nativeEditorStart) {
+    throw '缺少宿主原生编辑框激活入口'
+}
+$nativeEditorBody = $feature.Substring($nativeEditorStart, $nativeEditorEnd - $nativeEditorStart)
+foreach ($marker in @('grid.GetCellDisplayRectangle(', 'grid.PointToScreen(', 'SetCursorPos(',
+    'mouse_event(', 'grid.EditingControl', 'WaitAgentUiIdle(20)')) {
+    if (-not $nativeEditorBody.Contains($marker)) { throw "宿主原生编辑框激活缺少人工成功链证据：$marker" }
+}
+foreach ($forbiddenMarker in @('grid.BeginEdit(', 'ReadOnly = false', '.Value =')) {
+    if ($nativeEditorBody.Contains($forbiddenMarker)) { throw "宿主原生编辑框激活仍在强改只读表格：$forbiddenMarker" }
 }
 $nativeKeyStart = $feature.IndexOf('private static bool TrySendSmartNativeKeyCommand', [StringComparison]::Ordinal)
 $nativeKeyEnd = $feature.IndexOf('private static bool TryCommitSmartNativeCellViaSingleEnter', $nativeKeyStart, [StringComparison]::Ordinal)
