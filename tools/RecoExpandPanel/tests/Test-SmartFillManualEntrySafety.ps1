@@ -50,6 +50,8 @@ $requiredFeature = @(
     'TryCommitSmartNativeCellViaSingleEnter',
     'BuildSmartNativeVirtualKeyPlan',
     'TrySendSmartNativeKeyCommand',
+    'SmartNativeInputTraceFilter',
+    'EnsureSmartNativeInputTrace',
     'FindSmartNativeColumnIndex',
     'FindSmartNativeInputRowIndex',
     'IsSmartFillSourceIdentityMatch',
@@ -182,6 +184,19 @@ $nativeKeyBody = $feature.Substring($nativeKeyStart, $nativeKeyEnd - $nativeKeyS
 foreach ($marker in @('BuildSmartNativeVirtualKeyPlan(value)', 'keybd_event(', 'Keys.Enter',
     'KeyEventFlagKeyUp', 'Application.DoEvents()')) {
     if (-not $nativeKeyBody.Contains($marker)) { throw "Win32 虚拟键发送缺少真实按键步骤：$marker" }
+}
+$nativeTraceStart = $feature.IndexOf('private sealed class SmartNativeInputTraceFilter : IMessageFilter', [StringComparison]::Ordinal)
+$nativeTraceEnd = $feature.IndexOf('private static int[] BuildSmartNativeVirtualKeyPlan', $nativeTraceStart, [StringComparison]::Ordinal)
+if ($nativeTraceStart -lt 0 -or $nativeTraceEnd -le $nativeTraceStart) {
+    throw '缺少自动失败与人工成功键盘链对比诊断入口'
+}
+$nativeTraceBody = $feature.Substring($nativeTraceStart, $nativeTraceEnd - $nativeTraceStart)
+foreach ($marker in @('WM_KEYDOWN', 'WM_CHAR', 'GetForegroundWindow()', 'GetFocus()',
+    'Application.AddMessageFilter(filter)', 'phase=post-dispatch', 'phase=settled', 'return false;')) {
+    if (-not $nativeTraceBody.Contains($marker)) { throw "键盘链诊断缺少只读证据：$marker" }
+}
+if ($nativeTraceBody.Contains('return true;')) {
+    throw '键盘链诊断不得吞掉或替代宿主键盘消息'
 }
 
 foreach ($marker in @('String.Equals(targetConn.Database, candidate.DatabaseName',

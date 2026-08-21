@@ -1388,12 +1388,194 @@ namespace RecoNet
         }
 
         private const uint KeyEventFlagKeyUp = 0x0002;
+        private static readonly Dictionary<Form, SmartNativeInputTraceFilter> SmartNativeInputTraceFilters =
+            new Dictionary<Form, SmartNativeInputTraceFilter>();
+        private static bool SmartNativeAutomatedInputActive;
 
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern short VkKeyScan(char ch);
 
         [DllImport("user32.dll")]
         private static extern void keybd_event(byte virtualKey, byte scanCode, uint flags, UIntPtr extraInfo);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetFocus();
+
+        private sealed class SmartNativeInputTraceFilter : IMessageFilter
+        {
+            private const int WmKeyDown = 0x0100;
+            private const int WmKeyUp = 0x0101;
+            private const int WmChar = 0x0102;
+            private const int WmDeadChar = 0x0103;
+            private const int WmSysKeyDown = 0x0104;
+            private const int WmSysKeyUp = 0x0105;
+            private const int WmSysChar = 0x0106;
+            private const int WmSysDeadChar = 0x0107;
+
+            private readonly Form mainForm;
+            private readonly DataGridView grid;
+            private bool tracing;
+            private int traceSession;
+            private int messageCount;
+            private DateTime traceStartedAt;
+            private string traceSource = "";
+
+            public SmartNativeInputTraceFilter(Form mainForm, DataGridView grid)
+            {
+                this.mainForm = mainForm;
+                this.grid = grid;
+            }
+
+            public bool PreFilterMessage(ref Message m)
+            {
+                if (!IsKeyboardMessage(m.Msg) || grid == null || grid.IsDisposed) return false;
+                Control target = Control.FromHandle(m.HWnd);
+                bool targetsGrid = target == grid || (target != null && grid.Contains(target));
+                if (!tracing)
+                {
+                    if (!SmartNativeAutomatedInputActive && (!targetsGrid || !IsBlankQuotaCodeCell(grid)))
+                        return false;
+                    tracing = true;
+                    traceSession++;
+                    messageCount = 0;
+                    traceStartedAt = DateTime.Now;
+                    traceSource = SmartNativeAutomatedInputActive ? "plugin" : "manual";
+                    Log("Smart native key trace. session=" + traceSession.ToString(CultureInfo.InvariantCulture) +
+                        " source=" + traceSource + " phase=start " + DescribeSmartNativeInputContext(grid, m.HWnd, target));
+                }
+
+                messageCount++;
+                Log("Smart native key trace. session=" + traceSession.ToString(CultureInfo.InvariantCulture) +
+                    " source=" + traceSource + " phase=message msg=" + SmartNativeMessageName(m.Msg) +
+                    " value=" + unchecked((long)m.WParam).ToString(CultureInfo.InvariantCulture) +
+                    " " + DescribeSmartNativeInputContext(grid, m.HWnd, target));
+
+                bool enter = (m.Msg == WmKeyDown || m.Msg == WmSysKeyDown) &&
+                    unchecked((int)(long)m.WParam) == (int)Keys.Enter;
+                if (enter || messageCount >= 128 || DateTime.Now - traceStartedAt > TimeSpan.FromSeconds(10))
+                {
+                    int completedSession = traceSession;
+                    string completedSource = traceSource;
+                    string reason = enter ? "enter" : "limit";
+                    tracing = false;
+                    ScheduleSmartNativeTraceSnapshot(mainForm, grid, completedSession, completedSource, reason);
+                }
+                return false;
+            }
+
+            private static bool IsKeyboardMessage(int message)
+            {
+                return message == WmKeyDown || message == WmKeyUp || message == WmChar ||
+                    message == WmDeadChar || message == WmSysKeyDown || message == WmSysKeyUp ||
+                    message == WmSysChar || message == WmSysDeadChar;
+            }
+
+            private static string SmartNativeMessageName(int message)
+            {
+                switch (message)
+                {
+                    case WmKeyDown: return "WM_KEYDOWN";
+                    case WmKeyUp: return "WM_KEYUP";
+                    case WmChar: return "WM_CHAR";
+                    case WmDeadChar: return "WM_DEADCHAR";
+                    case WmSysKeyDown: return "WM_SYSKEYDOWN";
+                    case WmSysKeyUp: return "WM_SYSKEYUP";
+                    case WmSysChar: return "WM_SYSCHAR";
+                    case WmSysDeadChar: return "WM_SYSDEADCHAR";
+                    default: return "0x" + message.ToString("X4", CultureInfo.InvariantCulture);
+                }
+            }
+        }
+
+        private static bool IsBlankQuotaCodeCell(DataGridView grid)
+        {
+            if (grid == null || grid.CurrentCell == null) return false;
+            int codeColumnIndex = FindSmartNativeColumnIndex(grid,
+                new[] { "定额编号", "定额编号DE", "编号" });
+            return codeColumnIndex >= 0 && grid.CurrentCell.ColumnIndex == codeColumnIndex &&
+                String.IsNullOrWhiteSpace(GetSmartNativeCellText(grid, grid.CurrentCell.RowIndex, codeColumnIndex));
+        }
+
+        private static string DescribeSmartNativeInputContext(DataGridView grid, IntPtr messageHandle, Control target)
+        {
+            DataGridViewCell current = grid == null ? null : grid.CurrentCell;
+            return "msgHwnd=0x" + messageHandle.ToInt64().ToString("X", CultureInfo.InvariantCulture) +
+                " target=" + (target == null ? "<null>" : target.GetType().FullName + ":" + (target.Name ?? "")) +
+                " foreground=0x" + GetForegroundWindow().ToInt64().ToString("X", CultureInfo.InvariantCulture) +
+                " focus=0x" + GetFocus().ToInt64().ToString("X", CultureInfo.InvariantCulture) +
+                " grid=0x" + (grid == null ? 0L : grid.Handle.ToInt64()).ToString("X", CultureInfo.InvariantCulture) +
+                " gridFocused=" + (grid != null && grid.Focused ? "1" : "0") +
+                " containsFocus=" + (grid != null && grid.ContainsFocus ? "1" : "0") +
+                " cell=" + (current == null ? "<null>" :
+                    current.RowIndex.ToString(CultureInfo.InvariantCulture) + ":" +
+                    current.ColumnIndex.ToString(CultureInfo.InvariantCulture)) +
+                " rows=" + (grid == null ? 0 : grid.Rows.Count).ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static string DescribeSmartNativeGridTail(DataGridView grid)
+        {
+            if (grid == null || grid.IsDisposed) return "grid=<disposed>";
+            int codeColumnIndex = FindSmartNativeColumnIndex(grid,
+                new[] { "定额编号", "定额编号DE", "编号" });
+            int quantityColumnIndex = FindSmartNativeColumnIndex(grid,
+                new[] { "工程数量输入", "工程数量" });
+            List<string> rows = new List<string>();
+            for (int rowIndex = Math.Max(0, grid.Rows.Count - 5); rowIndex < grid.Rows.Count; rowIndex++)
+            {
+                DataGridViewRow row = grid.Rows[rowIndex];
+                rows.Add(rowIndex.ToString(CultureInfo.InvariantCulture) + "[new=" +
+                    (row.IsNewRow ? "1" : "0") + ",code=" +
+                    (codeColumnIndex < 0 ? "<column-missing>" : GetSmartNativeCellText(grid, rowIndex, codeColumnIndex)) +
+                    ",qty=" + (quantityColumnIndex < 0 ? "<column-missing>" :
+                        GetSmartNativeCellText(grid, rowIndex, quantityColumnIndex)) + "]");
+            }
+            return "current=" + (grid.CurrentCell == null ? "<null>" :
+                grid.CurrentCell.RowIndex.ToString(CultureInfo.InvariantCulture) + ":" +
+                grid.CurrentCell.ColumnIndex.ToString(CultureInfo.InvariantCulture)) +
+                " rows=" + grid.Rows.Count.ToString(CultureInfo.InvariantCulture) +
+                " tail=" + String.Join("|", rows.ToArray());
+        }
+
+        private static void ScheduleSmartNativeTraceSnapshot(Form mainForm, DataGridView grid,
+            int session, string source, string reason)
+        {
+            if (mainForm == null || mainForm.IsDisposed) return;
+            mainForm.BeginInvoke(new MethodInvoker(delegate
+            {
+                Log("Smart native key trace. session=" + session.ToString(CultureInfo.InvariantCulture) +
+                    " source=" + source + " phase=post-dispatch reason=" + reason + " " +
+                    DescribeSmartNativeGridTail(grid));
+                Timer timer = new Timer();
+                timer.Interval = 750;
+                timer.Tick += delegate
+                {
+                    timer.Stop();
+                    timer.Dispose();
+                    Log("Smart native key trace. session=" + session.ToString(CultureInfo.InvariantCulture) +
+                        " source=" + source + " phase=settled reason=" + reason + " " +
+                        DescribeSmartNativeGridTail(grid));
+                };
+                timer.Start();
+            }));
+        }
+
+        private static void EnsureSmartNativeInputTrace(Form mainForm, DataGridView grid)
+        {
+            if (mainForm == null || grid == null || SmartNativeInputTraceFilters.ContainsKey(mainForm)) return;
+            SmartNativeInputTraceFilter filter = new SmartNativeInputTraceFilter(mainForm, grid);
+            SmartNativeInputTraceFilters[mainForm] = filter;
+            Application.AddMessageFilter(filter);
+            mainForm.FormClosed += delegate
+            {
+                Application.RemoveMessageFilter(filter);
+                SmartNativeInputTraceFilters.Remove(mainForm);
+            };
+            Log("Smart native key trace installed. gridType=" + grid.GetType().FullName +
+                " grid=0x" + grid.Handle.ToInt64().ToString("X", CultureInfo.InvariantCulture));
+        }
 
         private static int[] BuildSmartNativeVirtualKeyPlan(string value)
         {
@@ -1466,7 +1648,19 @@ namespace RecoNet
                     return false;
                 }
                 string keyError;
-                if (!TrySendSmartNativeKeyCommand(value, out keyError))
+                Log("Smart native key dispatch. value=" + (value ?? "") + " " +
+                    DescribeSmartNativeInputContext(grid, IntPtr.Zero, null));
+                SmartNativeAutomatedInputActive = true;
+                bool sent;
+                try
+                {
+                    sent = TrySendSmartNativeKeyCommand(value, out keyError);
+                }
+                finally
+                {
+                    SmartNativeAutomatedInputActive = false;
+                }
+                if (!sent)
                 {
                     error = keyError;
                     return false;
@@ -1598,6 +1792,7 @@ namespace RecoNet
                 Log("Smart native insert result. " + DescribeSmartNativeFailure(record));
                 return record;
             }
+            EnsureSmartNativeInputTrace(mainForm, grid);
 
             string submissionError = "";
             try
