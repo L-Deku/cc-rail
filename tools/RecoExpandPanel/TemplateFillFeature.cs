@@ -1723,7 +1723,7 @@ namespace RecoNet
             IntPtr keyUpTarget = GetFocus();
             if (keyUpTarget == IntPtr.Zero) keyUpTarget = grid.Handle;
             PostMessage(keyUpTarget, SmartNativeWmKeyUp, (IntPtr)Keys.Enter,
-                new IntPtr(unchecked((long)0xC01C0001u)));
+                new IntPtr(unchecked((int)0xC01C0001u)));
             Application.DoEvents();
             return true;
         }

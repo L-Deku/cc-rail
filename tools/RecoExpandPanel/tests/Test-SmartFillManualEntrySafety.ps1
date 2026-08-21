@@ -215,8 +215,11 @@ if ($nativeEnterStart -lt 0 -or $nativeEnterEnd -le $nativeEnterStart) {
 }
 $nativeEnterBody = $feature.Substring($nativeEnterStart, $nativeEnterEnd - $nativeEnterStart)
 foreach ($marker in @('PostMessage(', 'SmartNativeWmKeyDown', '(IntPtr)Keys.Enter',
-    'WaitAgentUiIdle(20)')) {
+    'WaitAgentUiIdle(20)', 'new IntPtr(unchecked((int)0xC01C0001u))')) {
     if (-not $nativeEnterBody.Contains($marker)) { throw "宿主 Enter 提交缺少人工成功链证据：$marker" }
+}
+if ($nativeEnterBody.Contains('new IntPtr(unchecked((long)0xC01C0001u))')) {
+    throw '32 位宿主不能把 WM_KEYUP 的高位参数作为正 64 位数构造 IntPtr'
 }
 if ($nativeEnterBody.Contains('SendMessage(') -or $nativeEnterBody.Contains('grid.EndEdit(')) {
     throw '宿主 Enter 必须进入消息泵预处理链，不能绕过为同步 WndProc 或直接结束编辑'

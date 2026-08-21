@@ -103,6 +103,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 跨量纲业务换算不得简化成历史单元格地址或一次性结果；应保存 `V0/V1...` 参数公式及每个参数的名称、单位和名称级签名。推荐时只用当前表同章节、邻近行内精确且唯一的参数重新计算；缺参数、同名歧义或单位不兼容时必须取消自动勾选。公式读取先按当前推荐学习库专业范围过滤原始条目分片，再按公式内容合并样本数；条目编号仍只作范围与审计依据。`F10/1000+F11/1000` 仍按独立正向别名学习，不得因此生成共享公式或跨行合计。
 - C# 5 代码中不要在 `||`/`&&` 短路条件里依赖 `out` 参数一定赋值；用于错误文案的 `out` 变量先给默认值，避免 `CS0165`。
 - C# 5 中 lambda 参数名与同一外层代码块后续局部变量也不得同名；新增 `FindIndex`/`Where` 等 lambda 后再定义局部变量时先检查名称，避免 `CS0136`。
+- 32 位 `ReJJGSNet2024` 中构造高位为 1 的 Win32 消息 `lParam`（如 Enter `WM_KEYUP=0xC01C0001`）时，必须先 `unchecked((int)...)` 再构造 `IntPtr`；先转正的 `long` 会在 32 位进程抛出 `OverflowException`，中断宿主原生输入链。
 - 插件访问当前项目数据库时，不得从宿主已脱敏的 `ConnectionString` 克隆新连接，不得恢复备用账号、保存密码或依赖 `Persist Security Info`。UI 线程路径只借用宿主当前 `SqlConnection`，不得 `using`、`Dispose`、`Close` 或 `ChangeDatabase`；后台任务只把短数据库阶段同步调度到 UI 线程，网络请求继续留在后台。预览、执行、撤销和重做必须同时保存并核对连接对象引用与不含密码的 `DataSource|Database` 身份，项目切换后拒绝旧计划。
 - 用 Windows PowerShell 5 反射调用 WinForms 私有构造器做冒烟测试时，先设 `$ErrorActionPreference = 'Stop'`，并把 `New-Object` 返回控件的 `.PSObject.BaseObject` 传给反射 API；泛型 `List<T>`、`HashSet<T>` 等参数也要拆包，否则类型包装错误可能只产生非终止错误并让命令假通过。反射方法只接收一个泛型集合参数时，不要直接用 `[object[]]@($list)`，应先创建长度为 1 的 `object[]` 再将 `.PSObject.BaseObject` 赋给第 0 项，避免 PowerShell 把集合展开成多个参数。反射读取 `List<T>` 后若经辅助函数返回并继续使用 `.Count`/索引，辅助函数应使用 `Write-Output -NoEnumerate`，避免单元素集合被自动展开成标量。
 - 2024 软件预算项目输入 2020 概算/估算定额时，首要检查 `项目设置 -> 定额选择` 是否勾选了迁移书号，或数据库 `项目信息.标准定额应用` 是否包含对应书号。未勾选时会出现“定额编号无效或费用类型不匹配”、计算单价为 0 或“无法找到定额消耗数据”等现象；勾选后 2024 原生辅助查询、输入和计算即可使用迁移定额。
