@@ -39,16 +39,24 @@ foreach ($methodName in @(
         'AgentQuotaCodeMatchWithSuffix',
         'LoadAgentUnitOptions',
         'LoadAgentItemOptions',
-        'LoadAgentQuotaCandidates',
         'ResolveAgentScopeRows',
+        'ResolveAgentNameRows',
         'AgentQuotaCodeKind',
         'ShowAgentPanelWindow')) {
     Assert-True ($null -ne $formType.GetMethod($methodName, $flags)) "method $methodName missing"
 }
 
 # 4) 点选面板与选择对话框类型存在
-foreach ($typeName in @('AgentPanelWindow', 'AgentPickerDialog', 'AgentUnitOption', 'AgentItemOption', 'AgentQuotaCandidate')) {
+foreach ($typeName in @('AgentPanelWindow', 'AgentPickerDialog', 'AgentUnitOption', 'AgentItemOption', 'AgentTargetEntry')) {
     Assert-True ($null -ne $formType.GetNestedType($typeName, $flags)) "nested type $typeName missing"
+}
+
+# 4a) 目标清单支持编号与名称混用
+$panelType = $formType.GetNestedType('AgentPanelWindow', $flags)
+Assert-True ($null -ne $panelType.GetMethod('TakeTargetsFromHostGrid', $flags)) 'TakeTargetsFromHostGrid missing'
+Assert-True ($null -ne $panelType.GetField('targetEntries', $flags)) 'targetEntries field missing'
+foreach ($m in @('TargetCodes', 'TargetNames', 'ApplyTarget')) {
+    Assert-True ($null -ne $panelType.GetMethod($m, $flags)) "panel method $m missing"
 }
 
 # 4b) 编号分类：材料编号 / 补充定额(手填单价) / 普通定额

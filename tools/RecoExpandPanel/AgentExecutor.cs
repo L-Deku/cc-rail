@@ -1293,8 +1293,9 @@ namespace RecoNet
             }
         }
 
-        // 统一的目标行解析：command.QuotaName 非空时按精确定额名称定位，否则按编号过滤。
-        // items/includeChildren/quotaFilter 显式传入，好让复制/移动/替换用自己的来源条目和编号集合。
+        // 统一的目标行解析：编号（quotaFilter）和精确名称（command.QuotaName）可以同时给，结果取并集。
+        // 两个都为空时就是"范围内全部行"。items/includeChildren/quotaFilter 显式传入，
+        // 好让复制/移动/替换用自己的来源条目和编号集合。
         private static List<AgentTargetRow> ResolveAgentScopeRows(SqlConnection conn, AgentSelectionSnapshot selection,
             AgentCommand command, List<string> items, bool includeChildren, List<string> quotaFilter, List<long> unitIds)
         {
@@ -1303,6 +1304,30 @@ namespace RecoNet
                 return ResolveAgentTargetRows(conn, selection, items, includeChildren, quotaFilter, unitIds);
             }
 
+            List<AgentTargetRow> byName = ResolveAgentNameRows(conn, selection, command, items, includeChildren, unitIds);
+            if (quotaFilter == null || quotaFilter.Count == 0)
+            {
+                return byName;
+            }
+
+            // 混用：编号命中的行和名称命中的行合并，按定额序号去重。
+            Dictionary<long, AgentTargetRow> merged = new Dictionary<long, AgentTargetRow>();
+            foreach (AgentTargetRow row in ResolveAgentTargetRows(conn, selection, items, includeChildren, quotaFilter, unitIds))
+            {
+                merged[row.QuotaSequence] = row;
+            }
+
+            foreach (AgentTargetRow row in byName)
+            {
+                merged[row.QuotaSequence] = row;
+            }
+
+            return merged.Values.ToList();
+        }
+
+        private static List<AgentTargetRow> ResolveAgentNameRows(SqlConnection conn, AgentSelectionSnapshot selection,
+            AgentCommand command, List<string> items, bool includeChildren, List<long> unitIds)
+        {
             List<string> quotaNames = SplitAgentExactNameList(command.QuotaName);
             HashSet<string> quotaNameSet = new HashSet<string>(quotaNames, StringComparer.Ordinal);
             if (items != null && items.Count > 0)
@@ -1536,9 +1561,10 @@ namespace RecoNet
         //   第一条（锚行）改成新定额的第 1 项；新定额多出来的项插到锚行后面；组内其余命中行删除。
         private static void BuildReplaceQuotasPlan(SqlConnection conn, AgentSelectionSnapshot selection, AgentCommand command, List<long> unitIds, AgentPlan plan)
         {
-            // 被替换的目标有两种给法：按编号（FromCodes）或按精确名称（QuotaName）。
+            // 被替换的目标有两种给法：按编号（FromCodes）和按精确名称（QuotaName），可以同时给，取并集。
             bool byName = !String.IsNullOrEmpty(command.QuotaName);
-            if (!byName && (command.FromCodes == null || command.FromCodes.Count == 0))
+            bool byCode = command.FromCodes != null && command.FromCodes.Count > 0;
+            if (!byName && !byCode)
             {
                 throw new AgentPlanException("替换定额缺少要被替换的定额编号或名称。");
             }
@@ -1556,19 +1582,9 @@ namespace RecoNet
                 }
             }
 
-            List<AgentTargetRow> matched = new List<AgentTargetRow>();
+            Dictionary<long, AgentTargetRow> matchedMap = new Dictionary<long, AgentTargetRow>();
             Dictionary<long, string> suffixes = new Dictionary<long, string>();
-            if (byName)
-            {
-                // 名称模式：行本身就是精确匹配出来的，没有"整号+系数后缀"的概念。
-                foreach (AgentTargetRow row in ResolveAgentScopeRows(conn, selection, command, command.Items,
-                    command.IncludeChildren, new List<string>(), unitIds))
-                {
-                    matched.Add(row);
-                    suffixes[row.QuotaSequence] = "";
-                }
-            }
-            else
+            if (byCode)
             {
                 foreach (AgentTargetRow row in ResolveAgentTargetRows(conn, selection, command.Items,
                     command.IncludeChildren, command.FromCodes, unitIds))
@@ -1579,19 +1595,35 @@ namespace RecoNet
                         continue;
                     }
 
-                    matched.Add(row);
+                    matchedMap[row.QuotaSequence] = row;
                     suffixes[row.QuotaSequence] = suffix;
                 }
             }
 
+            if (byName)
+            {
+                // 名称命中的行是精确匹配出来的，没有"整号+系数后缀"的概念。
+                foreach (AgentTargetRow row in ResolveAgentNameRows(conn, selection, command, command.Items,
+                    command.IncludeChildren, unitIds))
+                {
+                    matchedMap[row.QuotaSequence] = row;
+                    if (!suffixes.ContainsKey(row.QuotaSequence))
+                    {
+                        suffixes[row.QuotaSequence] = "";
+                    }
+                }
+            }
+
+            List<AgentTargetRow> matched = matchedMap.Values.ToList();
             if (matched.Count == 0)
             {
                 throw new AgentPlanException("在指定范围内没有找到要替换的定额：" +
-                    (byName ? command.QuotaName : String.Join("、", command.FromCodes.ToArray())));
+                    (byCode ? String.Join("、", command.FromCodes.ToArray()) : "") +
+                    (byCode && byName ? "、" : "") + (byName ? command.QuotaName : ""));
             }
 
             // 只有按编号 1→1 且不改数量时保留原来的乘除系数后缀（与旧的“替换定额”行为一致）。
-            bool keepSuffix = !byName && command.FromCodes.Count == 1 && command.ToQuotas.Count == 1 &&
+            bool keepSuffix = byCode && !byName && command.FromCodes.Count == 1 && command.ToQuotas.Count == 1 &&
                 String.IsNullOrEmpty((command.ToQuotas[0].Quantity ?? "").Trim());
             bool hasExtraInserts = command.ToQuotas.Count > 1;
             bool suffixDropped = false;

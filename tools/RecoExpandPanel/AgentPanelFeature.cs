@@ -18,6 +18,15 @@ namespace RecoNet
         // 手填单价的补充定额代码；连同"超过4位纯数字=材料编号"一起，用来在候选列表里标出类型。
         private static readonly string[] AgentSupplementCodes = new string[] { "SF", "SH", "SQ", "ZLF", "LF", "TLF" };
 
+        // 界面配色，集中放一处好统一调。
+        private static readonly Color AgentPanelSectionBack = Color.FromArgb(246, 248, 251);
+        private static readonly Color AgentPanelTitleFore = Color.FromArgb(23, 78, 166);
+        private static readonly Color AgentPanelHintFore = Color.FromArgb(122, 128, 138);
+        private static readonly Color AgentPanelOkFore = Color.FromArgb(22, 121, 60);
+        private static readonly Color AgentPanelWarnFore = Color.FromArgb(176, 96, 12);
+        private static readonly Color AgentPanelErrorFore = Color.FromArgb(190, 40, 40);
+        private static readonly Color AgentPanelLine = Color.FromArgb(219, 225, 234);
+
         private static void ShowAgentPanelWindow(Form mainForm)
         {
             AgentPanelWindow window;
@@ -82,54 +91,22 @@ namespace RecoNet
             return "定额";
         }
 
-        // 一个可选目标：范围内出现过的 定额编号 / 名称 组合。
-        private sealed class AgentQuotaCandidate
+        // 目标清单里的一条：按编号找，还是按精确名称找。两种可以混在同一个清单里。
+        private sealed class AgentTargetEntry
         {
-            public string Code = "";
-            public string Name = "";
-        }
+            public bool ByName;
+            public string Value = "";
 
-        // 范围（条目 × 单元）内出现过的定额编号与名称，供"按编号/按名称"两种挑选模式用。
-        private static List<AgentQuotaCandidate> LoadAgentQuotaCandidates(SqlConnection conn, List<string> itemNos,
-            bool includeChildren, List<long> unitIds)
-        {
-            List<AgentQuotaCandidate> candidates = new List<AgentQuotaCandidate>();
-            HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
-            List<string> scope = (itemNos == null || itemNos.Count == 0) ? new List<string> { null } : itemNos;
-
-            foreach (string itemNo in scope)
+            public override string ToString()
             {
-                using (SqlCommand cmd = conn.CreateCommand())
+                if (ByName)
                 {
-                    string where = String.IsNullOrEmpty(itemNo)
-                        ? "1=1"
-                        : BuildAgentItemCondition(cmd, itemNo, includeChildren, 0);
-                    cmd.CommandText = "select distinct DE.定额编号, DE.工程或费用项目名称 " +
-                        "from 定额输入 DE inner join 章节表 ZJ on DE.条目序号=ZJ.条目序号 " +
-                        "where " + where + BuildAgentUnitCondition(unitIds) +
-                        " order by DE.定额编号, DE.工程或费用项目名称";
-                    using (SqlDataReader reader = cmd.ExecuteReader())
-                    {
-                        while (reader.Read())
-                        {
-                            AgentQuotaCandidate candidate = new AgentQuotaCandidate();
-                            candidate.Code = reader.IsDBNull(0) ? "" : Convert.ToString(reader.GetValue(0)).Trim();
-                            candidate.Name = reader.IsDBNull(1) ? "" : Convert.ToString(reader.GetValue(1)).Trim();
-                            if (candidate.Code.Length == 0 && candidate.Name.Length == 0)
-                            {
-                                continue;
-                            }
-
-                            if (seen.Add(candidate.Code + "" + candidate.Name))
-                            {
-                                candidates.Add(candidate);
-                            }
-                        }
-                    }
+                    return "【名称】" + Value;
                 }
-            }
 
-            return candidates;
+                string kind = AgentQuotaCodeKind(Value);
+                return "【编号】" + Value + (kind.Length > 0 ? "　（" + kind + "）" : "");
+            }
         }
 
         // 选择对话框里的一项：Key 是真正参与命令的值，Display 是给人看的。
@@ -179,47 +156,48 @@ namespace RecoNet
 
                 Panel top = new Panel();
                 top.Dock = DockStyle.Top;
-                top.Height = 34;
-                top.Padding = new Padding(8, 4, 8, 4);
+                top.Height = 36;
+                top.Padding = new Padding(10, 6, 10, 6);
 
                 filterBox = new TextBox();
                 filterBox.Dock = DockStyle.Fill;
                 filterBox.TextChanged += delegate { RefillList(); };
-                top.Controls.Add(filterBox);
 
                 Label filterHint = new Label();
-                filterHint.Text = "筛选：";
+                filterHint.Text = "筛选";
                 filterHint.Dock = DockStyle.Left;
-                filterHint.Width = 44;
+                filterHint.Width = 40;
                 filterHint.TextAlign = ContentAlignment.MiddleLeft;
+
+                top.Controls.Add(filterBox);
                 top.Controls.Add(filterHint);
 
                 Panel bottom = new Panel();
                 bottom.Dock = DockStyle.Bottom;
-                bottom.Height = 42;
-                bottom.Padding = new Padding(8, 6, 8, 6);
+                bottom.Height = 46;
+                bottom.Padding = new Padding(10, 8, 10, 8);
 
                 Button ok = new Button();
                 ok.Text = "确定";
-                ok.Width = 84;
+                ok.Width = 88;
                 ok.Dock = DockStyle.Right;
                 ok.DialogResult = DialogResult.OK;
                 ok.Click += delegate { CollectResult(); };
-
-                Button cancel = new Button();
-                cancel.Text = "取消";
-                cancel.Width = 84;
-                cancel.Dock = DockStyle.Right;
-                cancel.DialogResult = DialogResult.Cancel;
 
                 Panel spacer = new Panel();
                 spacer.Dock = DockStyle.Right;
                 spacer.Width = 8;
 
+                Button cancel = new Button();
+                cancel.Text = "取消";
+                cancel.Width = 88;
+                cancel.Dock = DockStyle.Right;
+                cancel.DialogResult = DialogResult.Cancel;
+
                 countLabel = new Label();
                 countLabel.Dock = DockStyle.Fill;
                 countLabel.TextAlign = ContentAlignment.MiddleLeft;
-                countLabel.ForeColor = Color.Gray;
+                countLabel.ForeColor = AgentPanelHintFore;
 
                 bottom.Controls.Add(countLabel);
                 bottom.Controls.Add(cancel);
@@ -232,6 +210,7 @@ namespace RecoNet
                     checkedList.Dock = DockStyle.Fill;
                     checkedList.CheckOnClick = true;
                     checkedList.IntegralHeight = false;
+                    checkedList.BorderStyle = BorderStyle.None;
                     checkedList.ItemCheck += delegate(object sender, ItemCheckEventArgs e)
                     {
                         AgentPickItem item = checkedList.Items[e.Index] as AgentPickItem;
@@ -258,6 +237,7 @@ namespace RecoNet
                     singleList = new ListBox();
                     singleList.Dock = DockStyle.Fill;
                     singleList.IntegralHeight = false;
+                    singleList.BorderStyle = BorderStyle.None;
                     singleList.DoubleClick += delegate
                     {
                         if (singleList.SelectedItem != null)
@@ -322,7 +302,7 @@ namespace RecoNet
             {
                 if (multiSelect)
                 {
-                    countLabel.Text = "已选 " + checkedKeys.Count.ToString(CultureInfo.InvariantCulture) +
+                    countLabel.Text = "已勾选 " + checkedKeys.Count.ToString(CultureInfo.InvariantCulture) +
                         " 项 / 共 " + allItems.Count.ToString(CultureInfo.InvariantCulture) + " 项";
                 }
                 else
@@ -360,7 +340,8 @@ namespace RecoNet
         private sealed class AgentPanelWindow : Form
         {
             private const string TabValue = "改数值";
-            private const string TabRows = "加减定额";
+            private const string TabReplace = "替换定额";
+            private const string TabRows = "增删定额";
             private const string TabCross = "跨条目";
             private const string TabText = "说一句话";
 
@@ -371,12 +352,10 @@ namespace RecoNet
             private readonly CheckBox allUnitsBox;
             private readonly ListBox itemListBox;
             private readonly CheckBox includeChildrenBox;
-            private readonly RadioButton byCodeRadio;
-            private readonly RadioButton byNameRadio;
-            private readonly Button pickTargetButton;
-            private readonly Button takeFromGridButton;
+            private readonly Button takeCodeButton;
+            private readonly Button takeNameButton;
             private readonly ListBox targetListBox;
-            private readonly Label targetSummaryLabel;
+            private readonly Label targetHintLabel;
 
             // 第二区：操作
             private readonly TabControl tabs;
@@ -386,9 +365,10 @@ namespace RecoNet
             private readonly TextBox valueBox;
             private readonly Label valueHintLabel;
 
+            private readonly DataGridView replaceGrid;
             private readonly ComboBox rowActionBox;
-            private readonly Label quotaGridLabel;
-            private readonly DataGridView quotaGrid;
+            private readonly Label insertGridLabel;
+            private readonly DataGridView insertGrid;
             private readonly Label rowHintLabel;
 
             private readonly ComboBox crossActionBox;
@@ -397,7 +377,6 @@ namespace RecoNet
 
             private readonly TextBox textBox;
             private readonly Button textSendButton;
-            private readonly Label textHintLabel;
 
             // 底部
             private readonly Label sentenceLabel;
@@ -414,8 +393,7 @@ namespace RecoNet
             private readonly List<AgentItemOption> itemOptions = new List<AgentItemOption>();
             private readonly List<string> selectedUnitKeys = new List<string>();
             private readonly List<string> selectedItemNos = new List<string>();
-            private readonly List<string> selectedTargetCodes = new List<string>();
-            private readonly List<string> selectedTargetNames = new List<string>();
+            private readonly List<AgentTargetEntry> targetEntries = new List<AgentTargetEntry>();
             private readonly List<string> crossTargetItems = new List<string>();
 
             private AgentPlan pendingPlan;
@@ -428,9 +406,10 @@ namespace RecoNet
                 this.mainForm = mainForm;
                 Text = "智能指令助手 (Ctrl+Q)　—　跨条目 / 跨单元批量操作";
                 StartPosition = FormStartPosition.Manual;
-                Size = new Size(960, 850);
-                MinimumSize = new Size(820, 680);
+                Size = new Size(920, 830);
+                MinimumSize = new Size(840, 700);
                 ShowInTaskbar = false;
+                Font = new Font("Microsoft YaHei UI", 9f, FontStyle.Regular, GraphicsUnit.Point);
                 try
                 {
                     Location = new Point(
@@ -442,228 +421,244 @@ namespace RecoNet
                     StartPosition = FormStartPosition.CenterParent;
                 }
 
-                // ===== 第一区：作用范围 =====
+                Font titleFont = new Font(Font, FontStyle.Bold);
+
+                // ===================== 第一区：作用范围 =====================
                 Panel scopePanel = new Panel();
                 scopePanel.Dock = DockStyle.Top;
-                scopePanel.Height = 248;
-                scopePanel.Padding = new Padding(10, 6, 10, 4);
+                scopePanel.Height = 202;
+                scopePanel.BackColor = AgentPanelSectionBack;
+                scopePanel.Padding = new Padding(14, 8, 14, 10);
 
-                Label scopeTitle = new Label();
-                scopeTitle.Text = "第一步  作用范围（这一区配一次，下面所有操作共用）";
-                scopeTitle.Dock = DockStyle.Top;
-                scopeTitle.Height = 22;
-                scopeTitle.TextAlign = ContentAlignment.MiddleLeft;
-                scopeTitle.ForeColor = Color.FromArgb(20, 60, 160);
 
+                // --- 单元行 ---
                 Panel unitRow = new Panel();
                 unitRow.Dock = DockStyle.Top;
-                unitRow.Height = 30;
-
-                Label unitLabel = new Label();
-                unitLabel.Text = "单元";
-                unitLabel.SetBounds(0, 6, 34, 20);
+                unitRow.Height = 28;
 
                 unitBox = new TextBox();
+                unitBox.Dock = DockStyle.Fill;
                 unitBox.ReadOnly = true;
-                unitBox.BackColor = SystemColors.Window;
-                unitBox.SetBounds(38, 3, 500, 24);
-                unitBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+                unitBox.BackColor = Color.White;
 
-                Button unitButton = new Button();
-                unitButton.Text = "选单元";
-                unitButton.SetBounds(544, 2, 76, 26);
-                unitButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-                unitButton.Click += delegate { PickUnits(); };
+                Label unitLabel = new Label();
+                unitLabel.Dock = DockStyle.Left;
+                unitLabel.Width = 44;
+                unitLabel.TextAlign = ContentAlignment.MiddleLeft;
+                unitLabel.Text = "单元";
+
+                Button unitPickButton = new Button();
+                unitPickButton.Dock = DockStyle.Right;
+                unitPickButton.Width = 92;
+                unitPickButton.Text = "选单元…";
+                unitPickButton.Click += delegate { PickUnits(); };
 
                 allUnitsBox = new CheckBox();
+                allUnitsBox.Dock = DockStyle.Right;
+                allUnitsBox.Width = 92;
                 allUnitsBox.Text = "所有单元";
-                allUnitsBox.SetBounds(626, 5, 84, 22);
-                allUnitsBox.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+                allUnitsBox.TextAlign = ContentAlignment.MiddleLeft;
                 allUnitsBox.CheckedChanged += delegate
                 {
-                    unitButton.Enabled = !allUnitsBox.Checked;
+                    unitPickButton.Enabled = !allUnitsBox.Checked;
                     UpdateUnitBox();
-                    ClearTargetSelection("单元变了，目标定额已清空，请重新选。");
                     UpdateSentence();
                 };
 
                 unitRow.Controls.Add(unitBox);
                 unitRow.Controls.Add(unitLabel);
-                unitRow.Controls.Add(unitButton);
+                unitRow.Controls.Add(unitPickButton);
                 unitRow.Controls.Add(allUnitsBox);
 
-                // --- 条目：在左侧树点一个条目，点"加入"累积；每个条目含其下全部子条目 ---
-                Panel itemPanel = new Panel();
-                itemPanel.Dock = DockStyle.Top;
-                itemPanel.Height = 86;
+                Panel gapUnderUnit = new Panel();
+                gapUnderUnit.Dock = DockStyle.Top;
+                gapUnderUnit.Height = 6;
 
-                Label itemLabel = new Label();
-                itemLabel.Text = "条目";
-                itemLabel.SetBounds(0, 4, 34, 20);
+                // --- 条目行 ---
+                Panel itemRow = new Panel();
+                itemRow.Dock = DockStyle.Top;
+                itemRow.Height = 82;
 
                 itemListBox = new ListBox();
-                itemListBox.SetBounds(38, 2, 500, 80);
-                itemListBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
+                itemListBox.Dock = DockStyle.Fill;
                 itemListBox.IntegralHeight = false;
                 itemListBox.SelectionMode = SelectionMode.MultiExtended;
+                itemListBox.BorderStyle = BorderStyle.FixedSingle;
+
+                Label itemLabel = new Label();
+                itemLabel.Dock = DockStyle.Left;
+                itemLabel.Width = 44;
+                itemLabel.TextAlign = ContentAlignment.TopLeft;
+                itemLabel.Padding = new Padding(0, 4, 0, 0);
+                itemLabel.Text = "条目";
+
+                Panel itemSideBar = new Panel();
+                itemSideBar.Dock = DockStyle.Right;
+                itemSideBar.Width = 190;
+                itemSideBar.Padding = new Padding(8, 0, 0, 0);
 
                 Button addItemButton = new Button();
-                addItemButton.Text = "加入树上选中";
-                addItemButton.SetBounds(544, 2, 104, 26);
-                addItemButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+                addItemButton.Dock = DockStyle.Fill;
+                addItemButton.Text = "◀ 把左侧树选中的条目加进来";
+                addItemButton.TextAlign = ContentAlignment.MiddleLeft;
+                addItemButton.Padding = new Padding(6, 0, 0, 0);
                 addItemButton.Click += delegate { AddItemFromTree(false); };
 
-                Button removeItemButton = new Button();
-                removeItemButton.Text = "移除";
-                removeItemButton.SetBounds(544, 30, 50, 26);
-                removeItemButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-                removeItemButton.Click += delegate { RemoveSelectedItems(); };
+                Panel itemSmallRow = new Panel();
+                itemSmallRow.Dock = DockStyle.Bottom;
+                itemSmallRow.Height = 26;
+                itemSmallRow.Padding = new Padding(0, 2, 0, 2);
 
                 Button clearItemButton = new Button();
-                clearItemButton.Text = "清空";
-                clearItemButton.SetBounds(598, 30, 50, 26);
-                clearItemButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+                clearItemButton.Dock = DockStyle.Left;
+                clearItemButton.Width = 88;
+                clearItemButton.Text = "全部清空";
                 clearItemButton.Click += delegate { ClearItems(); };
 
+                Button removeItemButton = new Button();
+                removeItemButton.Dock = DockStyle.Left;
+                removeItemButton.Width = 88;
+                removeItemButton.Text = "移除选中";
+                removeItemButton.Click += delegate { RemoveSelectedItems(); };
+
+                itemSmallRow.Controls.Add(clearItemButton);
+                itemSmallRow.Controls.Add(removeItemButton);
+
                 includeChildrenBox = new CheckBox();
-                includeChildrenBox.Text = "含所有子条目";
+                includeChildrenBox.Dock = DockStyle.Bottom;
+                includeChildrenBox.Height = 22;
                 includeChildrenBox.Checked = true;
-                includeChildrenBox.SetBounds(544, 58, 110, 22);
-                includeChildrenBox.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-                includeChildrenBox.CheckedChanged += delegate
-                {
-                    ClearTargetSelection("范围变了，目标定额已清空，请重新选。");
-                    UpdateSentence();
-                };
+                includeChildrenBox.Text = "含所有子条目";
+                includeChildrenBox.CheckedChanged += delegate { UpdateSentence(); };
 
-                itemPanel.Controls.Add(itemListBox);
-                itemPanel.Controls.Add(itemLabel);
-                itemPanel.Controls.Add(addItemButton);
-                itemPanel.Controls.Add(removeItemButton);
-                itemPanel.Controls.Add(clearItemButton);
-                itemPanel.Controls.Add(includeChildrenBox);
+                itemSideBar.Controls.Add(addItemButton);
+                itemSideBar.Controls.Add(itemSmallRow);
+                itemSideBar.Controls.Add(includeChildrenBox);
 
-                // --- 目标定额/材料/SF：按编号 或 按名称 ---
-                Panel targetHeaderRow = new Panel();
-                targetHeaderRow.Dock = DockStyle.Top;
-                targetHeaderRow.Height = 28;
+                itemRow.Controls.Add(itemListBox);
+                itemRow.Controls.Add(itemLabel);
+                itemRow.Controls.Add(itemSideBar);
+
+                Panel gapUnderItem = new Panel();
+                gapUnderItem.Dock = DockStyle.Top;
+                gapUnderItem.Height = 6;
+
+                // --- 目标行 ---
+                Panel targetArea = new Panel();
+                targetArea.Dock = DockStyle.Fill;
+
+                Panel targetHeader = new Panel();
+                targetHeader.Dock = DockStyle.Top;
+                targetHeader.Height = 28;
+
+                targetHintLabel = new Label();
+                targetHintLabel.Dock = DockStyle.Fill;
+                targetHintLabel.TextAlign = ContentAlignment.MiddleLeft;
+                targetHintLabel.ForeColor = AgentPanelWarnFore;
 
                 Label targetLabel = new Label();
+                targetLabel.Dock = DockStyle.Left;
+                targetLabel.Width = 44;
+                targetLabel.TextAlign = ContentAlignment.MiddleLeft;
                 targetLabel.Text = "目标";
-                targetLabel.SetBounds(0, 5, 34, 20);
 
-                byCodeRadio = new RadioButton();
-                byCodeRadio.Text = "按编号";
-                byCodeRadio.Checked = true;
-                byCodeRadio.SetBounds(38, 4, 74, 20);
-                byCodeRadio.CheckedChanged += delegate
-                {
-                    if (byCodeRadio.Checked)
-                    {
-                        ClearTargetSelection(null);
-                        UpdateSentence();
-                    }
-                };
+                takeCodeButton = new Button();
+                takeCodeButton.Dock = DockStyle.Right;
+                takeCodeButton.Width = 132;
+                takeCodeButton.Text = "取选中行的编号";
+                takeCodeButton.Click += delegate { TakeTargetsFromHostGrid(false); };
 
-                byNameRadio = new RadioButton();
-                byNameRadio.Text = "按名称";
-                byNameRadio.SetBounds(118, 4, 74, 20);
-                byNameRadio.CheckedChanged += delegate
-                {
-                    if (byNameRadio.Checked)
-                    {
-                        ClearTargetSelection(null);
-                        UpdateSentence();
-                    }
-                };
+                takeNameButton = new Button();
+                takeNameButton.Dock = DockStyle.Right;
+                takeNameButton.Width = 132;
+                takeNameButton.Text = "取选中行的名称";
+                takeNameButton.Click += delegate { TakeTargetsFromHostGrid(true); };
 
-                pickTargetButton = new Button();
-                pickTargetButton.Text = "从范围内列表选…";
-                pickTargetButton.SetBounds(198, 1, 122, 24);
-                pickTargetButton.Click += delegate { PickTargets(); };
-
-                takeFromGridButton = new Button();
-                takeFromGridButton.Text = "取定额表选中行";
-                takeFromGridButton.SetBounds(326, 1, 116, 24);
-                takeFromGridButton.Click += delegate { TakeTargetsFromHostGrid(); };
+                Button removeTargetButton = new Button();
+                removeTargetButton.Dock = DockStyle.Right;
+                removeTargetButton.Width = 88;
+                removeTargetButton.Text = "移除选中";
+                removeTargetButton.Click += delegate { RemoveSelectedTargets(); };
 
                 Button clearTargetButton = new Button();
-                clearTargetButton.Text = "清空";
-                clearTargetButton.SetBounds(448, 1, 56, 24);
+                clearTargetButton.Dock = DockStyle.Right;
+                clearTargetButton.Width = 88;
+                clearTargetButton.Text = "全部清空";
                 clearTargetButton.Click += delegate
                 {
-                    ClearTargetSelection("目标已清空，将作用于范围内全部行。");
+                    targetEntries.Clear();
+                    UpdateTargetDisplay();
                     UpdateSentence();
+                    SetStatus("目标已清空，将作用于范围内全部行。", false);
                 };
 
-                targetSummaryLabel = new Label();
-                targetSummaryLabel.SetBounds(512, 5, 300, 20);
-                targetSummaryLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-                targetSummaryLabel.ForeColor = Color.Gray;
-
-                targetHeaderRow.Controls.Add(targetLabel);
-                targetHeaderRow.Controls.Add(byCodeRadio);
-                targetHeaderRow.Controls.Add(byNameRadio);
-                targetHeaderRow.Controls.Add(pickTargetButton);
-                targetHeaderRow.Controls.Add(takeFromGridButton);
-                targetHeaderRow.Controls.Add(clearTargetButton);
-                targetHeaderRow.Controls.Add(targetSummaryLabel);
+                targetHeader.Controls.Add(targetHintLabel);
+                targetHeader.Controls.Add(targetLabel);
+                targetHeader.Controls.Add(takeCodeButton);
+                targetHeader.Controls.Add(takeNameButton);
+                targetHeader.Controls.Add(removeTargetButton);
+                targetHeader.Controls.Add(clearTargetButton);
 
                 targetListBox = new ListBox();
                 targetListBox.Dock = DockStyle.Fill;
                 targetListBox.IntegralHeight = false;
-                targetListBox.SelectionMode = SelectionMode.None;
-                targetListBox.BackColor = SystemColors.Control;
+                targetListBox.SelectionMode = SelectionMode.MultiExtended;
                 targetListBox.BorderStyle = BorderStyle.FixedSingle;
 
-                scopePanel.Controls.Add(targetListBox);
-                scopePanel.Controls.Add(targetHeaderRow);
-                scopePanel.Controls.Add(itemPanel);
-                scopePanel.Controls.Add(unitRow);
-                scopePanel.Controls.Add(scopeTitle);
+                targetArea.Controls.Add(targetListBox);
+                targetArea.Controls.Add(targetHeader);
 
-                // ===== 第二区：做什么 =====
+                scopePanel.Controls.Add(targetArea);
+                scopePanel.Controls.Add(gapUnderItem);
+                scopePanel.Controls.Add(itemRow);
+                scopePanel.Controls.Add(gapUnderUnit);
+                scopePanel.Controls.Add(unitRow);
+
+                // ===================== 第二区：选操作 =====================
+                Panel tabsArea = new Panel();
+                tabsArea.Dock = DockStyle.Fill;
+                tabsArea.Padding = new Padding(14, 8, 14, 4);
+
                 tabs = new TabControl();
                 tabs.Dock = DockStyle.Fill;
-                tabs.Padding = new Point(14, 4);
+                tabs.Padding = new Point(16, 5);
 
-                // --- 页签 1：改数值 ---
+                // --- 页签：改数值 ---
                 TabPage valuePage = new TabPage(TabValue);
-                valuePage.Padding = new Padding(12, 14, 12, 8);
                 valuePage.UseVisualStyleBackColor = true;
+                valuePage.Padding = new Padding(16, 16, 16, 10);
 
                 Label fieldLabel = new Label();
+                fieldLabel.SetBounds(6, 12, 40, 22);
                 fieldLabel.Text = "字段";
-                fieldLabel.SetBounds(4, 10, 34, 20);
 
                 fieldBox = new ComboBox();
                 fieldBox.DropDownStyle = ComboBoxStyle.DropDownList;
-                fieldBox.SetBounds(42, 6, 120, 24);
+                fieldBox.SetBounds(48, 8, 124, 25);
                 fieldBox.Items.AddRange(new object[] { "工程数量", "单价", "定额编号", "定额调整" });
                 fieldBox.SelectedIndex = 0;
                 fieldBox.SelectedIndexChanged += delegate { RefreshValueActions(); };
 
                 Label actionLabel = new Label();
-                actionLabel.Text = "操作";
-                actionLabel.SetBounds(180, 10, 34, 20);
+                actionLabel.SetBounds(192, 12, 40, 22);
+                actionLabel.Text = "怎么改";
 
                 valueActionBox = new ComboBox();
                 valueActionBox.DropDownStyle = ComboBoxStyle.DropDownList;
-                valueActionBox.SetBounds(218, 6, 120, 24);
+                valueActionBox.SetBounds(240, 8, 172, 25);
                 valueActionBox.SelectedIndexChanged += delegate { RefreshValueInput(); };
 
                 valueLabel = new Label();
+                valueLabel.SetBounds(432, 12, 76, 22);
                 valueLabel.Text = "系数";
-                valueLabel.SetBounds(356, 10, 62, 20);
 
                 valueBox = new TextBox();
-                valueBox.SetBounds(420, 6, 140, 24);
+                valueBox.SetBounds(508, 8, 160, 25);
                 valueBox.TextChanged += delegate { UpdateSentence(); };
 
                 valueHintLabel = new Label();
-                valueHintLabel.SetBounds(4, 46, 700, 76);
-                valueHintLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-                valueHintLabel.ForeColor = Color.Gray;
+                valueHintLabel.SetBounds(6, 48, 760, 90);
+                valueHintLabel.ForeColor = AgentPanelHintFore;
 
                 valuePage.Controls.Add(fieldLabel);
                 valuePage.Controls.Add(fieldBox);
@@ -673,86 +668,106 @@ namespace RecoNet
                 valuePage.Controls.Add(valueBox);
                 valuePage.Controls.Add(valueHintLabel);
 
-                // --- 页签 2：加减定额 ---
+                // --- 页签：替换定额 ---
+                TabPage replacePage = new TabPage(TabReplace);
+                replacePage.UseVisualStyleBackColor = true;
+                replacePage.Padding = new Padding(16, 12, 16, 12);
+
+                replaceGrid = BuildQuotaGrid();
+                replaceGrid.Dock = DockStyle.Fill;
+
+                Label replaceGridLabel = new Label();
+                replaceGridLabel.Dock = DockStyle.Top;
+                replaceGridLabel.Height = 24;
+                replaceGridLabel.TextAlign = ContentAlignment.MiddleLeft;
+                replaceGridLabel.Text = "替换成（数量留空 = 不改数量）";
+
+                Label replaceHint = new Label();
+                replaceHint.Dock = DockStyle.Top;
+                replaceHint.Height = 52;
+                replaceHint.ForeColor = AgentPanelHintFore;
+                replaceHint.Text = "被替换的就是上面「目标」里列的那些行，不用在这里再选一遍。\r\n" +
+                    "一对一、一对多（拆成几条）、多对一（合并成一条）都支持。拆成多条时只能作用于一个单元。";
+
+                replacePage.Controls.Add(replaceGrid);
+                replacePage.Controls.Add(replaceGridLabel);
+                replacePage.Controls.Add(replaceHint);
+
+                // --- 页签：增删定额 ---
                 TabPage rowPage = new TabPage(TabRows);
-                rowPage.Padding = new Padding(12, 14, 12, 8);
                 rowPage.UseVisualStyleBackColor = true;
+                rowPage.Padding = new Padding(16, 12, 16, 12);
+
+                insertGrid = BuildQuotaGrid();
+                insertGrid.Dock = DockStyle.Fill;
+
+                insertGridLabel = new Label();
+                insertGridLabel.Dock = DockStyle.Top;
+                insertGridLabel.Height = 24;
+                insertGridLabel.TextAlign = ContentAlignment.MiddleLeft;
+                insertGridLabel.Text = "要新增的定额（数量留空 = 不填）";
+
+                rowHintLabel = new Label();
+                rowHintLabel.Dock = DockStyle.Top;
+                rowHintLabel.Height = 44;
+                rowHintLabel.ForeColor = AgentPanelHintFore;
+
+                Panel rowActionRow = new Panel();
+                rowActionRow.Dock = DockStyle.Top;
+                rowActionRow.Height = 34;
 
                 Label rowActionLabel = new Label();
+                rowActionLabel.SetBounds(0, 6, 40, 22);
                 rowActionLabel.Text = "动作";
-                rowActionLabel.SetBounds(4, 10, 34, 20);
 
                 rowActionBox = new ComboBox();
                 rowActionBox.DropDownStyle = ComboBoxStyle.DropDownList;
-                rowActionBox.SetBounds(42, 6, 160, 24);
-                rowActionBox.Items.AddRange(new object[] { "替换目标定额", "新增定额", "删除目标定额" });
+                rowActionBox.SetBounds(48, 2, 180, 25);
+                rowActionBox.Items.AddRange(new object[] { "新增定额", "删除目标定额" });
                 rowActionBox.SelectedIndex = 0;
                 rowActionBox.SelectedIndexChanged += delegate { RefreshRowAction(); };
 
-                rowHintLabel = new Label();
-                rowHintLabel.SetBounds(214, 10, 500, 20);
-                rowHintLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-                rowHintLabel.ForeColor = Color.Gray;
+                rowActionRow.Controls.Add(rowActionLabel);
+                rowActionRow.Controls.Add(rowActionBox);
 
-                quotaGridLabel = new Label();
-                quotaGridLabel.SetBounds(4, 40, 400, 18);
-
-                quotaGrid = new DataGridView();
-                quotaGrid.SetBounds(4, 60, 700, 150);
-                quotaGrid.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
-                quotaGrid.AllowUserToAddRows = true;
-                quotaGrid.AllowUserToDeleteRows = true;
-                quotaGrid.RowHeadersVisible = false;
-                quotaGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
-                quotaGrid.Columns.Add("Code", "定额编号");
-                quotaGrid.Columns.Add("Quantity", "工程数量");
-                quotaGrid.Columns["Code"].FillWeight = 62;
-                quotaGrid.Columns["Quantity"].FillWeight = 38;
-                quotaGrid.CellEndEdit += delegate { UpdateSentence(); };
-                quotaGrid.UserDeletedRow += delegate { UpdateSentence(); };
-
-                rowPage.Controls.Add(rowActionLabel);
-                rowPage.Controls.Add(rowActionBox);
+                rowPage.Controls.Add(insertGrid);
+                rowPage.Controls.Add(insertGridLabel);
                 rowPage.Controls.Add(rowHintLabel);
-                rowPage.Controls.Add(quotaGridLabel);
-                rowPage.Controls.Add(quotaGrid);
+                rowPage.Controls.Add(rowActionRow);
 
-                // --- 页签 3：跨条目 ---
+                // --- 页签：跨条目 ---
                 TabPage crossPage = new TabPage(TabCross);
-                crossPage.Padding = new Padding(12, 14, 12, 8);
                 crossPage.UseVisualStyleBackColor = true;
+                crossPage.Padding = new Padding(16, 16, 16, 10);
 
                 Label crossActionLabel = new Label();
+                crossActionLabel.SetBounds(6, 12, 40, 22);
                 crossActionLabel.Text = "动作";
-                crossActionLabel.SetBounds(4, 10, 34, 20);
 
                 crossActionBox = new ComboBox();
                 crossActionBox.DropDownStyle = ComboBoxStyle.DropDownList;
-                crossActionBox.SetBounds(42, 6, 120, 24);
+                crossActionBox.SetBounds(48, 8, 124, 25);
                 crossActionBox.Items.AddRange(new object[] { "复制到", "移动到" });
                 crossActionBox.SelectedIndex = 0;
                 crossActionBox.SelectedIndexChanged += delegate { RefreshCrossAction(); };
 
                 Label crossTargetLabel = new Label();
+                crossTargetLabel.SetBounds(192, 12, 64, 22);
                 crossTargetLabel.Text = "目标条目";
-                crossTargetLabel.SetBounds(180, 10, 62, 20);
 
                 crossTargetBox = new TextBox();
+                crossTargetBox.SetBounds(258, 8, 396, 25);
                 crossTargetBox.ReadOnly = true;
-                crossTargetBox.BackColor = SystemColors.Window;
-                crossTargetBox.SetBounds(246, 6, 356, 24);
-                crossTargetBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+                crossTargetBox.BackColor = Color.White;
 
                 Button crossTargetButton = new Button();
-                crossTargetButton.Text = "选条目";
-                crossTargetButton.SetBounds(608, 5, 78, 26);
-                crossTargetButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+                crossTargetButton.SetBounds(662, 7, 96, 27);
+                crossTargetButton.Text = "选条目…";
                 crossTargetButton.Click += delegate { PickCrossTargets(); };
 
                 crossHintLabel = new Label();
-                crossHintLabel.SetBounds(4, 46, 700, 76);
-                crossHintLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-                crossHintLabel.ForeColor = Color.Gray;
+                crossHintLabel.SetBounds(6, 48, 760, 90);
+                crossHintLabel.ForeColor = AgentPanelHintFore;
 
                 crossPage.Controls.Add(crossActionLabel);
                 crossPage.Controls.Add(crossActionBox);
@@ -761,44 +776,56 @@ namespace RecoNet
                 crossPage.Controls.Add(crossTargetButton);
                 crossPage.Controls.Add(crossHintLabel);
 
-                // --- 页签 4：说一句话 ---
+                // --- 页签：说一句话 ---
                 TabPage textPage = new TabPage(TabText);
-                textPage.Padding = new Padding(12, 14, 12, 8);
                 textPage.UseVisualStyleBackColor = true;
+                textPage.Padding = new Padding(16, 12, 16, 12);
 
                 textBox = new TextBox();
+                textBox.Dock = DockStyle.Fill;
                 textBox.Multiline = true;
                 textBox.ScrollBars = ScrollBars.Vertical;
-                textBox.SetBounds(4, 6, 590, 62);
-                textBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
                 textBox.Font = new Font(Font.FontFamily, 10.5f);
 
+                Panel textSideBar = new Panel();
+                textSideBar.Dock = DockStyle.Right;
+                textSideBar.Width = 116;
+                textSideBar.Padding = new Padding(8, 0, 0, 0);
+
                 textSendButton = new Button();
+                textSendButton.Dock = DockStyle.Top;
+                textSendButton.Height = 34;
                 textSendButton.Text = "交给 AI";
-                textSendButton.SetBounds(602, 6, 88, 30);
-                textSendButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
                 textSendButton.Click += delegate { SubmitText(); };
 
+                Panel textButtonGap = new Panel();
+                textButtonGap.Dock = DockStyle.Top;
+                textButtonGap.Height = 6;
+
                 Button helpButton = new Button();
+                helpButton.Dock = DockStyle.Top;
+                helpButton.Height = 30;
                 helpButton.Text = "指令帮助";
-                helpButton.SetBounds(602, 40, 88, 28);
-                helpButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
                 helpButton.Click += delegate { ShowHelpDialog(); };
 
-                textHintLabel = new Label();
-                textHintLabel.SetBounds(4, 74, 690, 90);
-                textHintLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-                textHintLabel.ForeColor = Color.Gray;
-                textHintLabel.Text = "兜底通道：上面的按钮拼不出来时才用（新建单元、运输方案、材料价方案只能从这里走）。\r\n" +
+                textSideBar.Controls.Add(helpButton);
+                textSideBar.Controls.Add(textButtonGap);
+                textSideBar.Controls.Add(textSendButton);
+
+                Label textHintLabel = new Label();
+                textHintLabel.Dock = DockStyle.Bottom;
+                textHintLabel.Height = 74;
+                textHintLabel.ForeColor = AgentPanelHintFore;
+                textHintLabel.Text = "兜底通道：上面的按钮拼不出来时才用。新建单元、运输方案、材料价方案只能从这里走。\r\n" +
                     "也可以直接输入 撤销 / 重做 / 帮助 / 探查 关键词。\r\n" +
-                    "自然语言需要已配置 RecoQuotaData/deepseek-settings.json；确定性文本语法（如 工程数量 0101-01 *0.85）不需要 AI。";
+                    "自然语言需要已配置 RecoQuotaData/deepseek-settings.json；确定性写法（如 工程数量 0101-01 *0.85）不需要 AI。";
 
                 textPage.Controls.Add(textBox);
-                textPage.Controls.Add(textSendButton);
-                textPage.Controls.Add(helpButton);
+                textPage.Controls.Add(textSideBar);
                 textPage.Controls.Add(textHintLabel);
 
                 tabs.TabPages.Add(valuePage);
+                tabs.TabPages.Add(replacePage);
                 tabs.TabPages.Add(rowPage);
                 tabs.TabPages.Add(crossPage);
                 tabs.TabPages.Add(textPage);
@@ -808,63 +835,73 @@ namespace RecoNet
                     UpdateSentence();
                 };
 
-                // ===== 操作条 =====
+                tabsArea.Controls.Add(tabs);
+
+                // ===================== 操作条 =====================
                 Panel actionBar = new Panel();
                 actionBar.Dock = DockStyle.Bottom;
-                actionBar.Height = 66;
-                actionBar.Padding = new Padding(10, 4, 10, 4);
+                actionBar.Height = 70;
+                actionBar.Padding = new Padding(14, 6, 14, 8);
 
                 sentenceLabel = new Label();
                 sentenceLabel.Dock = DockStyle.Top;
-                sentenceLabel.Height = 30;
+                sentenceLabel.Height = 28;
                 sentenceLabel.TextAlign = ContentAlignment.MiddleLeft;
-                sentenceLabel.ForeColor = Color.FromArgb(20, 60, 160);
+                sentenceLabel.ForeColor = AgentPanelTitleFore;
 
                 Panel buttonRow = new Panel();
                 buttonRow.Dock = DockStyle.Fill;
 
-                undoButton = new Button();
-                undoButton.Text = "撤销上一步";
-                undoButton.SetBounds(0, 1, 108, 28);
-                undoButton.Click += delegate { PreviewUndo(); };
-
-                redoButton = new Button();
-                redoButton.Text = "重做";
-                redoButton.SetBounds(114, 1, 68, 28);
-                redoButton.Click += delegate { PreviewRedo(); };
-
                 previewButton = new Button();
-                previewButton.Text = "生成预览";
-                previewButton.Width = 110;
-                previewButton.Height = 28;
-                previewButton.Top = 1;
-                previewButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+                previewButton.Dock = DockStyle.Right;
+                previewButton.Width = 132;
+                previewButton.Text = "生成预览 ▸";
+                previewButton.Font = titleFont;
                 previewButton.BackColor = Color.FromArgb(222, 236, 252);
                 previewButton.Click += delegate { SubmitPanelCommand(); };
 
-                buttonRow.Controls.Add(undoButton);
+                Panel buttonSpacer = new Panel();
+                buttonSpacer.Dock = DockStyle.Fill;
+
+                undoButton = new Button();
+                undoButton.Dock = DockStyle.Left;
+                undoButton.Width = 116;
+                undoButton.Text = "撤销上一步";
+                undoButton.Click += delegate { PreviewUndo(); };
+
+                Panel undoGap = new Panel();
+                undoGap.Dock = DockStyle.Left;
+                undoGap.Width = 6;
+
+                redoButton = new Button();
+                redoButton.Dock = DockStyle.Left;
+                redoButton.Width = 76;
+                redoButton.Text = "重做";
+                redoButton.Click += delegate { PreviewRedo(); };
+
+                buttonRow.Controls.Add(buttonSpacer);
                 buttonRow.Controls.Add(redoButton);
+                buttonRow.Controls.Add(undoGap);
+                buttonRow.Controls.Add(undoButton);
                 buttonRow.Controls.Add(previewButton);
-                buttonRow.Resize += delegate
-                {
-                    previewButton.Left = Math.Max(190, buttonRow.Width - previewButton.Width - 4);
-                };
 
                 actionBar.Controls.Add(buttonRow);
                 actionBar.Controls.Add(sentenceLabel);
 
-                // ===== 第三区：确认执行 =====
+                // ===================== 第三区：确认执行 =====================
                 previewPanel = new Panel();
                 previewPanel.Dock = DockStyle.Bottom;
-                previewPanel.Height = 250;
+                previewPanel.Height = 258;
                 previewPanel.Visible = false;
-                previewPanel.Padding = new Padding(10, 4, 10, 4);
+                previewPanel.BackColor = AgentPanelSectionBack;
+                previewPanel.Padding = new Padding(14, 6, 14, 8);
 
                 summaryLabel = new Label();
                 summaryLabel.Dock = DockStyle.Top;
-                summaryLabel.Height = 30;
+                summaryLabel.Height = 26;
                 summaryLabel.TextAlign = ContentAlignment.MiddleLeft;
-                summaryLabel.ForeColor = Color.FromArgb(160, 80, 0);
+                summaryLabel.ForeColor = AgentPanelWarnFore;
+                summaryLabel.Font = titleFont;
 
                 previewGrid = new DataGridView();
                 previewGrid.Dock = DockStyle.Fill;
@@ -872,6 +909,10 @@ namespace RecoNet
                 previewGrid.AllowUserToAddRows = false;
                 previewGrid.AllowUserToDeleteRows = false;
                 previewGrid.RowHeadersVisible = false;
+                previewGrid.BackgroundColor = Color.White;
+                previewGrid.BorderStyle = BorderStyle.FixedSingle;
+                previewGrid.EnableHeadersVisualStyles = false;
+                previewGrid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(238, 242, 248);
                 previewGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
                 previewGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
                 previewGrid.Columns.Add("Action", "操作");
@@ -889,32 +930,30 @@ namespace RecoNet
 
                 Panel confirmRow = new Panel();
                 confirmRow.Dock = DockStyle.Bottom;
-                confirmRow.Height = 40;
+                confirmRow.Height = 42;
+                confirmRow.Padding = new Padding(0, 6, 0, 0);
 
                 Button confirmButton = new Button();
+                confirmButton.Dock = DockStyle.Right;
+                confirmButton.Width = 124;
                 confirmButton.Text = "确认执行";
-                confirmButton.Width = 110;
-                confirmButton.Height = 30;
-                confirmButton.Top = 5;
-                confirmButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-                confirmButton.BackColor = Color.FromArgb(220, 240, 220);
+                confirmButton.Font = titleFont;
+                confirmButton.BackColor = Color.FromArgb(216, 240, 220);
                 confirmButton.Click += delegate { ConfirmPlan(); };
 
+                Panel confirmGap = new Panel();
+                confirmGap.Dock = DockStyle.Right;
+                confirmGap.Width = 8;
+
                 Button cancelButton = new Button();
+                cancelButton.Dock = DockStyle.Right;
+                cancelButton.Width = 92;
                 cancelButton.Text = "取消";
-                cancelButton.Width = 80;
-                cancelButton.Height = 30;
-                cancelButton.Top = 5;
-                cancelButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
                 cancelButton.Click += delegate { CancelPlan("已取消，未执行任何修改。"); };
 
-                confirmRow.Controls.Add(confirmButton);
                 confirmRow.Controls.Add(cancelButton);
-                confirmRow.Resize += delegate
-                {
-                    confirmButton.Left = confirmRow.Width - confirmButton.Width - cancelButton.Width - 20;
-                    cancelButton.Left = confirmRow.Width - cancelButton.Width - 8;
-                };
+                confirmRow.Controls.Add(confirmGap);
+                confirmRow.Controls.Add(confirmButton);
 
                 previewPanel.Controls.Add(previewGrid);
                 previewPanel.Controls.Add(summaryLabel);
@@ -922,12 +961,12 @@ namespace RecoNet
 
                 statusLabel = new Label();
                 statusLabel.Dock = DockStyle.Bottom;
-                statusLabel.Height = 24;
+                statusLabel.Height = 26;
                 statusLabel.TextAlign = ContentAlignment.MiddleLeft;
-                statusLabel.BorderStyle = BorderStyle.FixedSingle;
-                statusLabel.Padding = new Padding(6, 0, 0, 0);
+                statusLabel.BackColor = Color.FromArgb(240, 242, 246);
+                statusLabel.Padding = new Padding(10, 0, 6, 0);
 
-                Controls.Add(tabs);
+                Controls.Add(tabsArea);
                 Controls.Add(actionBar);
                 Controls.Add(previewPanel);
                 Controls.Add(statusLabel);
@@ -950,8 +989,26 @@ namespace RecoNet
                 RefreshScopeAvailability();
                 RefreshUndoRedoButtons();
                 UpdateSentence();
-                SetStatus("用法：左侧树点中条目 → \"加入树上选中\"（可反复加多个）；选单元；" +
-                    "目标可以从定额表多选几行后点\"取定额表选中行\"，按编号或精确名称在整个范围内查找。", false);
+                SetStatus("用法：左侧树点中条目 → 点「把左侧树选中的条目加进来」，可反复加；再选单元；" +
+                    "然后在主程序定额表多选几行，点「取选中行的编号」或「取选中行的名称」。", false);
+            }
+
+            private static DataGridView BuildQuotaGrid()
+            {
+                DataGridView grid = new DataGridView();
+                grid.AllowUserToAddRows = true;
+                grid.AllowUserToDeleteRows = true;
+                grid.RowHeadersVisible = false;
+                grid.BackgroundColor = Color.White;
+                grid.BorderStyle = BorderStyle.FixedSingle;
+                grid.EnableHeadersVisualStyles = false;
+                grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(238, 242, 248);
+                grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+                grid.Columns.Add("Code", "定额编号");
+                grid.Columns.Add("Quantity", "工程数量");
+                grid.Columns["Code"].FillWeight = 62;
+                grid.Columns["Quantity"].FillWeight = 38;
+                return grid;
             }
 
             // ===== 打开/激活 =====
@@ -990,7 +1047,8 @@ namespace RecoNet
                 selectedItemNos.Clear();
                 crossTargetItems.Clear();
                 crossTargetBox.Text = "";
-                ClearTargetSelection(null);
+                targetEntries.Clear();
+                UpdateTargetDisplay();
                 UpdateItemList();
                 LoadScopeOptions();
             }
@@ -1082,7 +1140,7 @@ namespace RecoNet
 
                 if (selectedUnitKeys.Count == 0)
                 {
-                    unitBox.Text = "（未识别当前单元，请点\"选单元\"）";
+                    unitBox.Text = "（未识别当前单元，请点右边「选单元…」）";
                     return;
                 }
 
@@ -1092,7 +1150,8 @@ namespace RecoNet
                     parts.Add(UnitDisplayOf(key));
                 }
 
-                unitBox.Text = String.Join("、", parts.ToArray());
+                unitBox.Text = "共 " + selectedUnitKeys.Count.ToString(CultureInfo.InvariantCulture) + " 个：" +
+                    String.Join("、", parts.ToArray());
             }
 
             private void UpdateItemList()
@@ -1124,7 +1183,7 @@ namespace RecoNet
                     items.Add(item);
                 }
 
-                using (AgentPickerDialog dialog = new AgentPickerDialog("选择单元（可多选）", items, true, selectedUnitKeys))
+                using (AgentPickerDialog dialog = new AgentPickerDialog("勾选要操作的单元（可多选）", items, true, selectedUnitKeys))
                 {
                     if (dialog.ShowDialog(this) != DialogResult.OK)
                     {
@@ -1136,8 +1195,8 @@ namespace RecoNet
                 }
 
                 UpdateUnitBox();
-                ClearTargetSelection("单元变了，目标定额已清空，请重新选。");
                 UpdateSentence();
+                SetStatus("已选 " + selectedUnitKeys.Count.ToString(CultureInfo.InvariantCulture) + " 个单元。", false);
             }
 
             // 从左侧树取当前条目并累积进列表；同一个条目不重复加。
@@ -1151,7 +1210,7 @@ namespace RecoNet
                     {
                         if (!quiet)
                         {
-                            SetStatus("当前没有选中树节点，请先在左侧树上点一个条目。", true);
+                            SetStatus("左侧树上还没有选中节点，请先在树上点一个条目。", true);
                         }
 
                         return;
@@ -1181,12 +1240,12 @@ namespace RecoNet
 
                     selectedItemNos.Add(itemNo);
                     UpdateItemList();
-                    ClearTargetSelection(null);
                     UpdateSentence();
                     if (!quiet)
                     {
-                        SetStatus("已加入条目 " + ItemDisplayOf(itemNo) + "，共 " +
-                            selectedItemNos.Count.ToString(CultureInfo.InvariantCulture) + " 个。可以继续在树上点别的条目再加。", false);
+                        SetStatus("已加入 " + ItemDisplayOf(itemNo) + "，条目共 " +
+                            selectedItemNos.Count.ToString(CultureInfo.InvariantCulture) +
+                            " 个。可以继续在左侧树点别的条目再加。", false);
                     }
                 }
                 catch (Exception ex)
@@ -1224,7 +1283,6 @@ namespace RecoNet
                 }
 
                 UpdateItemList();
-                ClearTargetSelection(null);
                 UpdateSentence();
             }
 
@@ -1232,49 +1290,60 @@ namespace RecoNet
             {
                 selectedItemNos.Clear();
                 UpdateItemList();
-                ClearTargetSelection(null);
                 UpdateSentence();
                 SetStatus("条目列表已清空。", false);
             }
 
             // ===== 目标定额 / 材料 / SF =====
 
-            private void ClearTargetSelection(string message)
-            {
-                selectedTargetCodes.Clear();
-                selectedTargetNames.Clear();
-                UpdateTargetDisplay();
-                if (!String.IsNullOrEmpty(message))
-                {
-                    SetStatus(message, false);
-                }
-            }
-
             private void UpdateTargetDisplay()
             {
                 targetListBox.Items.Clear();
-                List<string> selected = byNameRadio.Checked ? selectedTargetNames : selectedTargetCodes;
-                foreach (string value in selected)
+                foreach (AgentTargetEntry entry in targetEntries)
                 {
-                    targetListBox.Items.Add(value);
+                    targetListBox.Items.Add(entry);
                 }
 
-                if (selected.Count == 0)
+                int codeCount = 0;
+                int nameCount = 0;
+                foreach (AgentTargetEntry entry in targetEntries)
                 {
-                    targetSummaryLabel.ForeColor = Color.FromArgb(160, 80, 0);
-                    targetSummaryLabel.Text = "未选目标 = 作用于范围内全部行";
+                    if (entry.ByName)
+                    {
+                        nameCount++;
+                    }
+                    else
+                    {
+                        codeCount++;
+                    }
+                }
+
+                if (targetEntries.Count == 0)
+                {
+                    targetHintLabel.ForeColor = AgentPanelWarnFore;
+                    targetHintLabel.Text = "未选目标 → 作用于范围内全部行";
                 }
                 else
                 {
-                    targetSummaryLabel.ForeColor = Color.FromArgb(0, 120, 0);
-                    targetSummaryLabel.Text = "按" + (byNameRadio.Checked ? "名称" : "编号") + "查找这 " +
-                        selected.Count.ToString(CultureInfo.InvariantCulture) + " 项";
+                    targetHintLabel.ForeColor = AgentPanelOkFore;
+                    List<string> parts = new List<string>();
+                    if (codeCount > 0)
+                    {
+                        parts.Add("编号 " + codeCount.ToString(CultureInfo.InvariantCulture) + " 项");
+                    }
+
+                    if (nameCount > 0)
+                    {
+                        parts.Add("名称 " + nameCount.ToString(CultureInfo.InvariantCulture) + " 项");
+                    }
+
+                    targetHintLabel.Text = "在范围内查找：" + String.Join(" + ", parts.ToArray());
                 }
             }
 
             // 在主程序定额输入表里多选几行，把这些行的编号或精确名称取过来当查找依据。
             // 注意语义：取的是"找什么"，不是"只改这几行"——真正作用的是上面条目×单元范围内所有匹配的行。
-            private void TakeTargetsFromHostGrid()
+            private void TakeTargetsFromHostGrid(bool byName)
             {
                 List<string> picked = new List<string>();
                 HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
@@ -1288,7 +1357,6 @@ namespace RecoNet
                         return;
                     }
 
-                    bool byName = byNameRadio.Checked;
                     foreach (DataGridViewRow row in GetSelectedQuotaRows(grid))
                     {
                         rowCount++;
@@ -1317,112 +1385,95 @@ namespace RecoNet
 
                 if (picked.Count == 0)
                 {
-                    SetStatus(byNameRadio.Checked
-                        ? "选中的行读不到项目名称，换\"按编号\"再试。"
-                        : "选中的行读不到定额编号，换\"按名称\"再试。", true);
+                    SetStatus(byName ? "选中的行读不到项目名称。" : "选中的行读不到定额编号。", true);
                     return;
                 }
 
-                List<string> current = byNameRadio.Checked ? selectedTargetNames : selectedTargetCodes;
                 int added = 0;
                 foreach (string value in picked)
                 {
-                    if (!current.Contains(value))
+                    bool exists = false;
+                    foreach (AgentTargetEntry entry in targetEntries)
                     {
-                        current.Add(value);
-                        added++;
+                        if (entry.ByName == byName && String.Equals(entry.Value, value, StringComparison.Ordinal))
+                        {
+                            exists = true;
+                            break;
+                        }
                     }
+
+                    if (exists)
+                    {
+                        continue;
+                    }
+
+                    AgentTargetEntry fresh = new AgentTargetEntry();
+                    fresh.ByName = byName;
+                    fresh.Value = value;
+                    targetEntries.Add(fresh);
+                    added++;
                 }
 
                 UpdateTargetDisplay();
                 UpdateSentence();
                 SetStatus("从定额表 " + rowCount.ToString(CultureInfo.InvariantCulture) + " 个选中行取到 " +
-                    added.ToString(CultureInfo.InvariantCulture) + " 个新" + (byNameRadio.Checked ? "名称" : "编号") +
-                    "，共 " + current.Count.ToString(CultureInfo.InvariantCulture) + " 个。将在上面的条目×单元范围内查找。", false);
+                    added.ToString(CultureInfo.InvariantCulture) + " 个新" + (byName ? "名称" : "编号") +
+                    "。这些是查找依据，会在上面的条目 × 单元范围内逐一查找。", false);
             }
 
-            private void PickTargets()
+            private void RemoveSelectedTargets()
             {
-                if (selectedItemNos.Count == 0)
+                List<int> indexes = new List<int>();
+                foreach (int index in targetListBox.SelectedIndices)
                 {
-                    SetStatus("请先加入至少一个条目，才能列出范围内的定额。", true);
+                    indexes.Add(index);
+                }
+
+                if (indexes.Count == 0)
+                {
+                    SetStatus("请先在目标列表里选中要移除的行。", true);
                     return;
                 }
 
-                List<AgentQuotaCandidate> candidates;
-                try
+                indexes.Sort();
+                for (int i = indexes.Count - 1; i >= 0; i--)
                 {
-                    SqlConnection conn = GetOpenProjectConnection(mainForm);
-                    List<long> unitIds = ResolveScopeUnitIds(conn);
-                    candidates = LoadAgentQuotaCandidates(conn, selectedItemNos, includeChildrenBox.Checked, unitIds);
-                }
-                catch (AgentPlanException ex)
-                {
-                    SetStatus(ex.Message, true);
-                    return;
-                }
-                catch (Exception ex)
-                {
-                    SetStatus("读取范围内定额失败：" + ex.Message, true);
-                    Log("Agent panel load candidates failed: " + ex);
-                    return;
-                }
-
-                if (candidates.Count == 0)
-                {
-                    SetStatus("所选条目和单元范围内没有任何定额行。", true);
-                    return;
-                }
-
-                bool byName = byNameRadio.Checked;
-                List<AgentPickItem> items = new List<AgentPickItem>();
-                HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
-                foreach (AgentQuotaCandidate candidate in candidates)
-                {
-                    string key = byName ? candidate.Name : candidate.Code;
-                    if (key.Length == 0 || !seen.Add(key))
+                    if (indexes[i] >= 0 && indexes[i] < targetEntries.Count)
                     {
-                        continue;
+                        targetEntries.RemoveAt(indexes[i]);
                     }
-
-                    AgentPickItem item = new AgentPickItem();
-                    item.Key = key;
-                    if (byName)
-                    {
-                        item.Display = candidate.Name + "　［" + candidate.Code + "］";
-                    }
-                    else
-                    {
-                        string kind = AgentQuotaCodeKind(candidate.Code);
-                        item.Display = candidate.Code + "　［" + kind + "］　" + candidate.Name;
-                    }
-
-                    items.Add(item);
-                }
-
-                List<string> current = byName ? selectedTargetNames : selectedTargetCodes;
-                string title = byName ? "按名称选择目标（可多选，精确名称）" : "按编号选择目标：定额 / 材料 / SF（可多选）";
-                using (AgentPickerDialog dialog = new AgentPickerDialog(title, items, true, current))
-                {
-                    if (dialog.ShowDialog(this) != DialogResult.OK)
-                    {
-                        return;
-                    }
-
-                    current.Clear();
-                    current.AddRange(dialog.SelectedKeys);
                 }
 
                 UpdateTargetDisplay();
                 UpdateSentence();
             }
 
-            // 目标候选查询要用真实的单元序号，这里做一次和执行层一致的解析。
-            private List<long> ResolveScopeUnitIds(SqlConnection conn)
+            private List<string> TargetCodes()
             {
-                AgentCommand probe = new AgentCommand();
-                probe.Units = BuildUnitTokens();
-                return ResolveAgentUnitIds(conn, probe, CaptureAgentSelectionForPanel(), new List<string>());
+                List<string> codes = new List<string>();
+                foreach (AgentTargetEntry entry in targetEntries)
+                {
+                    if (!entry.ByName)
+                    {
+                        codes.Add(entry.Value);
+                    }
+                }
+
+                return codes;
+            }
+
+            private List<string> TargetNames()
+            {
+                List<string> names = new List<string>();
+                foreach (AgentTargetEntry entry in targetEntries)
+                {
+                    if (entry.ByName)
+                    {
+                        names.Add(entry.Value);
+                    }
+                }
+
+                return names;
             }
 
             private void PickCrossTargets()
@@ -1442,7 +1493,7 @@ namespace RecoNet
                 }
 
                 bool multi = crossActionBox.Text == "复制到";
-                string title = multi ? "选择目标条目（可多选）" : "选择目标条目（移动只能选一个）";
+                string title = multi ? "勾选目标条目（可多选）" : "选择目标条目（移动只能选一个）";
                 using (AgentPickerDialog dialog = new AgentPickerDialog(title, items, multi, crossTargetItems))
                 {
                     if (dialog.ShowDialog(this) != DialogResult.OK)
@@ -1480,10 +1531,8 @@ namespace RecoNet
                 allUnitsBox.Enabled = scopeUsed;
                 itemListBox.Enabled = scopeUsed;
                 includeChildrenBox.Enabled = scopeUsed;
-                byCodeRadio.Enabled = targetUsed;
-                byNameRadio.Enabled = targetUsed;
-                pickTargetButton.Enabled = targetUsed;
-                takeFromGridButton.Enabled = targetUsed;
+                takeCodeButton.Enabled = targetUsed;
+                takeNameButton.Enabled = targetUsed;
                 targetListBox.Enabled = targetUsed;
                 previewButton.Enabled = tab != TabText;
             }
@@ -1497,19 +1546,19 @@ namespace RecoNet
                 valueActionBox.Items.Clear();
                 if (field == "工程数量")
                 {
-                    valueActionBox.Items.AddRange(new object[] { "乘以", "除以", "设为", "清空", "删除片段" });
+                    valueActionBox.Items.AddRange(new object[] { "乘以", "除以", "改成", "清空数量", "删除系数" });
                 }
                 else if (field == "单价")
                 {
-                    valueActionBox.Items.AddRange(new object[] { "乘以", "除以", "设为" });
+                    valueActionBox.Items.AddRange(new object[] { "乘以", "除以", "改成" });
                 }
                 else if (field == "定额编号")
                 {
-                    valueActionBox.Items.AddRange(new object[] { "乘以", "除以", "删除片段" });
+                    valueActionBox.Items.AddRange(new object[] { "乘以", "除以", "删除系数" });
                 }
                 else
                 {
-                    valueActionBox.Items.AddRange(new object[] { "设为", "追加", "删除内容" });
+                    valueActionBox.Items.AddRange(new object[] { "改成", "追加", "删除调整内容" });
                 }
 
                 valueActionBox.SelectedIndex = 0;
@@ -1521,7 +1570,7 @@ namespace RecoNet
             {
                 string field = fieldBox.Text;
                 string action = valueActionBox.Text;
-                bool needsValue = action != "清空";
+                bool needsValue = action != "清空数量";
                 valueBox.Enabled = needsValue;
                 if (!needsValue)
                 {
@@ -1532,43 +1581,56 @@ namespace RecoNet
                 {
                     valueLabel.Text = "系数";
                 }
-                else if (action == "删除片段" || action == "删除内容")
+                else if ((action == "删除系数" || action == "删除调整内容"))
                 {
-                    valueLabel.Text = "要删除的";
+                    valueLabel.Text = "要删的";
                 }
                 else if (field == "定额调整")
                 {
                     valueLabel.Text = "调整内容";
                 }
+                else if (!needsValue)
+                {
+                    valueLabel.Text = "";
+                }
                 else
                 {
-                    valueLabel.Text = "数值";
+                    valueLabel.Text = "改成";
                 }
 
-                if (field == "定额编号")
+                if (action == "清空数量")
                 {
-                    valueHintLabel.Text = "在定额编号后面追加乘除系数（如 LY-21 变成 LY-21*9），适合软件原生缩放定额；改完通常要在主程序里手工重算。";
+                    valueHintLabel.Text = "把工程数量输入和计算数量都置成空白（不是 0）。\r\n要改成某个具体数字，请选「改成」。";
+                }
+                else if (action == "删除调整内容")
+                {
+                    valueHintLabel.Text = "从定额调整里去掉指定的一段，例如填 /XG1 就把原串里的 /XG1 抠掉。\r\n" +
+                        "原串里没有这一段的行会自动跳过。";
+                }
+                else if (action == "删除系数")
+                {
+                    valueHintLabel.Text = "撤掉之前乘上去的系数。填要删的那一段，例如　*0.85　。\r\n" +
+                        "工程数量：原来是　(100)*0.85　，删掉后会连同外层括号一起还原成　100　。\r\n" +
+                        "定额编号：原来是　LY-21*9　，删掉后还原成　LY-21　。字段里没有这一段的行会跳过。";
+                }
+                else if (field == "定额编号")
+                {
+                    valueHintLabel.Text = "在定额编号后面直接追加乘除系数（不加括号），例如 LY-21 变成 LY-21*9，" +
+                        "这是软件原生的缩放定额写法。\r\n改完通常要在主程序里手工触发一次重算。";
                 }
                 else if (field == "定额调整")
                 {
-                    valueHintLabel.Text = "调整内容按整串写入或从原串删除，例如 /XG1、/1294861,,1。\"追加\"会拼在原有调整后面。";
+                    valueHintLabel.Text = "调整内容按整串写入，例如 /XG1 、 /1294861,,1 。\r\n「追加」是拼在原有调整后面，「改成」是整串替换。";
                 }
                 else if (field == "单价")
                 {
-                    valueHintLabel.Text = "SF / SH / SQ / ZLF / LF / TLF 这类手填单价的行改了才稳定保留；普通定额的单价是计算值，会被主程序重算覆盖。";
-                }
-                else if (action == "删除片段")
-                {
-                    valueHintLabel.Text = "从工程数量输入里去掉指定子串，例如原来是 100*0.85，删除 *0.85 后剩 100。字段里没有该片段的行会跳过。";
-                }
-                else if (action == "清空")
-                {
-                    valueHintLabel.Text = "把工程数量输入和计算数量都置空。要直接改成某个数字请用\"设为\"。";
+                    valueHintLabel.Text = "SF / SH / SQ / ZLF / LF / TLF 这类手填单价的行改了才稳定保留。\r\n" +
+                        "普通定额的单价是计算值，会被主程序重算覆盖，那种情况建议改「定额编号 × 系数」。";
                 }
                 else
                 {
-                    valueHintLabel.Text = "\"设为\"直接写死数值；\"乘以/除以\"在原数量后面追加系数。\r\n" +
-                        "单个条目内的乘系数/删系数，主程序右键\"乘系数\"也能做；这里的价值是一次覆盖多个条目、多个单元。";
+                    valueHintLabel.Text = "「改成」直接写死数值；「乘以 / 除以」把原式括起来再乘，例如 100 变成 (100)*0.85 。\r\n" +
+                        "单个条目内的乘系数，主程序右键「乘系数」也能做；这里的价值是一次覆盖多个条目、多个单元。";
                 }
 
                 UpdateSentence();
@@ -1576,27 +1638,12 @@ namespace RecoNet
 
             private void RefreshRowAction()
             {
-                string action = rowActionBox.Text;
-                bool isReplace = action == "替换目标定额";
-                bool isInsert = action == "新增定额";
-
-                quotaGridLabel.Visible = isReplace || isInsert;
-                quotaGrid.Visible = isReplace || isInsert;
-
-                if (isReplace)
-                {
-                    quotaGridLabel.Text = "替换成（数量留空＝不改数量）　—　被替换的就是上面选中的目标";
-                    rowHintLabel.Text = "1对1、1对多、多对1都支持。";
-                }
-                else if (isInsert)
-                {
-                    quotaGridLabel.Text = "要新增的定额（数量留空＝不填）";
-                    rowHintLabel.Text = "在上面列出的每个条目下各新增一份，追加到条目末尾。";
-                }
-                else
-                {
-                    rowHintLabel.Text = "删除上面选中的目标行；不选目标则删除范围内全部定额行。";
-                }
+                bool isInsert = rowActionBox.Text == "新增定额";
+                insertGridLabel.Visible = isInsert;
+                insertGrid.Visible = isInsert;
+                rowHintLabel.Text = isInsert
+                    ? "在上面列出的每个条目下各新增一份，追加到条目末尾。\r\n新增不看「目标」那一栏。"
+                    : "删除上面「目标」里列的那些行。\r\n目标为空时，会删掉范围内的全部定额行，注意别误删。";
 
                 RefreshScopeAvailability();
                 UpdateSentence();
@@ -1606,8 +1653,8 @@ namespace RecoNet
             {
                 bool move = crossActionBox.Text == "移动到";
                 crossHintLabel.Text = move
-                    ? "移动不保留来源副本，目标只能有一个条目。来源条目只能是上面列表里的第一个（且只能有一个）。"
-                    : "复制会在目标条目下新增同样的定额，来源保持不变。目标条目可以选多个。";
+                    ? "移动不保留来源副本，目标只能有一个条目。\r\n来源条目只能有一个，请把上面的条目列表减到一条。"
+                    : "复制会在目标条目下新增同样的定额，来源保持不变，目标条目可以选多个。\r\n来源条目只能有一个。";
                 if (move && crossTargetItems.Count > 1)
                 {
                     crossTargetItems.RemoveRange(1, crossTargetItems.Count - 1);
@@ -1633,25 +1680,25 @@ namespace RecoNet
             {
                 if (selectedItemNos.Count == 0)
                 {
-                    throw new AgentPlanException("请先在左侧树点中条目，再点\"加入树上选中\"。可以反复加多个条目。");
+                    throw new AgentPlanException("还没选条目：在左侧树点中条目后，点「把左侧树选中的条目加进来」。");
                 }
 
                 return new List<string>(selectedItemNos);
             }
 
-            // 目标：按编号写进 QuotaFilter，按名称写进 QuotaName（顿号分隔的精确名称串）。
+            // 目标：编号写进 QuotaFilter，精确名称写进 QuotaName，两者可以同时给，执行层取并集。
             private void ApplyTarget(AgentCommand command)
             {
-                if (byNameRadio.Checked)
+                List<string> codes = TargetCodes();
+                List<string> names = TargetNames();
+                if (codes.Count > 0)
                 {
-                    if (selectedTargetNames.Count > 0)
-                    {
-                        command.QuotaName = String.Join("、", selectedTargetNames.ToArray());
-                    }
+                    command.QuotaFilter = codes;
                 }
-                else if (selectedTargetCodes.Count > 0)
+
+                if (names.Count > 0)
                 {
-                    command.QuotaFilter = new List<string>(selectedTargetCodes);
+                    command.QuotaName = String.Join("、", names.ToArray());
                 }
             }
 
@@ -1674,10 +1721,10 @@ namespace RecoNet
                 return text;
             }
 
-            private List<AgentQuotaInput> ReadQuotaGrid()
+            private static List<AgentQuotaInput> ReadQuotaGrid(DataGridView grid)
             {
                 List<AgentQuotaInput> quotas = new List<AgentQuotaInput>();
-                foreach (DataGridViewRow row in quotaGrid.Rows)
+                foreach (DataGridViewRow row in grid.Rows)
                 {
                     if (row.IsNewRow)
                     {
@@ -1716,20 +1763,20 @@ namespace RecoNet
 
                 if (field == "工程数量")
                 {
-                    if (action == "设为")
+                    if (action == "改成")
                     {
                         command.Type = "set_quantity";
                         command.Value = RequireText(value, "数值");
                     }
-                    else if (action == "清空")
+                    else if (action == "清空数量")
                     {
                         command.Type = "clear_quantity";
                     }
-                    else if (action == "删除片段")
+                    else if ((action == "删除系数" || action == "删除调整内容"))
                     {
                         command.Type = "remove_text";
                         command.Target = "quantity";
-                        command.RemoveText = RequireText(value, "要删除的片段");
+                        command.RemoveText = RequireText(value, "要删掉的那段文字");
                     }
                     else
                     {
@@ -1741,7 +1788,7 @@ namespace RecoNet
                 }
                 else if (field == "单价")
                 {
-                    if (action == "设为")
+                    if (action == "改成")
                     {
                         command.Type = "set_unit_price";
                         command.Value = RequireText(value, "数值");
@@ -1756,11 +1803,11 @@ namespace RecoNet
                 }
                 else if (field == "定额编号")
                 {
-                    if (action == "删除片段")
+                    if ((action == "删除系数" || action == "删除调整内容"))
                     {
                         command.Type = "remove_text";
                         command.Target = "quota_code";
-                        command.RemoveText = RequireText(value, "要删除的片段");
+                        command.RemoveText = RequireText(value, "要删掉的那段文字");
                     }
                     else
                     {
@@ -1772,11 +1819,11 @@ namespace RecoNet
                 }
                 else
                 {
-                    if (action == "删除内容")
+                    if ((action == "删除系数" || action == "删除调整内容"))
                     {
                         command.Type = "remove_text";
                         command.Target = "adjustment";
-                        command.RemoveText = RequireText(value, "要删除的调整内容");
+                        command.RemoveText = RequireText(value, "要删掉的那段调整内容");
                     }
                     else
                     {
@@ -1789,57 +1836,22 @@ namespace RecoNet
                 return command;
             }
 
-            private AgentCommand BuildRowCommand()
+            private AgentCommand BuildReplaceCommand()
             {
-                string action = rowActionBox.Text;
                 AgentCommand command = new AgentCommand();
-
-                if (action == "新增定额")
+                ApplyScope(command);
+                if (targetEntries.Count == 0)
                 {
-                    command.Type = "insert_quotas";
-                    command.IncludeChildren = includeChildrenBox.Checked;
-                    command.Units = BuildUnitTokens();
-                    command.Items = BuildItemTokens();
-                    command.Quotas = ReadQuotaGrid();
-                    if (command.Quotas.Count == 0)
-                    {
-                        throw new AgentPlanException("请填至少一条要新增的定额。");
-                    }
-
-                    return command;
-                }
-
-                if (action == "删除目标定额")
-                {
-                    command.Type = "delete_quotas";
-                    ApplyScope(command);
-                    return command;
+                    throw new AgentPlanException("替换定额必须先在上面「目标」里指定要被替换的是哪些，不能对整个范围替换。");
                 }
 
                 command.Type = "replace_quotas";
-                ApplyScope(command);
-                if (byNameRadio.Checked)
-                {
-                    if (selectedTargetNames.Count == 0)
-                    {
-                        throw new AgentPlanException("请先在上面按名称选出要被替换的目标。");
-                    }
-                }
-                else
-                {
-                    if (selectedTargetCodes.Count == 0)
-                    {
-                        throw new AgentPlanException("请先在上面按编号选出要被替换的目标。");
-                    }
-
-                    command.FromCodes = new List<string>(selectedTargetCodes);
-                    command.QuotaFilter = new List<string>();
-                }
-
-                command.ToQuotas = ReadQuotaGrid();
+                command.FromCodes = TargetCodes();
+                command.QuotaFilter = new List<string>();
+                command.ToQuotas = ReadQuotaGrid(replaceGrid);
                 if (command.ToQuotas.Count == 0)
                 {
-                    throw new AgentPlanException("请填至少一条替换成的定额。");
+                    throw new AgentPlanException("请在「替换成」表格里填至少一条新定额。");
                 }
 
                 HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1853,9 +1865,32 @@ namespace RecoNet
 
                 if (command.ToQuotas.Count > 1 && allUnitsBox.Checked)
                 {
-                    throw new AgentPlanException("一条定额拆成多条时不能选\"所有单元\"，请限定到一个单元。");
+                    throw new AgentPlanException("一条拆成多条时不能选「所有单元」，请限定到一个单元。");
                 }
 
+                return command;
+            }
+
+            private AgentCommand BuildRowCommand()
+            {
+                AgentCommand command = new AgentCommand();
+                if (rowActionBox.Text == "新增定额")
+                {
+                    command.Type = "insert_quotas";
+                    command.IncludeChildren = includeChildrenBox.Checked;
+                    command.Units = BuildUnitTokens();
+                    command.Items = BuildItemTokens();
+                    command.Quotas = ReadQuotaGrid(insertGrid);
+                    if (command.Quotas.Count == 0)
+                    {
+                        throw new AgentPlanException("请填至少一条要新增的定额。");
+                    }
+
+                    return command;
+                }
+
+                command.Type = "delete_quotas";
+                ApplyScope(command);
                 return command;
             }
 
@@ -1875,7 +1910,7 @@ namespace RecoNet
                 List<string> sources = BuildItemTokens();
                 if (sources.Count > 1)
                 {
-                    throw new AgentPlanException("复制/移动的来源只能是一个条目，请把上面的条目列表减到一个。");
+                    throw new AgentPlanException("复制 / 移动的来源只能是一个条目，请把上面的条目列表减到一条。");
                 }
 
                 AgentCommand command = new AgentCommand();
@@ -1905,6 +1940,10 @@ namespace RecoNet
                 {
                     commands.Add(BuildValueCommand());
                 }
+                else if (tab == TabReplace)
+                {
+                    commands.Add(BuildReplaceCommand());
+                }
                 else if (tab == TabRows)
                 {
                     commands.Add(BuildRowCommand());
@@ -1927,8 +1966,8 @@ namespace RecoNet
                 string tab = tabs.SelectedTab == null ? "" : tabs.SelectedTab.Text;
                 if (tab == TabText)
                 {
-                    sentenceLabel.ForeColor = Color.Gray;
-                    sentenceLabel.Text = "文本/自然语言通道：写好后点\"交给 AI\"。";
+                    sentenceLabel.ForeColor = AgentPanelHintFore;
+                    sentenceLabel.Text = "文本 / 自然语言通道：写好后点「交给 AI」。";
                     return;
                 }
 
@@ -1947,12 +1986,12 @@ namespace RecoNet
                         parts.Add(command.Describe());
                     }
 
-                    sentenceLabel.ForeColor = Color.FromArgb(20, 60, 160);
+                    sentenceLabel.ForeColor = AgentPanelTitleFore;
                     sentenceLabel.Text = "将要执行：" + String.Join("；", parts.ToArray());
                 }
                 catch (Exception ex)
                 {
-                    sentenceLabel.ForeColor = Color.Gray;
+                    sentenceLabel.ForeColor = AgentPanelHintFore;
                     sentenceLabel.Text = "还差一步：" + ex.Message;
                 }
             }
@@ -1961,7 +2000,7 @@ namespace RecoNet
 
             private AgentSelectionSnapshot CaptureAgentSelectionForPanel()
             {
-                // 本面板不使用"主程序选中行"作为范围，快照里的行选中一律丢弃，
+                // 本面板不用"主程序选中行"当作用范围，快照里的行选中一律丢弃，
                 // 避免宿主表格里顺带选中的当前行影响批量范围。
                 s_agentInvokeFromTree = true;
                 try
@@ -2083,7 +2122,7 @@ namespace RecoNet
                     if (!settings.IsAvailable)
                     {
                         SetStatus("没有可用的 AI 配置（RecoQuotaData/deepseek-settings.json 需启用并填写 api_key）。" +
-                            "可以改用上面的按钮页签，或输入确定性语法（点\"指令帮助\"看格式）。", true);
+                            "可以改用上面的按钮页签，或输入确定性写法（点「指令帮助」看格式）。", true);
                         return;
                     }
                 }
@@ -2223,15 +2262,15 @@ namespace RecoNet
                         description.Append(llmResult.Commands[i].Describe());
                     }
 
-                    sentenceLabel.ForeColor = Color.FromArgb(20, 60, 160);
+                    sentenceLabel.ForeColor = AgentPanelTitleFore;
                     sentenceLabel.Text = description.ToString();
                 }
 
                 ShowPlanPreview(plan);
-                StringBuilder note = new StringBuilder("请核对下方预览，点\"确认执行\"生效。");
+                StringBuilder note = new StringBuilder("请核对下方预览，点「确认执行」生效。");
                 foreach (string warning in plan.Warnings)
                 {
-                    note.Append("  注意：").Append(warning);
+                    note.Append("　注意：").Append(warning);
                 }
 
                 SetStatus(note.ToString() + " " + elapsed, false);
@@ -2252,8 +2291,8 @@ namespace RecoNet
                         row.NewValue ?? "");
                 }
 
-                string extra = plan.PreviewRows.Count > 2000 ? "（预览表只显示前2000行）" : "";
-                summaryLabel.Text = "第三步  确认执行：" + plan.Summary + extra;
+                string extra = plan.PreviewRows.Count > 2000 ? "（预览表只显示前 2000 行）" : "";
+                summaryLabel.Text = plan.Summary + extra;
                 previewPanel.Visible = true;
             }
 
@@ -2289,7 +2328,7 @@ namespace RecoNet
                 try
                 {
                     string message = ExecuteAgentPlan(mainForm, plan, delegate(string line) { });
-                    SetStatus(message.Replace("\r\n", "  ").Replace("\n", "  "), false);
+                    SetStatus(message.Replace("\r\n", "　").Replace("\n", "　"), false);
                 }
                 catch (AgentPlanException ex)
                 {
@@ -2322,16 +2361,16 @@ namespace RecoNet
                     dialog.StartPosition = FormStartPosition.CenterParent;
                     dialog.MinimizeBox = false;
                     dialog.MaximizeBox = false;
-                    dialog.ClientSize = new Size(360, 130);
+                    dialog.ClientSize = new Size(380, 136);
 
-                    label.Text = "本次将影响 " + rowCount.ToString(CultureInfo.InvariantCulture) + " 行数据。\r\n请输入\"确认\"两字后继续：";
-                    label.SetBounds(12, 12, 330, 40);
-                    box.SetBounds(12, 58, 330, 24);
+                    label.Text = "本次将影响 " + rowCount.ToString(CultureInfo.InvariantCulture) + " 行数据。\r\n请输入「确认」两字后继续：";
+                    label.SetBounds(14, 14, 350, 40);
+                    box.SetBounds(14, 60, 350, 25);
                     ok.Text = "继续";
-                    ok.SetBounds(180, 92, 75, 28);
+                    ok.SetBounds(196, 96, 80, 28);
                     ok.DialogResult = DialogResult.OK;
                     cancel.Text = "取消";
-                    cancel.SetBounds(265, 92, 75, 28);
+                    cancel.SetBounds(284, 96, 80, 28);
                     cancel.DialogResult = DialogResult.Cancel;
 
                     dialog.Controls.Add(label);
@@ -2399,7 +2438,7 @@ namespace RecoNet
                 try
                 {
                     ShowPlanPreview(BuildAgentUndoPlan(mainForm));
-                    SetStatus("这是撤销预览，点\"确认执行\"才会真正回滚。", false);
+                    SetStatus("这是撤销预览，点「确认执行」才会真正回滚。", false);
                 }
                 catch (AgentPlanException ex)
                 {
@@ -2417,7 +2456,7 @@ namespace RecoNet
                 try
                 {
                     ShowPlanPreview(BuildAgentRedoPlan(mainForm));
-                    SetStatus("这是重做预览，点\"确认执行\"才会重新应用。", false);
+                    SetStatus("这是重做预览，点「确认执行」才会重新应用。", false);
                 }
                 catch (AgentPlanException ex)
                 {
@@ -2434,7 +2473,7 @@ namespace RecoNet
 
             private void SetStatus(string text, bool isError)
             {
-                statusLabel.ForeColor = isError ? Color.FromArgb(190, 30, 30) : Color.FromArgb(50, 50, 50);
+                statusLabel.ForeColor = isError ? AgentPanelErrorFore : Color.FromArgb(52, 58, 68);
                 statusLabel.Text = text ?? "";
             }
 
@@ -2444,7 +2483,7 @@ namespace RecoNet
                 {
                     dialog.Text = title;
                     dialog.StartPosition = FormStartPosition.CenterParent;
-                    dialog.ClientSize = new Size(720, 480);
+                    dialog.ClientSize = new Size(760, 500);
                     dialog.ShowInTaskbar = false;
                     dialog.MinimizeBox = false;
 
@@ -2466,9 +2505,9 @@ namespace RecoNet
             {
                 using (Form dialog = new Form())
                 {
-                    dialog.Text = "文本指令帮助（\"说一句话\"页签用）";
+                    dialog.Text = "文本指令帮助（「说一句话」页签用）";
                     dialog.StartPosition = FormStartPosition.CenterParent;
-                    dialog.ClientSize = new Size(820, 560);
+                    dialog.ClientSize = new Size(860, 580);
                     dialog.ShowInTaskbar = false;
                     dialog.MinimizeBox = false;
 
@@ -2478,6 +2517,9 @@ namespace RecoNet
                     grid.AllowUserToAddRows = false;
                     grid.AllowUserToDeleteRows = false;
                     grid.RowHeadersVisible = false;
+                    grid.BackgroundColor = Color.White;
+                    grid.EnableHeadersVisualStyles = false;
+                    grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(238, 242, 248);
                     grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
                     grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
                     grid.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells;
@@ -2503,8 +2545,8 @@ namespace RecoNet
             {
                 grid.Rows.Clear();
                 AddHelpRow(grid, "分工",
-                    "单个条目内改数量/编号/单价/调整 → 主程序右键\"乘系数\"；跨条目跨单元批量 → 本窗口上面的按钮页签。",
-                    "本页只说明\"说一句话\"页签的文本写法。",
+                    "单个条目内改数量/编号/单价/调整 → 主程序右键「乘系数」；跨条目跨单元批量 → 本窗口上面的按钮页签。",
+                    "本页只说明「说一句话」页签的文本写法。",
                     "按钮页签拼不出来的场景（新建单元、运输方案、材料价方案）才需要文本或 AI。");
                 AddHelpRow(grid, "自然语言（需AI）",
                     "直接用一句话描述要改什么，助手会先生成预览，确认后才执行。",
@@ -2513,7 +2555,7 @@ namespace RecoNet
                 AddHelpRow(grid, "作用范围",
                     "不写条目编号=当前选中的条目或定额；不写定额过滤=该条目下全部定额；单元=xxx 可限定单元。",
                     "工程数量 *0.85\r\n工程数量 0101-01 *0.85\r\n工程数量 0101-01、0102-01 *0.85\r\n删除数量 0308、0309 *0 单元=所有",
-                    "多个条目或单元用顿号\"、\"隔开（英文逗号也兼容）；分号\"；\"只用于分隔多条完整命令。");
+                    "多个条目或单元用顿号「、」隔开（英文逗号也兼容）；分号「；」只用于分隔多条完整命令。");
                 AddHelpRow(grid, "工程数量",
                     "工程数量 [条目编号] [定额编号或精确定额名称] 数字、*系数或/系数",
                     "工程数量 LY-21 100\r\n工程数量 0101-01 LY-21 *0.85\r\n工程数量 0305 0",
@@ -2529,7 +2571,7 @@ namespace RecoNet
                 AddHelpRow(grid, "增删定额",
                     "输入定额 [条目编号] 编号=数量；删除定额 [条目编号] [定额编号]；替换定额 [条目编号] 原定额 新定额",
                     "输入定额 0101-01 LY-21=100\r\n删除定额 0101-01 LY-21\r\n替换定额 0101-01 LY-21 QY-100",
-                    "文本通道的\"替换定额\"只支持一对一；一对多、多对一请用\"加减定额\"页签。");
+                    "文本通道的「替换定额」只支持一对一；一对多、多对一请用「替换定额」页签。");
                 AddHelpRow(grid, "复制 / 移动",
                     "复制定额 来源条目 到 目标条目；移动定额 来源条目 [定额编号] 到 目标条目",
                     "复制定额 0101-01 到 0102-01\r\n移动定额 0305 LY-21、LY-22 到 0306 单元=04",
