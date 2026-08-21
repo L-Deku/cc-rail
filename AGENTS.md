@@ -86,6 +86,8 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 新增或修复绑定学习字段时，必须按“数据源 -> 预览对象 -> `ExcelQuotaLink` XML -> `mapping-boxes.jsonl` -> `BindingLog`/聚合表 -> 推荐读取”逐段核对；Excel 工程量单位与定额目标单位要分别做回归，不能因预览对象已有字段就认定持久化链已传递。
 - 推荐定额/模板铺量的名字驱动组件“确认写入”即为接受推荐，必须回流 `source='plugin:apply-accept'`；只有整个 `TargetRow` 组件组全部写入成功才学习，残缺组不得产生 accepted，学习库写入失败不得阻断实际写入结果。
 - 推荐定额 L3 正式编号不得使用宿主右键菜单/批量粘贴作为写入路径；已验证该路径可返回却不生成定额行。应对每条定额在“定额编号”列执行 `BeginEdit(true)` + `TextBoxBase` + Enter，再对同行“工程数量输入”列执行同样的原生提交；只能选末尾空白行，并以项目数据库新增行的完整身份+数量作成功判定。
+- 推荐定额 L3 定位宿主末尾空白行时，即使 `AllowUserToAddRows=true` 也不得选 `DataGridView.NewRowIndex`/`IsNewRow` 的 WinForms 新增占位行；必须选择最后一个非 `IsNewRow` 的宿主自管空白业务行。回归用例必须同时构造“宿主空白行 + WinForms 新增占位行”，防止普通 `DataGridView` 测试绕开真实失败状态。
+- 推荐定额窗口以宿主所有者子窗口打开时，正式编号原生编辑前应暂时隐藏该窗口并把激活与焦点交还宿主定额表；提交结束或异常后恢复同一个窗口和原预览集合，不得重新生成或清空预览。
 - 当前项目定额查找必须包含 ZLF/SH 等完整“编号+规范化名称+规范化单位”辅助码身份，精确命中时优先选非零单价完整行走 L1；只有 `ZLF`、`SH`、`SF`、`LF` 等辅助码右键绑定时才学习软件行单价，并按 `定额序号` 从当前项目 `定额输入` 回读，表格值只作回读失败或未落库编辑的后备，禁止用较新的 0 元样本覆盖已有非零完整身份行。正式定额和有材料编号的材料不学习单价。
 - `SignatureBoxMap.weight` 不设上限，只保留下限 0；调整公式时必须同步修改 SQL 增量写入、本机 `mapping-boxes.jsonl` 和 `Rebuild-Aggregates.ps1` 三端，并执行一次全量重算使历史聚合收敛。
 - `Rebuild-Aggregates.ps1` 分配 `QuotaBox.box_id` 时，历史显式 `box_id` 可能以 `auto-` 开头并与其他目标集合的自动 MD5 前缀冲突。必须先确定性保留唯一的历史显式 ID，再延长自动哈希前缀直到唯一；不得合并不同 `target_set_hash` 或依赖遍历顺序。

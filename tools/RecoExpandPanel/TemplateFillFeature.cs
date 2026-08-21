@@ -1322,6 +1322,85 @@ namespace RecoNet
             }
         }
 
+        private static bool IsSmartTreeIdentityConsistent(string treeSequenceText, string treeCode,
+            long databaseSequence, string databaseCode)
+        {
+            if (databaseSequence <= 0 || String.IsNullOrWhiteSpace(databaseCode)) return false;
+            bool hasSequence = !String.IsNullOrWhiteSpace(treeSequenceText);
+            bool hasCode = !String.IsNullOrWhiteSpace(treeCode);
+            if (!hasSequence && !hasCode) return false;
+            if (hasSequence)
+            {
+                long treeSequence;
+                if (!Int64.TryParse(treeSequenceText, NumberStyles.Integer, CultureInfo.InvariantCulture,
+                    out treeSequence) || treeSequence != databaseSequence) return false;
+            }
+            return !hasCode || String.Equals(treeCode.Trim(), databaseCode.Trim(),
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool TryResolveSmartTreeItemIdentity(SqlConnection conn, TreeNode node,
+            out long sequence, out string code, out string name, out string error)
+        {
+            sequence = 0;
+            code = "";
+            name = "";
+            error = "当前树节点缺少可核对的条目序号或编号";
+            if (conn == null || node == null) return false;
+
+            string treeSequenceText = (TryGetValue(node.Tag, "条目序号") ?? "").Trim();
+            if (treeSequenceText.Length == 0 && IsNumeric(node.Name)) treeSequenceText = node.Name.Trim();
+            string treeCode = (TryGetValue(node.Tag, "条目编号") ?? "").Trim();
+            long requestedSequence = 0;
+            if (treeSequenceText.Length > 0 &&
+                (!Int64.TryParse(treeSequenceText, NumberStyles.Integer, CultureInfo.InvariantCulture,
+                    out requestedSequence) || requestedSequence <= 0))
+            {
+                error = "当前树节点条目序号格式无效";
+                return false;
+            }
+            if (requestedSequence <= 0 && treeCode.Length == 0) return false;
+
+            int matchCount = 0;
+            EnsureOpen(conn);
+            using (SqlCommand cmd = conn.CreateCommand())
+            {
+                if (requestedSequence > 0)
+                {
+                    cmd.CommandText = "select 条目序号,条目编号,工程或费用项目名称 from 章节表 where 条目序号=@sequence";
+                    cmd.Parameters.AddWithValue("@sequence", requestedSequence);
+                }
+                else
+                {
+                    cmd.CommandText = "select 条目序号,条目编号,工程或费用项目名称 from 章节表 where 条目编号=@code";
+                    cmd.Parameters.AddWithValue("@code", treeCode);
+                }
+                using (SqlDataReader reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        matchCount++;
+                        sequence = reader.IsDBNull(0) ? 0 : Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture);
+                        code = reader.IsDBNull(1) ? "" : Convert.ToString(reader.GetValue(1)).Trim();
+                        name = reader.IsDBNull(2) ? "" : Convert.ToString(reader.GetValue(2)).Trim();
+                    }
+                }
+            }
+            if (matchCount != 1)
+            {
+                error = matchCount > 1
+                    ? "当前树节点在项目章节表中命中多条记录"
+                    : "当前树节点未在项目章节表中命中";
+                return false;
+            }
+            if (!IsSmartTreeIdentityConsistent(treeSequenceText, treeCode, sequence, code))
+            {
+                error = "当前树节点与项目章节表身份不一致";
+                return false;
+            }
+            return true;
+        }
+
         private static bool IsSameSmartNativeTargetItem(string selectedItemNo, string targetItemNo)
         {
             selectedItemNo = (selectedItemNo ?? "").Trim();
@@ -1339,7 +1418,11 @@ namespace RecoNet
             if (selected == null) selected = GetField<TreeNode>(mainForm, "CurrNode");
             if (selected == null) return false;
 
-            selectedItemNo = (ResolveChapterNo(mainForm, conn, selected) ?? "").Trim();
+            long selectedSequence;
+            string selectedName;
+            string identityError;
+            if (!TryResolveSmartTreeItemIdentity(conn, selected, out selectedSequence,
+                out selectedItemNo, out selectedName, out identityError)) return false;
             if (!IsSameSmartNativeTargetItem(selectedItemNo, targetItemNo)) return false;
             try { selected.EnsureVisible(); }
             catch { }
@@ -1374,8 +1457,6 @@ namespace RecoNet
         private static int FindSmartNativeInputRowIndex(DataGridView grid, int codeColumnIndex)
         {
             if (grid == null || codeColumnIndex < 0 || codeColumnIndex >= grid.Columns.Count) return -1;
-            if (grid.AllowUserToAddRows && grid.NewRowIndex >= 0 && grid.NewRowIndex < grid.Rows.Count)
-                return grid.NewRowIndex;
             for (int rowIndex = grid.Rows.Count - 1; rowIndex >= 0; rowIndex--)
             {
                 DataGridViewRow row = grid.Rows[rowIndex];
@@ -1403,11 +1484,20 @@ namespace RecoNet
                 grid.ClearSelection();
                 grid.CurrentCell = grid.Rows[rowIndex].Cells[columnIndex];
                 grid.Rows[rowIndex].Selected = true;
+                DataGridViewCell cell = grid.CurrentCell;
                 bool beganEdit = grid.BeginEdit(true);
                 TextBoxBase editControl = grid.EditingControl as TextBoxBase;
                 if (!beganEdit || editControl == null)
                 {
-                    error = "宿主未提供可编辑的文本输入框";
+                    error = "宿主未提供可编辑的文本输入框" +
+                        "（row=" + rowIndex.ToString(CultureInfo.InvariantCulture) +
+                        ", newRow=" + (grid.Rows[rowIndex].IsNewRow ? "1" : "0") +
+                        ", cell=" + (cell == null ? "<null>" : cell.GetType().FullName) +
+                        ", cellReadOnly=" + (cell != null && cell.ReadOnly ? "1" : "0") +
+                        ", columnReadOnly=" + (grid.Columns[columnIndex].ReadOnly ? "1" : "0") +
+                        ", gridReadOnly=" + (grid.ReadOnly ? "1" : "0") +
+                        ", beganEdit=" + (beganEdit ? "1" : "0") +
+                        ", editingControl=" + (grid.EditingControl == null ? "<null>" : grid.EditingControl.GetType().FullName) + "）";
                     return false;
                 }
                 editControl.Text = (value ?? "").Trim();
