@@ -462,6 +462,15 @@ namespace RecoNet
                      (column.HeaderText ?? "").IndexOf("定额编号", StringComparison.OrdinalIgnoreCase) >= 0));
             }
 
+            private static bool IsOptionalSmartTreeSequenceConsistent(string treeSequenceText, long databaseSequence)
+            {
+                if (databaseSequence <= 0) return false;
+                if (String.IsNullOrWhiteSpace(treeSequenceText)) return true;
+                long treeSequence;
+                return Int64.TryParse(treeSequenceText, NumberStyles.Integer, CultureInfo.InvariantCulture, out treeSequence) &&
+                    treeSequence == databaseSequence;
+            }
+
             private bool TryResolveCurrentSmartEntry(out CurrentSmartEntry result, out string error)
             {
                 result = null;
@@ -483,12 +492,48 @@ namespace RecoNet
                     return false;
                 }
 
+                string seqText = TryGetValue(node.Tag, "条目序号");
+                if (String.IsNullOrWhiteSpace(seqText) && IsNumeric(node.Name)) seqText = node.Name;
                 SqlConnection conn = GetOpenProjectConnection(mainForm);
-                long sequence;
+                string code = (ResolveChapterNo(mainForm, conn, node) ?? "").Trim();
+                if (code.Length == 0)
+                {
+                    error = "当前树节点缺少可核对的条目编号";
+                    return false;
+                }
+
+                long sequence = 0;
                 string dbCode = "";
                 string dbName = "";
-                if (!TryResolveSmartTreeItemIdentity(conn, node, out sequence, out dbCode, out dbName, out error))
+                int matchCount = 0;
+                using (SqlCommand cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "select 条目序号,条目编号,工程或费用项目名称 from 章节表 where 条目编号=@code";
+                    cmd.Parameters.AddWithValue("@code", code);
+                    using (SqlDataReader reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            matchCount++;
+                            sequence = reader.IsDBNull(0) ? 0 : Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture);
+                            dbCode = reader.IsDBNull(1) ? "" : Convert.ToString(reader.GetValue(1)).Trim();
+                            dbName = reader.IsDBNull(2) ? "" : Convert.ToString(reader.GetValue(2)).Trim();
+                        }
+                    }
+                }
+                if (matchCount != 1 || sequence <= 0 || dbCode.Length == 0 ||
+                    !String.Equals(code, dbCode, StringComparison.OrdinalIgnoreCase))
+                {
+                    error = matchCount > 1
+                        ? "当前条目编号在项目章节表中不唯一"
+                        : "当前条目编号未在项目章节表唯一命中";
                     return false;
+                }
+                if (!IsOptionalSmartTreeSequenceConsistent(seqText, sequence))
+                {
+                    error = "当前树节点与项目章节表身份不一致";
+                    return false;
+                }
 
                 AgentSelectionSnapshot selection = CaptureAgentSelection(mainForm);
                 if (selection == null || selection.CurrentUnitId <= 0)

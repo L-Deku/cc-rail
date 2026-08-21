@@ -116,30 +116,21 @@ if ($currentEntryStart -lt 0 -or $currentEntryEnd -le $currentEntryStart) {
 }
 $currentEntryBody = $panel.Substring($currentEntryStart, $currentEntryEnd - $currentEntryStart)
 foreach ($marker in @(
-    'TryResolveSmartTreeItemIdentity(conn, node, out sequence, out dbCode, out dbName, out error)'
+    'ResolveChapterNo(mainForm, conn, node)',
+    'from 章节表 where 条目编号=@code',
+    'IsOptionalSmartTreeSequenceConsistent(seqText, sequence)'
 )) {
     if (-not $currentEntryBody.Contains($marker)) {
-        throw "当前条目没有按章节树节点身份回查项目章节表：$marker"
+        throw "当前条目没有按界面条目编号回查项目章节表：$marker"
     }
 }
-if ($currentEntryBody.Contains('ResolveChapterNo(mainForm, conn, node)')) {
-    throw '推荐定额当前条目仍会优先采用可能滞后的属性表/结果表编号'
+if ([regex]::Matches($currentEntryBody, 'from 章节表').Count -ne 1) {
+    throw '当前条目解析应只执行一次章节表查询，不得增加逐行或重复往返'
 }
-$treeIdentityStart = $feature.IndexOf('private static bool TryResolveSmartTreeItemIdentity', [StringComparison]::Ordinal)
-$treeIdentityEnd = $feature.IndexOf('private static bool IsSameSmartNativeTargetItem', $treeIdentityStart, [StringComparison]::Ordinal)
-if ($treeIdentityStart -lt 0 -or $treeIdentityEnd -le $treeIdentityStart) {
-    throw '缺少章节树节点身份解析入口'
-}
-$treeIdentityBody = $feature.Substring($treeIdentityStart, $treeIdentityEnd - $treeIdentityStart)
-foreach ($marker in @('TryGetValue(node.Tag, "条目序号")', 'TryGetValue(node.Tag, "条目编号")',
-    'from 章节表 where 条目序号=@sequence', 'from 章节表 where 条目编号=@code',
-    'IsSmartTreeIdentityConsistent(treeSequenceText, treeCode, sequence, code)')) {
-    if (-not $treeIdentityBody.Contains($marker)) {
-        throw "章节树节点身份解析缺少安全核对：$marker"
-    }
-}
-if ([regex]::Matches($treeIdentityBody, 'from 章节表').Count -ne 2) {
-    throw '章节树身份解析必须在序号和编号之间二选一查询，不得增加重复往返'
+if ($currentEntryBody.Contains('当前树节点缺少可核对的条目序号') -or
+    $currentEntryBody.Contains('当前树节点缺少可核对的条目序号或编号') -or
+    $feature.Contains('当前树节点缺少可核对的条目序号或编号')) {
+    throw '真实宿主树节点未暴露 Tag 序号/编号时仍会被直接拒绝'
 }
 
 $nativeStart = $feature.IndexOf('private static SmartNativeInsertRecord ExecuteSmartNativeInsertGroup', [StringComparison]::Ordinal)
@@ -158,7 +149,7 @@ foreach ($forbiddenNativePath in @('Clipboard.SetText(', 'TryInvokeAgentPasteMen
     }
 }
 foreach ($marker in @('private static bool IsSmartNativeTargetAlreadySelected',
-    'TryResolveSmartTreeItemIdentity(conn, selected')) {
+    'ResolveChapterNo(mainForm, conn, selected)')) {
     if (-not $feature.Contains($marker)) { throw "正式编号当前条目复用缺少身份核对：$marker" }
 }
 if ($nativeBody.IndexOf('mainForm.Activate();', [StringComparison]::Ordinal) -gt
@@ -239,7 +230,7 @@ $resolveLearningTargetKind = $formType.GetMethod('ResolveLearningTargetKind', $f
 $panelType = $formType.GetNestedType('TemplateFillPanel', $nested)
 $resolveTreeNode = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('ResolveSmartHostTreeNode', $flags) }
 $isEditableGrid = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsEditableAgentQuotaGrid', $flags) }
-$isSmartTreeIdentityConsistent = $formType.GetMethod('IsSmartTreeIdentityConsistent', $flags)
+$isOptionalTreeSequenceConsistent = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsOptionalSmartTreeSequenceConsistent', $flags) }
 if ($null -eq $itemType -or $null -eq $planType -or $null -eq $recordType -or
     $null -eq $classify -or $null -eq $buildL2 -or $null -eq $resolveSourceDatabase -or
     $null -eq $isSameNativeTargetItem -or $null -eq $findNativeColumn -or
@@ -248,7 +239,7 @@ if ($null -eq $itemType -or $null -eq $planType -or $null -eq $recordType -or
     $null -eq $resolveSmartPreviewUnitPrice -or $null -eq $filterLearningTargetUnitPrice -or
     $null -eq $resolveLearningTargetKind -or
     $null -eq $resolveTreeNode -or $null -eq $isEditableGrid -or
-    $null -eq $isSmartTreeIdentityConsistent) {
+    $null -eq $isOptionalTreeSequenceConsistent) {
     throw '缺少 L2 构造或 L3 结构化确认的可测试行为入口'
 }
 
@@ -411,18 +402,16 @@ if ([int]$findNativeInputRow.Invoke($null, $nativeRowArgs) -ne -1) {
 $nativeGrid.Dispose()
 Write-Host 'PASS 正式定额单行 Enter 路径精确定位编号列和末尾空白行'
 
-if (-not [bool]$isSmartTreeIdentityConsistent.Invoke($null, @('8123', '', [long]8123, '0309-01-03-05')) -or
-    -not [bool]$isSmartTreeIdentityConsistent.Invoke($null, @('', '0309-01-03-05', [long]8123, '0309-01-03-05')) -or
-    -not [bool]$isSmartTreeIdentityConsistent.Invoke($null, @('8123', '0309-01-03-05', [long]8123, '0309-01-03-05'))) {
-    throw '树节点序号或条目编号与项目章节表一致时未被接受'
+if (-not [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @('', [long]8123)) -or
+    -not [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @($null, [long]8123)) -or
+    -not [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @('8123', [long]8123))) {
+    throw 'Tag 未暴露条目序号或序号相同时，当前条目未被接受'
 }
-if ([bool]$isSmartTreeIdentityConsistent.Invoke($null, @('', '', [long]8123, '0309-01-03-05')) -or
-    [bool]$isSmartTreeIdentityConsistent.Invoke($null, @('8124', '', [long]8123, '0309-01-03-05')) -or
-    [bool]$isSmartTreeIdentityConsistent.Invoke($null, @('invalid', '0309-01-03-05', [long]8123, '0309-01-03-05')) -or
-    [bool]$isSmartTreeIdentityConsistent.Invoke($null, @('', '0309-01-03-04', [long]8123, '0309-01-03-05'))) {
-    throw '章节树缺少身份或序号/编号与项目章节表不一致时没有拒绝'
+if ([bool]$isOptionalTreeSequenceConsistent.Invoke($null, @('8124', [long]8123)) -or
+    [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @('invalid', [long]8123))) {
+    throw '树节点明确提供的序号与项目章节表不一致时没有拒绝'
 }
-Write-Host 'PASS 章节树序号或编号至少具备一项并与项目章节表一致，信息全缺时安全拒绝'
+Write-Host 'PASS 真实宿主 Tag 缺序号时允许按界面编号解析，明确序号仍作交叉校验'
 
 function New-Item([string]$Code, [string]$Name, [string]$Unit, [string]$Quantity) {
     $item = [Activator]::CreateInstance($itemType).PSObject.BaseObject
