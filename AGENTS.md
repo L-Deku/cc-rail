@@ -72,6 +72,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 读取 UTF-8 附件或中文文本时，如 PowerShell `Get-Content` 输出乱码，先设置 `[Console]::OutputEncoding`，并优先用 `[System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes(...))` 按字节解码验证内容。
 - PowerShell 部署/验证脚本需要格式化多段 `foreach` 输出时，优先先收集到数组或 `List[object]` 再统一 `Format-Table`；不要把脚本块闭合后直接接管道，容易触发 `An empty pipe element is not allowed` 解析错误。
 - PowerShell 创建目录时不要给 `New-Item` 使用不存在的 `-LiteralPath` 参数；中文或特殊字符路径优先调用 `[System.IO.Directory]::CreateDirectory($path)`，并在后续读写继续使用 `-LiteralPath`。
+- `Copy-Item -LiteralPath` 不会展开末尾 `*`；复制中文或特殊字符目录的全部内容时，应先用 `Get-ChildItem -LiteralPath` 枚举真实项，再逐项 `Copy-Item -LiteralPath $_.FullName`，避免依赖通配符。
 - PowerShell 数组中连续调用多条 `Join-Path` 时，应给每次调用加括号或先用 `foreach` 收集结果；不要直接用逗号分隔裸 `Join-Path` 表达式，否则逗号可能被绑定成同一次调用的 `AdditionalChildPath` 参数。
 - Windows PowerShell 中用 `rg` 搜索指定目录文件时，优先写 `rg -n "pattern" -S path` 或用 `rg --files -g "*.cs"` 先列文件；不要把 `目录\*.cs` 当作路径参数传给 `rg`，容易被解析成非法路径。
 - PowerShell 中用 `rg` 同时搜索含中文引号、括号或反斜杠的多个模式时，优先拆成多个简单的 `rg -n -F "literal" path`；不要在一条双引号命令里拼复杂分组正则，避免 PowerShell 截断引号后产生伪语法错误。
