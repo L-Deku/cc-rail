@@ -2838,7 +2838,14 @@ namespace RecoNet
                 return false;
             }
 
-            TreeNode node = FindAgentTreeNode(tree.Nodes, seq, itemNo);
+            // 优先用用户"添加条目"时点中的那个节点：宿主树节点不一定把
+            // 条目序号/编号放进 Name 或 Tag，按编号反查经常找不到。
+            TreeNode node = TryGetKnownAgentItemNode(tree, itemNo);
+            if (node == null)
+            {
+                node = FindAgentTreeNode(tree.Nodes, seq, itemNo);
+            }
+
             if (node == null)
             {
                 // 章节树懒加载:按条目编号前缀逐级展开祖先,触发软件加载子级后再找。
