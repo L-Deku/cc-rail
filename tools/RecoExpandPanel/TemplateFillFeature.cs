@@ -1386,6 +1386,31 @@ namespace RecoNet
             return -1;
         }
 
+        private static string BuildSmartNativeSendKeysText(string value)
+        {
+            StringBuilder keys = new StringBuilder();
+            foreach (char ch in (value ?? "").Trim())
+            {
+                switch (ch)
+                {
+                    case '{': keys.Append("{{}"); break;
+                    case '}': keys.Append("{}}"); break;
+                    case '+':
+                    case '^':
+                    case '%':
+                    case '~':
+                    case '(':
+                    case ')':
+                        keys.Append('{').Append(ch).Append('}');
+                        break;
+                    default:
+                        keys.Append(ch);
+                        break;
+                }
+            }
+            return keys.ToString();
+        }
+
         private static bool TryCommitSmartNativeCellViaSingleEnter(DataGridView grid, int rowIndex,
             int columnIndex, string value, out string error)
         {
@@ -1401,27 +1426,17 @@ namespace RecoNet
                 grid.ClearSelection();
                 grid.CurrentCell = grid.Rows[rowIndex].Cells[columnIndex];
                 grid.Rows[rowIndex].Selected = true;
-                DataGridViewCell cell = grid.CurrentCell;
-                bool beganEdit = grid.BeginEdit(true);
-                TextBoxBase editControl = grid.EditingControl as TextBoxBase;
-                if (!beganEdit || editControl == null)
+                if (!grid.Focus() && !grid.ContainsFocus)
                 {
-                    error = "宿主未提供可编辑的文本输入框" +
+                    error = "宿主定额表未取得键盘焦点" +
                         "（row=" + rowIndex.ToString(CultureInfo.InvariantCulture) +
                         ", newRow=" + (grid.Rows[rowIndex].IsNewRow ? "1" : "0") +
-                        ", cell=" + (cell == null ? "<null>" : cell.GetType().FullName) +
-                        ", cellReadOnly=" + (cell != null && cell.ReadOnly ? "1" : "0") +
-                        ", columnReadOnly=" + (grid.Columns[columnIndex].ReadOnly ? "1" : "0") +
-                        ", gridReadOnly=" + (grid.ReadOnly ? "1" : "0") +
-                        ", beganEdit=" + (beganEdit ? "1" : "0") +
-                        ", editingControl=" + (grid.EditingControl == null ? "<null>" : grid.EditingControl.GetType().FullName) + "）";
+                        ", currentCell=" + (grid.CurrentCell == null ? "<null>" :
+                            grid.CurrentCell.RowIndex.ToString(CultureInfo.InvariantCulture) + ":" +
+                            grid.CurrentCell.ColumnIndex.ToString(CultureInfo.InvariantCulture)) + "）";
                     return false;
                 }
-                editControl.Text = (value ?? "").Trim();
-                editControl.SelectionStart = editControl.TextLength;
-                editControl.SelectionLength = 0;
-                grid.NotifyCurrentCellDirty(true);
-                SendKeys.SendWait("{ENTER}");
+                SendKeys.SendWait(BuildSmartNativeSendKeysText(value) + "{ENTER}");
                 Application.DoEvents();
                 return true;
             }

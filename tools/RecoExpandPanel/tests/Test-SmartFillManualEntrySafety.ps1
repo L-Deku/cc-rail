@@ -48,6 +48,7 @@ $requiredFeature = @(
     'stableCount >= 2',
     'TryCommitSmartNativeQuotaViaSingleEnter',
     'TryCommitSmartNativeCellViaSingleEnter',
+    'BuildSmartNativeSendKeysText',
     'FindSmartNativeColumnIndex',
     'FindSmartNativeInputRowIndex',
     'IsSmartFillSourceIdentityMatch',
@@ -162,9 +163,15 @@ if ($nativeCellStart -lt 0 -or $nativeCellEnd -le $nativeCellStart) {
     throw '缺少可单独核对的原生单元格 Enter 提交入口'
 }
 $nativeCellBody = $feature.Substring($nativeCellStart, $nativeCellEnd - $nativeCellStart)
-foreach ($marker in @('grid.BeginEdit(true)', 'TextBoxBase editControl', 'editControl.Text =',
-    'grid.NotifyCurrentCellDirty(true)', 'SendKeys.SendWait("{ENTER}")', 'Application.DoEvents()')) {
-    if (-not $nativeCellBody.Contains($marker)) { throw "原生单元格 Enter 提交缺少已验证步骤：$marker" }
+foreach ($forbiddenMarker in @('grid.BeginEdit(', 'grid.EditingControl', 'TextBoxBase',
+    'grid.NotifyCurrentCellDirty(')) {
+    if ($nativeCellBody.Contains($forbiddenMarker)) {
+        throw "宿主只读 DataGridViewDe 仍被当作普通可编辑表格：$forbiddenMarker"
+    }
+}
+foreach ($marker in @('grid.Focus()',
+    'SendKeys.SendWait(BuildSmartNativeSendKeysText(value) + "{ENTER}")', 'Application.DoEvents()')) {
+    if (-not $nativeCellBody.Contains($marker)) { throw "宿主键盘命令提交缺少已验证步骤：$marker" }
 }
 
 foreach ($marker in @('String.Equals(targetConn.Database, candidate.DatabaseName',
@@ -221,6 +228,7 @@ $resolveSourceDatabase = $formType.GetMethod('ResolveSmartSourceDatabaseName', $
 $isSameNativeTargetItem = $formType.GetMethod('IsSameSmartNativeTargetItem', $flags)
 $findNativeColumn = $formType.GetMethod('FindSmartNativeColumnIndex', $flags)
 $findNativeInputRow = $formType.GetMethod('FindSmartNativeInputRowIndex', $flags)
+$buildNativeSendKeysText = $formType.GetMethod('BuildSmartNativeSendKeysText', $flags)
 $shouldLoadCurrentQuotaTarget = $formType.GetMethod('ShouldLoadCurrentSmartQuotaTarget', $flags)
 $smartTargetType = $formType.GetNestedType('SmartBoxTarget', $nested)
 $projectQuotaType = $formType.GetNestedType('ProjectQuota', $nested)
@@ -234,7 +242,8 @@ $isOptionalTreeSequenceConsistent = if ($null -eq $panelType) { $null } else { $
 if ($null -eq $itemType -or $null -eq $planType -or $null -eq $recordType -or
     $null -eq $classify -or $null -eq $buildL2 -or $null -eq $resolveSourceDatabase -or
     $null -eq $isSameNativeTargetItem -or $null -eq $findNativeColumn -or
-    $null -eq $findNativeInputRow -or $null -eq $shouldLoadCurrentQuotaTarget -or
+    $null -eq $findNativeInputRow -or $null -eq $buildNativeSendKeysText -or
+    $null -eq $shouldLoadCurrentQuotaTarget -or
     $null -eq $smartTargetType -or $null -eq $projectQuotaType -or
     $null -eq $resolveSmartPreviewUnitPrice -or $null -eq $filterLearningTargetUnitPrice -or
     $null -eq $resolveLearningTargetKind -or
@@ -400,7 +409,19 @@ if ([int]$findNativeInputRow.Invoke($null, $nativeRowArgs) -ne -1) {
     throw '原生单行输入误选了中间空白行，只允许使用末尾空白行'
 }
 $nativeGrid.Dispose()
-Write-Host 'PASS 正式定额单行 Enter 路径精确定位编号列和末尾空白行'
+foreach ($case in @(
+    @('PY-415', 'PY-415'),
+    @('QY-215*9', 'QY-215*9'),
+    @('F10/1000+F11/1000', 'F10/1000{+}F11/1000'),
+    @('(1+2)*5%', '{(}1{+}2{)}*5{%}'),
+    @('{V0}^~', '{{}V0{}}{^}{~}')
+)) {
+    $actualKeys = [string]$buildNativeSendKeysText.Invoke($null, @([string]$case[0]))
+    if ($actualKeys -ne [string]$case[1]) {
+        throw "宿主键盘命令转义错误：$($case[0]) => $actualKeys，预期 $($case[1])"
+    }
+}
+Write-Host 'PASS 正式定额键盘命令路径精确定位末尾空白行并安全转义编号/数量'
 
 if (-not [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @('', [long]8123)) -or
     -not [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @($null, [long]8123)) -or
