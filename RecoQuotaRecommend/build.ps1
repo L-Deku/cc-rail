@@ -87,23 +87,23 @@ function Ensure-PluginConfig {
     throw "Invalid config file: $ConfigPath"
   }
 
-  $runtime = $xml.configuration.runtime
+  $runtime = $xml.configuration.SelectSingleNode("runtime")
   if ($runtime -eq $null) {
     $runtime = $xml.CreateElement("runtime")
     [void]$xml.configuration.AppendChild($runtime)
   }
 
-  $managerAssembly = $runtime.appDomainManagerAssembly
+  $managerAssembly = $runtime.SelectSingleNode("appDomainManagerAssembly")
   if ($managerAssembly -eq $null) {
     $managerAssembly = $xml.CreateElement("appDomainManagerAssembly")
     [void]$runtime.PrependChild($managerAssembly)
   }
   $managerAssembly.SetAttribute("value", "RecoPluginLoader, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null")
 
-  $managerType = $runtime.appDomainManagerType
+  $managerType = $runtime.SelectSingleNode("appDomainManagerType")
   if ($managerType -eq $null) {
     $managerType = $xml.CreateElement("appDomainManagerType")
-    $insertAfter = $runtime.appDomainManagerAssembly
+    $insertAfter = $runtime.SelectSingleNode("appDomainManagerAssembly")
     if ($insertAfter -ne $null -and $insertAfter.NextSibling -ne $null) {
       [void]$runtime.InsertBefore($managerType, $insertAfter.NextSibling)
     } else {
@@ -163,8 +163,13 @@ function Assert-DllContainsText {
 }
 
 $targets = New-Object System.Collections.ArrayList
+# artifacts/ 下面是构建参照、只读检查这类临时副本(常带 NPOI.dll + exe),
+# 它们不是运行目录,绝不能当部署目标: 往里拷插件既没意义,
+# 还会因为里面的 exe.config 形态各异而中断整轮部署。
+$artifactsPrefix = (Join-Path $root "artifacts") + [System.IO.Path]::DirectorySeparatorChar
 Get-ChildItem -LiteralPath $root -Directory -Recurse |
   Where-Object {
+    (-not $_.FullName.StartsWith($artifactsPrefix, [StringComparison]::OrdinalIgnoreCase)) -and
     (Test-Path -LiteralPath (Join-Path $_.FullName "NPOI.dll")) -and
     (
       (Test-Path -LiteralPath (Join-Path $_.FullName "RejjNet2020.exe")) -or
