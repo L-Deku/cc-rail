@@ -1141,7 +1141,7 @@ namespace RecoNet
             public string Code; public string Name; public string Unit; public long QuotaSeq;
             public decimal UnitPrice;
             public string NormCode; public string NormName; // 预计算的归一化文本，避免每次打分重复归一化
-            public bool IsLibrary;  // true=来自全库 quota-index.jsonl，项目里(尚)无此编号，写入需原生粘贴
+            public bool IsLibrary;  // true=来自全库 quota-index.jsonl，项目里(尚)无此编号，写入走结构模板构造
             public override string ToString()
             {
                 string tail = String.IsNullOrEmpty(Unit) ? "" : "  [" + Unit + "]";

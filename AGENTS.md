@@ -63,7 +63,8 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - SQL Server 结构迁移需要动态删除约束时，不要在 `EXEC(...)` 参数中直接拼接 `REPLACE`/`QUOTENAME` 等函数；先组装到 `NVARCHAR(MAX)` 变量，再用 `sys.sp_executesql` 执行，并重跑幂等 schema 脚本验证。
 - Windows PowerShell 5 中用 `[IO.File]::Replace` 原子更新已有状态文件时，不要把备份路径传 `$null`；应使用同目录唯一临时旧版路径，提交后清理，并用“首次写入 + 已有文件替换 + 无临时残留”运行态测试验证。备份已成功而状态落盘失败的恢复流程必须重新验证服务器侧备份且禁止覆盖已有备份。
 - `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 默认加载 `RecoQuotaRecommend/bin/RecoExpandPanel.dll`，不会自动编译当前源码；做源码级红绿回归时，应先把 `tools/RecoExpandPanel/` 当前全部 C# 源文件编译到工作区验证目录并设置 `RECO_EXPAND_DLL`，避免把旧 DLL 的结果误判为新代码结果。
-- `build.ps1 -BuildOnly` 输出目录按白名单只含两个插件 DLL 和清单，不携带 NPOI 运行依赖；反射测试新 `RecoExpandPanel.dll` 前应在工作区 `artifacts/test-runtime/` 创建隔离测试目录，仅复制该 DLL 与既有 NPOI 依赖。测试依赖不得复制到运行目录或发布包。
+- 批量运行 `tools/RecoExpandPanel/tests/` 前先读取每个脚本的 `param(...)`；多数反射脚本接受 `RECO_EXPAND_DLL`，但 `Test-SmartFillPartitionAndEntryCandidates.ps1` 必须显式传 `-ExpandDll <候选 DLL>`，不得因统一环境变量漏传参数而误报回归失败。
+- `build.ps1 -BuildOnly` 必须显式传入工作区内的 `-OutputDirectory`；输出目录按白名单只含两个插件 DLL 和清单，不携带 NPOI 运行依赖。反射测试新 `RecoExpandPanel.dll` 前应在工作区 `artifacts/test-runtime/` 创建隔离测试目录，仅复制该 DLL 与既有 NPOI 依赖。测试依赖不得复制到运行目录或发布包。
 - BuildOnly 清单中的源码哈希必须来自实际传给编译器的只读快照，不得在编译后重新哈希可能已被并行修改的工作树原文件；`source_commit` 只表示基线 HEAD，dirty 工作树必须另行显式标记。
 - 当前 .NET Framework `csc.exe` 构建不是确定性编译，两次独立编译即使源码完全相同，DLL SHA256 也可能因程序集标识变化而不同；应用 BuildOnly 的 `source_commit`、`source_file_hashes`和回归结果证明源与行为一致，然后对实际部署的同一候选 DLL 做全链路哈希一致性核对，不得要求跨编译 DLL 哈希相等。
 - `build.ps1 -BuildOnly` 的构建清单文件名是 `artifact-manifest.json`；构建后校验提交、dirty 标记和 DLL 哈希时应读取该文件，不要猜成 `build-manifest.json`。
@@ -86,15 +87,14 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 修改已含中文字符串的 C# 源码时，避免用 PowerShell `Set-Content` 默认编码整文件重写；优先用补丁方式，必要时用 `.NET UTF8Encoding(false)` 并把新增中文字符串写成 `\u` 转义，防止产生无关编码差异。
 - 新增或修复绑定学习字段时，必须按“数据源 -> 预览对象 -> `ExcelQuotaLink` XML -> `mapping-boxes.jsonl` -> `BindingLog`/聚合表 -> 推荐读取”逐段核对；Excel 工程量单位与定额目标单位要分别做回归，不能因预览对象已有字段就认定持久化链已传递。
 - 推荐定额/模板铺量的名字驱动组件“确认写入”即为接受推荐，必须回流 `source='plugin:apply-accept'`；只有整个 `TargetRow` 组件组全部写入成功才学习，残缺组不得产生 accepted，学习库写入失败不得阻断实际写入结果。
-- 推荐定额 L3 正式编号不得使用宿主右键菜单/批量粘贴作为写入路径；已验证该路径可返回却不生成定额行。2024 实机确认 `dataGridViewDE` 是自定义 `RecoNet.DataGridViewDe`，表格、定额编号列和单元格均为只读，`BeginEdit(true)` 返回 false 且不会产生 `EditingControl`，因此不得把普通 `DataGridView` 的 `BeginEdit` + `TextBoxBase` 当作原生输入路径。用户实机手工验证的原生链是：定位末尾空白业务行的编号列，直接键入完整编号并按 Enter，宿主生成完整定额行；数量列同样直接键入并按 Enter，焦点回到下一空白编号行。2024 实机进一步确认 `SendKeys.SendWait` 整段命令和逐字符 `keybd_event` 都可能返回成功但不生成定额行；`IMessageFilter` 对比已坐实失败时键盘消息发往只读 `RecoNet.DataGridViewDe`，而人工成功时消息发往用户单击后由宿主创建的 `DataGridViewTextBoxEditingControl`，所以自动写入必须先对目标业务单元格执行真实单击并确认该原生编辑框已获得焦点，未创建编辑框时禁止发送编号或数量。编辑框聚焦后逐字符 `keybd_event` 虽可输入文本，但实机可能只产生 Enter 的 `WM_KEYUP`；提交必须把 `WM_KEYDOWN(Enter)` 投递到编辑框消息队列，由宿主消息泵执行完整定额生成链，禁止把仅显示编号的半输入状态当成功。插件不得强改 `ReadOnly`；仍须逐条以项目数据库新增行的完整身份和数量判定成功。
-- 推荐定额 L3 定位宿主末尾空白行时，即使 `AllowUserToAddRows=true` 也不得选 `DataGridView.NewRowIndex`/`IsNewRow` 的 WinForms 新增占位行；必须选择最后一个非 `IsNewRow` 的宿主自管空白业务行。回归用例必须同时构造“宿主空白行 + WinForms 新增占位行”，防止普通 `DataGridView` 测试绕开真实失败状态。
-- 推荐定额窗口以宿主所有者子窗口打开时，正式编号原生编辑前应暂时隐藏该窗口并把激活与焦点交还宿主定额表；提交结束或异常后恢复同一个窗口和原预览集合，不得重新生成或清空预览。
+- 推荐定额写入只保留两层：有完整源行时走 L1 原行复制；没有完整源行时，不分正式定额、正式材料或辅助码，统一用当前项目 `定额输入` 结构模板构造完整业务行。正式编号构造行的名称、单位和数量取当前预览，单价固定写 0，待宿主“计算”补齐价格；辅助码仍可使用经过限制的学习单价。marker 与全部业务行必须在同一个项目事务中插入，任何一行失败都整体回滚，失败批次不得回流 accepted。
+- 推荐定额主链不得再包含 L3 原生键盘输入、宿主菜单粘贴、Win32 按键消息、原生新增行轮询或事后补偿状态机。历史实机证据只能按具体上下文解释：宿主窗口激活并进入真实编辑态时 `BeginEdit`/编辑控件链可以工作，`AgentExecutor.ExecuteAgentInsertGroup` 的剪贴板粘贴路径也可以工作；不能把某次推荐定额 L3 失败泛化为这些机制始终无效，也不得据此改动仍在使用的代理插入路径。
 - 当前项目定额查找必须包含 ZLF/SH 等完整“编号+规范化名称+规范化单位”辅助码身份，精确命中时优先选非零单价完整行走 L1；只有 `ZLF`、`SH`、`SF`、`LF` 等辅助码右键绑定时才学习软件行单价，并按 `定额序号` 从当前项目 `定额输入` 回读，表格值只作回读失败或未落库编辑的后备，禁止用较新的 0 元样本覆盖已有非零完整身份行。正式定额和有材料编号的材料不学习单价。
 - `SignatureBoxMap.weight` 不设上限，只保留下限 0；调整公式时必须同步修改 SQL 增量写入、本机 `mapping-boxes.jsonl` 和 `Rebuild-Aggregates.ps1` 三端，并执行一次全量重算使历史聚合收敛。
 - `Rebuild-Aggregates.ps1` 分配 `QuotaBox.box_id` 时，历史显式 `box_id` 可能以 `auto-` 开头并与其他目标集合的自动 MD5 前缀冲突。必须先确定性保留唯一的历史显式 ID，再延长自动哈希前缀直到唯一；不得合并不同 `target_set_hash` 或依赖遍历顺序。
 - 修改 `NormalizeForSignature` 或 `Get-NormalizedPart` 时必须同步另一端并执行一次 `Rebuild-Aggregates.ps1`；包括 `-DryRun` 在内都会持有 `BindingLog` 独占锁，只能在冻结绑定写入的维护窗口执行。
 - 推荐快照 `SmartLearningSnapshot` 视为只读；范围过滤和排序只能操作副本，不得就地修改快照中的集合。
-- `SH`、`SQ`、`ZLF`、`LF`、`SF`、`TLF`、`YF`、`GF`、`JF`、`XGT1` 等通用辅助代码不得只按编号聚合或解析；本地组件、SQL 增量/全量聚合和推荐读取必须统一使用“类型+完整编号+规范化名称+规范化单位”身份。同一绑定事件内同码多义时只保留原始 `BindingLog`、不得晋升聚合；缺名称或单位时整组拒写。纯辅助组件可以单独进入推荐、学习和 `EngineeringTemplate` 专业范围；当前项目已有其他同码但不同名称/单位身份的辅助行不得阻断新身份推荐，只有完整身份精确命中才走 L1，否则继续走 L2。辅助码无完整源行时可按学习身份字段构造业务行，学习单价只作可修改默认值，缺价写 0 并提示但不阻断；辅助码绝不进入正式编号原生输入路径。
+- `SH`、`SQ`、`ZLF`、`LF`、`SF`、`TLF`、`YF`、`GF`、`JF`、`XGT1` 等通用辅助代码不得只按编号聚合或解析；本地组件、SQL 增量/全量聚合和推荐读取必须统一使用“类型+完整编号+规范化名称+规范化单位”身份。同一绑定事件内同码多义时只保留原始 `BindingLog`、不得晋升聚合；缺名称或单位时整组拒写。纯辅助组件可以单独进入推荐、学习和 `EngineeringTemplate` 专业范围；当前项目已有其他同码但不同名称/单位身份的辅助行不得阻断新身份推荐，只有完整身份精确命中才走 L1，否则与其他无完整源行目标一样走结构模板构造。辅助码的学习单价只作可修改默认值，缺价写 0 并提示但不阻断。
 - 推荐定额右键绑定软件定额行绑定的是完整组件关系，必须传递目标类型、编号、名称、单位、目标级条目证据、`quota_sequence`、来源项目数据库和不含密码的来源端点身份；`unit_price` 只对 `ZLF`、`SH`、`SF`、`LF` 等辅助码写入学习流水和聚合，正式定额及有材料编号的材料不得写入或读取学习单价。当前项目中的历史绑定缺端点身份时，只允许借用宿主当前连接按“同数据库名 + 定额序号 + 完整目标身份”回读完整源行，不得据此跨库猜测单价。
 - 测试通过反射直接调用 `UpsertBindingGroupAggregates` 时，必须显式设置 `SoftwarePartition` 和 `MethodNo`；含通用辅助码的聚合框会转为稳定 `auto-*` 框，断言 `EngineeringTemplate` 时应由唯一签名经 `SignatureBoxMap` 解析实际 `box_id`，不得继续使用调用方传入的原始 `BoxId`。
 - `SF` 只能写入名称含“设备购置费”的条目，名称含“设备购置费”的条目也只接受 `SF`；任一方向违反时必须阻断整组，禁止自动写入和手工确认，不产生 accepted。推荐定额写入的条目名一律取当前项目 `章节表` 真实名称；SF 自动改道只接受段数相同、父前缀相同且名称含“设备购置费”的唯一同级条目，零个或多个时整组阻断。SF 只允许完整源行复制或按学习字段构造，禁止原生粘贴，禁止为写入导航宿主树。绑定回流的条目名补齐仍按“当前项目真实条目名 > 精确 `(LibraryMethod, MethodNo)` 分区的 `ChapterEntry` > 目标级历史名称”，不得跨办法回退。
@@ -103,7 +103,6 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 跨量纲业务换算不得简化成历史单元格地址或一次性结果；应保存 `V0/V1...` 参数公式及每个参数的名称、单位和名称级签名。推荐时只用当前表同章节、邻近行内精确且唯一的参数重新计算；缺参数、同名歧义或单位不兼容时必须取消自动勾选。公式读取先按当前推荐学习库专业范围过滤原始条目分片，再按公式内容合并样本数；条目编号仍只作范围与审计依据。`F10/1000+F11/1000` 仍按独立正向别名学习，不得因此生成共享公式或跨行合计。
 - C# 5 代码中不要在 `||`/`&&` 短路条件里依赖 `out` 参数一定赋值；用于错误文案的 `out` 变量先给默认值，避免 `CS0165`。
 - C# 5 中 lambda 参数名与同一外层代码块后续局部变量也不得同名；新增 `FindIndex`/`Where` 等 lambda 后再定义局部变量时先检查名称，避免 `CS0136`。
-- 32 位 `ReJJGSNet2024` 中构造高位为 1 的 Win32 消息 `lParam`（如 Enter `WM_KEYUP=0xC01C0001`）时，必须先 `unchecked((int)...)` 再构造 `IntPtr`；先转正的 `long` 会在 32 位进程抛出 `OverflowException`，中断宿主原生输入链。
 - 插件访问当前项目数据库时，不得从宿主已脱敏的 `ConnectionString` 克隆新连接，不得恢复备用账号、保存密码或依赖 `Persist Security Info`。UI 线程路径只借用宿主当前 `SqlConnection`，不得 `using`、`Dispose`、`Close` 或 `ChangeDatabase`；后台任务只把短数据库阶段同步调度到 UI 线程，网络请求继续留在后台。预览、执行、撤销和重做必须同时保存并核对连接对象引用与不含密码的 `DataSource|Database` 身份，项目切换后拒绝旧计划。
 - 用 Windows PowerShell 5 反射调用 WinForms 私有构造器做冒烟测试时，先设 `$ErrorActionPreference = 'Stop'`，并把 `New-Object` 返回控件的 `.PSObject.BaseObject` 传给反射 API；泛型 `List<T>`、`HashSet<T>` 等参数也要拆包，否则类型包装错误可能只产生非终止错误并让命令假通过。反射方法只接收一个泛型集合参数时，不要直接用 `[object[]]@($list)`，应先创建长度为 1 的 `object[]` 再将 `.PSObject.BaseObject` 赋给第 0 项，避免 PowerShell 把集合展开成多个参数。反射读取 `List<T>` 后若经辅助函数返回并继续使用 `.Count`/索引，辅助函数应使用 `Write-Output -NoEnumerate`，避免单元素集合被自动展开成标量。
 - 2024 软件预算项目输入 2020 概算/估算定额时，首要检查 `项目设置 -> 定额选择` 是否勾选了迁移书号，或数据库 `项目信息.标准定额应用` 是否包含对应书号。未勾选时会出现“定额编号无效或费用类型不匹配”、计算单价为 0 或“无法找到定额消耗数据”等现象；勾选后 2024 原生辅助查询、输入和计算即可使用迁移定额。
@@ -166,14 +165,14 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 模板铺量同名候选的勾选确认、下拉切换和右键临时绑定应按 `TargetRow` 局部更新当前工程量组并保持滚动视口；不得调用 `FillGrid()` 清空重建整表，避免列表跳回顶部并丢失其他行尚未同步的勾选状态。
 - 模板铺量名字驱动中，“同名多来源”或“重复工程量名称”的待确认文案属于非阻断 `AlignNote`，红色由 `NeedExactNameConfirmation` 表示；不得把该提示写入阻断性 `Status`。默认候选正确时必须允许用户直接勾选组首复选框确认，确认后整组勾选并取消红色；只有真实的单位、条目、公式或取数错误才能阻止确认。推荐定额窗口中的普通条目不由预览推理，条目类阻断只保留当前树节点不可写和 SF 双向冲突。
 - 推荐定额同步宿主“当前条目”时，`Tv_tree.SelectedNode` 有值就以界面真实选中项为准，不得要求它与宿主 `CurrNode` 引用相同；宿主切换焦点期间 `SelectedNode` 可能暂时为空，此时允许回退 `CurrNode`。宿主树节点可能同时不暴露 `Tag[条目序号]` 和 `Tag[条目编号]`：应先用属性框/结果表/节点中的条目编号在当前项目 `章节表` 唯一反查序号和名称，树序号仅在存在时作交叉校验，不得因两个 Tag 字段均缺失直接拒绝。任何收紧为 fail-closed 的审查建议都必须先取得 2020/2024 真实节点结构证据。仍须通过叶节点、可编辑定额表、项目唯一身份和项目连接校验；实机验收要逐道走完当前条目的全部门禁，不得只修复首个暴露的提示。
-- 推荐定额成功写入当前条目后必须保留原预览行、勾选状态和滚动位置，方便继续选择其他组写入别的条目；不得把“写入成功”当作数据源变化而调用预览失效。正式编号调用宿主原生粘贴前，必须先用与预览相同的 `ResolveChapterNo` 链核对并复用编号一致的当前 `SelectedNode`，仅在不一致时搜索导航宿主树；宿主节点可能没有可供树搜索的 Tag/Name 身份。随后必须激活主窗口并聚焦定额输入表；确认失败提示和日志必须列出目标条目、具体定额编号/名称、预期数、确认数及失败状态，不能只显示笼统的“未完整确认”。
+- 推荐定额成功写入当前条目后必须保留原预览行、勾选状态和滚动位置，方便继续选择其他组写入别的条目；不得把“写入成功”当作数据源变化而调用预览失效。用户确认后、事务开始前仍须用与预览相同的 `ResolveChapterNo` 链重新核对当前 `SelectedNode`、条目身份、项目连接对象和 `DataSource|Database`，任一变化都拒绝旧计划。
 - 宿主定额表自管末尾空白输入行，可写预检不得依赖 WinForms `AllowUserToAddRows`/`NewRowIndex` 或定额编号列 `ReadOnly` 标记；应与 `MoveAgentGridToNewRow` 的真实写入路径保持一致，校验表格可见、启用、存在定额编号列且至少有一个可定位行。
 - 名字驱动预览把工程量名跨组件成员行合并绘制时，逐行裁剪绘制仍不足以覆盖点击后的局部重绘；选择变化必须使合并工程量名整列或完整组失效重绘，并用“点击后续成员行、首行文字仍完整”做现场验收。
 - “推荐定额”虽然复用 `TemplateFillPanel` 的预览表格，但匹配分层、标红原因和预览汇总来自 `SmartFillFeature.BuildPreview_SmartFill`；诊断“推荐定额”截图时必须按状态列、候选提示以及 SQL 聚合读取链解释，不得套用模板铺量的同名来源规则。推荐范围只由窗口上方“推荐学习库”下拉硬过滤，与宿主左侧树选中解耦；SQL 读取链使用 `SignatureBoxMap`/`QuotaBoxTarget`、`EngineeringTemplate`、`ChapterEntry`、`QuantityFormulaRule`/`QuantityFormulaOperand` 和可溯源 `BindingLog`，不再用 `EntryQuota` 或条目组合器推理写入条目。
 - 推荐定额组件候选下拉只显示组件编号集合（可附当前版本定额名称），不显示条目；学习权重和办法证据仅用于内部排序/自动采纳，同显示文案候选保留排序第一项。数量列人工修改必须同步到 `QuantityText`，直接勾选当前候选应原地确认以保留修改值，且确认后整组逐行刷新 `AlignNote`。
 - 排查模板铺量匹配异常时，必须按界面当前选择的模板名调用 `LoadFillTemplate` 并核对实际模板 JSON；不得用名称相近的其他模板代替复现后推断匹配分支。
-- 能用软件原生写入的尽量用原生写入，优先复用软件已有的定额查询、选择、写入和计算逻辑。推荐定额主链固定按 L1 完整源行复制、L2 辅助码学习字段构造、L3 正式定额/正式材料原生输入的顺序选层；L1/L2 在一次 Apply 的项目业务事务内写入，任何辅助码都不得进入 L3。
-- 触发定额输入表原生补齐时，应在当前行“定额编号”单元格进入编辑后模拟键盘输入/粘贴编号并回车；直接设置单元格值或编辑控件 Text 可能不会触发软件填充单重、编制人、修改日期等派生字段。
+- 推荐定额主链固定按 L1 完整源行复制、L2 结构模板构造两层选路，并在一次 Apply 的项目业务事务内写入 marker 和全部业务行；不得恢复 L3 正式定额/正式材料原生输入。宿主原生写入仍可用于推荐定额以外已经实机验证的独立功能，但不得与推荐定额事务混用。
+- 其他功能触发定额输入表原生补齐时，应在当前行“定额编号”单元格进入编辑后模拟键盘输入/粘贴编号并回车；直接设置单元格值或编辑控件 Text 可能不会触发软件填充单重、编制人、修改日期等派生字段。
 
 ## 代码编辑规则
 

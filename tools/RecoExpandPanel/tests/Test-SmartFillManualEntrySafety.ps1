@@ -37,25 +37,12 @@ $requiredFeature = @(
     'SfEntryBlockReason',
     'EntrySource',
     'ApplyFillToSelectedEntry',
-    'NativeInsertState',
-    'Submitted',
-    'Confirming',
-    'PartiallyConfirmed',
-    'Indeterminate',
-    'CompensationFailed',
-    'DateTime.Now.AddSeconds(3)',
-    'WaitAgentUiIdle(100)',
-    'stableCount >= 2',
-    'TryCommitSmartNativeQuotaViaSingleEnter',
-    'TryCommitSmartNativeCellViaSingleEnter',
-    'TryActivateSmartNativeHostEditor',
-    'BuildSmartNativeVirtualKeyPlan',
-    'TrySendSmartNativeKeyCommand',
-    'SmartNativeInputTraceFilter',
-    'EnsureSmartNativeInputTrace',
-    'FindSmartNativeColumnIndex',
-    'FindSmartNativeInputRowIndex',
+    'LoadSmartFillStructuralRow',
+    'BuildSmartFillL2Row',
+    'HasSmartFillConstructedIdentity',
     'IsSmartFillSourceIdentityMatch',
+    'foreach (PreparedSmartFillItem plan in prepared)',
+    '项目业务事务已整体回滚，未学习。失败原因：',
     'ProjectConnection = conn',
     'ProjectConnectionIdentity = GetProjectConnectionIdentity(conn)'
 )
@@ -64,10 +51,43 @@ foreach ($marker in $requiredFeature) {
         throw "Missing smart apply safety marker: $marker"
     }
 }
-if ($feature.IndexOf('else if (IsContextSensitiveLearningCode(item.QuotaCode))', [StringComparison]::Ordinal) -lt 0 -or
-    $feature.IndexOf('else if (IsContextSensitiveLearningCode(item.QuotaCode))', [StringComparison]::Ordinal) -gt
-    $feature.IndexOf('plan.Layer = SmartFillWriteLayer.L3;', [StringComparison]::Ordinal)) {
-    throw '辅助码没有在 L3 正式编号原生输入之前固定分流到 L2'
+foreach ($obsoleteNativeMarker in @(
+    'NativeInsertState',
+    'SmartNativeInsertRecord',
+    'ExecuteSmartNativeInsertGroup',
+    'TrySendSmartNativeKeyCommand',
+    'TryCompensateSmartNativeRows',
+    'SmartFillWriteLayer.L3'
+)) {
+    if ($feature.Contains($obsoleteNativeMarker)) {
+        throw "推荐定额仍残留旧 L3 原生输入链：$obsoleteNativeMarker"
+    }
+}
+foreach ($constructedMarker in @(
+    'if (!HasSmartFillConstructedIdentity(item))',
+    'if (!IsContextSensitiveLearningCode(item.QuotaCode)) item.LearnedUnitPrice = 0m;',
+    'plan.SourceRow = BuildSmartFillL2Row(structuralRow, item);'
+)) {
+    if (-not $feature.Contains($constructedMarker)) {
+        throw "正式定额没有统一进入结构模板构造：$constructedMarker"
+    }
+}
+$applyStart = $feature.IndexOf('private static string ApplyFillToSelectedEntry', [StringComparison]::Ordinal)
+$applyEnd = $feature.IndexOf('// 写入：把选中预览项对应的源定额行', $applyStart, [StringComparison]::Ordinal)
+if ($applyStart -lt 0 -or $applyEnd -le $applyStart) { throw '缺少推荐定额当前条目写入事务入口' }
+$applyBody = $feature.Substring($applyStart, $applyEnd - $applyStart)
+if ([regex]::Matches($applyBody, 'BeginTransaction\(').Count -ne 1) {
+    throw '推荐定额写入必须只有一个项目事务，不能再拆分原生输入和 SQL 写入'
+}
+foreach ($transactionMarker in @(
+    'long markerId = InsertQuotaRowReturnId(conn, transaction, markerSource);',
+    'long newId = InsertQuotaRowReturnId(conn, transaction, row);',
+    'transaction.Rollback();',
+    '项目业务事务已整体回滚，未学习。失败原因：'
+)) {
+    if (-not $applyBody.Contains($transactionMarker)) {
+        throw "marker 与业务行没有受同一事务保护：$transactionMarker"
+    }
 }
 $crossDbStart = $smart.IndexOf('private static Dictionary<string, object> LoadCrossDbQuotaRow', [StringComparison]::Ordinal)
 $crossDbEnd = $smart.IndexOf('private static List<SmartMapCandidateScore> RankSmartMapEntries', $crossDbStart, [StringComparison]::Ordinal)
@@ -138,106 +158,6 @@ if ($currentEntryBody.Contains('当前树节点缺少可核对的条目序号') 
     throw '真实宿主树节点未暴露 Tag 序号/编号时仍会被直接拒绝'
 }
 
-$nativeStart = $feature.IndexOf('private static SmartNativeInsertRecord ExecuteSmartNativeInsertGroup', [StringComparison]::Ordinal)
-$nativeEnd = $feature.IndexOf('private static bool TryCompensateSmartNativeRows', $nativeStart, [StringComparison]::Ordinal)
-if ($nativeStart -lt 0 -or $nativeEnd -le $nativeStart) { throw '缺少正式编号原生输入执行入口' }
-$nativeBody = $feature.Substring($nativeStart, $nativeEnd - $nativeStart)
-foreach ($marker in @('mainForm.Activate();', 'grid.Focus()', 'DescribeSmartNativeFailure(record)',
-    'Smart native insert result.', 'IsSmartNativeTargetAlreadySelected',
-    'if (!alreadySelected && !TryNavigateToAgentItem(mainForm, conn, nativeGroup.Key))',
-    'Smart native target route=', 'TryCommitSmartNativeQuotaViaSingleEnter')) {
-    if (-not $nativeBody.Contains($marker)) { throw "正式编号原生输入缺少焦点或逐组诊断：$marker" }
-}
-foreach ($forbiddenNativePath in @('Clipboard.SetText(', 'TryInvokeAgentPasteMenu(', 'SendKeys.SendWait("^v")')) {
-    if ($nativeBody.Contains($forbiddenNativePath)) {
-        throw "推荐定额 L3 仍在走已证实无法落库的批量粘贴路径：$forbiddenNativePath"
-    }
-}
-foreach ($marker in @('private static bool IsSmartNativeTargetAlreadySelected',
-    'ResolveChapterNo(mainForm, conn, selected)')) {
-    if (-not $feature.Contains($marker)) { throw "正式编号当前条目复用缺少身份核对：$marker" }
-}
-if ($nativeBody.IndexOf('mainForm.Activate();', [StringComparison]::Ordinal) -gt
-    $nativeBody.IndexOf('grid.Focus()', [StringComparison]::Ordinal)) {
-    throw '正式编号粘贴前必须先激活宿主主窗口，再聚焦定额输入表格'
-}
-$nativeCellStart = $feature.IndexOf('private static bool TryCommitSmartNativeCellViaSingleEnter', [StringComparison]::Ordinal)
-$nativeCellEnd = $feature.IndexOf('private static string GetSmartNativeCellText', $nativeCellStart, [StringComparison]::Ordinal)
-if ($nativeCellStart -lt 0 -or $nativeCellEnd -le $nativeCellStart) {
-    throw '缺少可单独核对的原生单元格 Enter 提交入口'
-}
-$nativeCellBody = $feature.Substring($nativeCellStart, $nativeCellEnd - $nativeCellStart)
-foreach ($forbiddenMarker in @('grid.BeginEdit(', 'grid.ReadOnly = false',
-    'grid.NotifyCurrentCellDirty(', 'SendKeys.SendWait(')) {
-    if ($nativeCellBody.Contains($forbiddenMarker)) {
-        throw "宿主只读 DataGridViewDe 仍被当作普通可编辑表格：$forbiddenMarker"
-    }
-}
-foreach ($marker in @('grid.Focus()', 'TryActivateSmartNativeHostEditor(grid, rowIndex, columnIndex, out editorError)',
-    'TrySendSmartNativeKeyCommand(value, out keyError)',
-    'TryPostSmartNativeHostEnter(grid, editor, out enterError)')) {
-    if (-not $nativeCellBody.Contains($marker)) { throw "宿主键盘命令提交缺少已验证步骤：$marker" }
-}
-if ($nativeCellBody.IndexOf('TryActivateSmartNativeHostEditor(', [StringComparison]::Ordinal) -gt
-    $nativeCellBody.IndexOf('TrySendSmartNativeKeyCommand(', [StringComparison]::Ordinal)) {
-    throw '必须先让宿主通过真实单击创建编辑框，再发送编号或数量键盘命令'
-}
-$nativeEditorStart = $feature.IndexOf('private static bool TryActivateSmartNativeHostEditor', [StringComparison]::Ordinal)
-$nativeEditorEnd = $feature.IndexOf('private static bool TryCommitSmartNativeCellViaSingleEnter', $nativeEditorStart, [StringComparison]::Ordinal)
-if ($nativeEditorStart -lt 0 -or $nativeEditorEnd -le $nativeEditorStart) {
-    throw '缺少宿主原生编辑框激活入口'
-}
-$nativeEditorBody = $feature.Substring($nativeEditorStart, $nativeEditorEnd - $nativeEditorStart)
-foreach ($marker in @('grid.GetCellDisplayRectangle(', 'grid.PointToScreen(', 'SetCursorPos(',
-    'mouse_event(', 'grid.EditingControl', 'WaitAgentUiIdle(20)')) {
-    if (-not $nativeEditorBody.Contains($marker)) { throw "宿主原生编辑框激活缺少人工成功链证据：$marker" }
-}
-foreach ($forbiddenMarker in @('grid.BeginEdit(', 'ReadOnly = false', '.Value =')) {
-    if ($nativeEditorBody.Contains($forbiddenMarker)) { throw "宿主原生编辑框激活仍在强改只读表格：$forbiddenMarker" }
-}
-$nativeKeyStart = $feature.IndexOf('private static bool TrySendSmartNativeKeyCommand', [StringComparison]::Ordinal)
-$nativeKeyEnd = $feature.IndexOf('private static bool TryCommitSmartNativeCellViaSingleEnter', $nativeKeyStart, [StringComparison]::Ordinal)
-if ($nativeKeyStart -lt 0 -or $nativeKeyEnd -le $nativeKeyStart) {
-    throw '缺少宿主 Win32 虚拟键发送入口'
-}
-$nativeKeyBody = $feature.Substring($nativeKeyStart, $nativeKeyEnd - $nativeKeyStart)
-foreach ($marker in @('BuildSmartNativeVirtualKeyPlan(value)', 'keybd_event(',
-    'KeyEventFlagKeyUp', 'Application.DoEvents()')) {
-    if (-not $nativeKeyBody.Contains($marker)) { throw "Win32 虚拟键发送缺少真实按键步骤：$marker" }
-}
-if ($nativeKeyBody.Contains('keybd_event((byte)Keys.Enter')) {
-    throw '实机已证明逐字符 keybd_event 的 Enter 只有 KEYUP，不能继续用它提交定额'
-}
-$nativeEnterStart = $feature.IndexOf('private static bool TryPostSmartNativeHostEnter', [StringComparison]::Ordinal)
-$nativeEnterEnd = $feature.IndexOf('private static bool TryCommitSmartNativeCellViaSingleEnter', $nativeEnterStart, [StringComparison]::Ordinal)
-if ($nativeEnterStart -lt 0 -or $nativeEnterEnd -le $nativeEnterStart) {
-    throw '缺少向宿主编辑框消息队列投递 Enter 的入口'
-}
-$nativeEnterBody = $feature.Substring($nativeEnterStart, $nativeEnterEnd - $nativeEnterStart)
-foreach ($marker in @('PostMessage(', 'SmartNativeWmKeyDown', '(IntPtr)Keys.Enter',
-    'WaitAgentUiIdle(20)', 'new IntPtr(unchecked((int)0xC01C0001u))')) {
-    if (-not $nativeEnterBody.Contains($marker)) { throw "宿主 Enter 提交缺少人工成功链证据：$marker" }
-}
-if ($nativeEnterBody.Contains('new IntPtr(unchecked((long)0xC01C0001u))')) {
-    throw '32 位宿主不能把 WM_KEYUP 的高位参数作为正 64 位数构造 IntPtr'
-}
-if ($nativeEnterBody.Contains('SendMessage(') -or $nativeEnterBody.Contains('grid.EndEdit(')) {
-    throw '宿主 Enter 必须进入消息泵预处理链，不能绕过为同步 WndProc 或直接结束编辑'
-}
-$nativeTraceStart = $feature.IndexOf('private sealed class SmartNativeInputTraceFilter : IMessageFilter', [StringComparison]::Ordinal)
-$nativeTraceEnd = $feature.IndexOf('private static int[] BuildSmartNativeVirtualKeyPlan', $nativeTraceStart, [StringComparison]::Ordinal)
-if ($nativeTraceStart -lt 0 -or $nativeTraceEnd -le $nativeTraceStart) {
-    throw '缺少自动失败与人工成功键盘链对比诊断入口'
-}
-$nativeTraceBody = $feature.Substring($nativeTraceStart, $nativeTraceEnd - $nativeTraceStart)
-foreach ($marker in @('WM_KEYDOWN', 'WM_CHAR', 'GetForegroundWindow()', 'GetFocus()',
-    'Application.AddMessageFilter(filter)', 'phase=post-dispatch', 'phase=settled', 'return false;')) {
-    if (-not $nativeTraceBody.Contains($marker)) { throw "键盘链诊断缺少只读证据：$marker" }
-}
-if ($nativeTraceBody.Contains('return true;')) {
-    throw '键盘链诊断不得吞掉或替代宿主键盘消息'
-}
-
 foreach ($marker in @('String.Equals(targetConn.Database, candidate.DatabaseName',
     'GetProjectConnectionIdentity(targetConn)', 'TryLoadSmartSourceRowFromConnection')) {
     if (-not $crossDbBody.Contains($marker)) {
@@ -284,15 +204,9 @@ $formType = [Reflection.Assembly]::LoadFrom($dll).GetType('RecoNet.FormPanel', $
 $nested = [Reflection.BindingFlags]'Public,NonPublic'
 $flags = [Reflection.BindingFlags]'Public,NonPublic,Static,Instance'
 $itemType = $formType.GetNestedType('FillPreviewItem', $nested)
-$planType = $formType.GetNestedType('PreparedSmartFillItem', $nested)
-$recordType = $formType.GetNestedType('SmartNativeInsertRecord', $nested)
-$classify = $formType.GetMethod('ClassifySmartNativeRows', $flags)
 $buildL2 = $formType.GetMethod('BuildSmartFillL2Row', $flags)
+$hasConstructedIdentity = $formType.GetMethod('HasSmartFillConstructedIdentity', $flags)
 $resolveSourceDatabase = $formType.GetMethod('ResolveSmartSourceDatabaseName', $flags)
-$isSameNativeTargetItem = $formType.GetMethod('IsSameSmartNativeTargetItem', $flags)
-$findNativeColumn = $formType.GetMethod('FindSmartNativeColumnIndex', $flags)
-$findNativeInputRow = $formType.GetMethod('FindSmartNativeInputRowIndex', $flags)
-$buildNativeVirtualKeyPlan = $formType.GetMethod('BuildSmartNativeVirtualKeyPlan', $flags)
 $shouldLoadCurrentQuotaTarget = $formType.GetMethod('ShouldLoadCurrentSmartQuotaTarget', $flags)
 $smartTargetType = $formType.GetNestedType('SmartBoxTarget', $nested)
 $projectQuotaType = $formType.GetNestedType('ProjectQuota', $nested)
@@ -303,25 +217,16 @@ $panelType = $formType.GetNestedType('TemplateFillPanel', $nested)
 $resolveTreeNode = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('ResolveSmartHostTreeNode', $flags) }
 $isEditableGrid = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsEditableAgentQuotaGrid', $flags) }
 $isOptionalTreeSequenceConsistent = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsOptionalSmartTreeSequenceConsistent', $flags) }
-if ($null -eq $itemType -or $null -eq $planType -or $null -eq $recordType -or
-    $null -eq $classify -or $null -eq $buildL2 -or $null -eq $resolveSourceDatabase -or
-    $null -eq $isSameNativeTargetItem -or $null -eq $findNativeColumn -or
-    $null -eq $findNativeInputRow -or $null -eq $buildNativeVirtualKeyPlan -or
+if ($null -eq $itemType -or $null -eq $buildL2 -or $null -eq $hasConstructedIdentity -or
+    $null -eq $resolveSourceDatabase -or
     $null -eq $shouldLoadCurrentQuotaTarget -or
     $null -eq $smartTargetType -or $null -eq $projectQuotaType -or
     $null -eq $resolveSmartPreviewUnitPrice -or $null -eq $filterLearningTargetUnitPrice -or
     $null -eq $resolveLearningTargetKind -or
     $null -eq $resolveTreeNode -or $null -eq $isEditableGrid -or
     $null -eq $isOptionalTreeSequenceConsistent) {
-    throw '缺少 L2 构造或 L3 结构化确认的可测试行为入口'
+    throw '缺少推荐定额统一构造写入的可测试行为入口'
 }
-
-if (-not [bool]$isSameNativeTargetItem.Invoke($null, @('0309-01-03-05', '0309-01-03-05')) -or
-    [bool]$isSameNativeTargetItem.Invoke($null, @('0309-01-03-05', '0309-01-03-06')) -or
-    [bool]$isSameNativeTargetItem.Invoke($null, @('', '0309-01-03-05'))) {
-    throw '正式编号原生输入没有稳定核对当前已选条目与目标条目'
-}
-Write-Host 'PASS 正式编号优先复用与目标编号一致的当前已选条目'
 
 foreach ($auxiliaryCode in @('ZLF', 'SH', 'SF', 'LF', 'SQ', 'YF', 'TLF', 'GF', 'JF', 'XGT1')) {
     if ([decimal]$filterLearningTargetUnitPrice.Invoke($null, @($auxiliaryCode, [decimal]58.5)) -ne [decimal]58.5) {
@@ -433,65 +338,6 @@ if ([bool]$isEditableGrid.Invoke($null, $gridArgs)) {
 $agentGrid.Dispose()
 Write-Host 'PASS 宿主自管空白行与实际定额粘贴路径采用同一可写判定'
 
-$nativeGrid = New-Object System.Windows.Forms.DataGridView
-$nativeGrid.AllowUserToAddRows = $true
-$nativeCodeColumn = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-$nativeCodeColumn.Name = '定额编号DE'
-$nativeCodeColumn.HeaderText = '定额编号'
-[void]$nativeGrid.Columns.Add($nativeCodeColumn)
-$nativeCalculatedQuantityColumn = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-$nativeCalculatedQuantityColumn.Name = '工程数量'
-$nativeCalculatedQuantityColumn.HeaderText = '工程数量'
-[void]$nativeGrid.Columns.Add($nativeCalculatedQuantityColumn)
-$nativeQuantityColumn = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-$nativeQuantityColumn.Name = '工程数量输入'
-$nativeQuantityColumn.HeaderText = '工程数量输入'
-[void]$nativeGrid.Columns.Add($nativeQuantityColumn)
-[void]$nativeGrid.Rows.Add('LY-1', '1', '1')
-[void]$nativeGrid.Rows.Add('', '', '')
-$nativeGridArgs = New-Object 'object[]' 2
-$nativeGridArgs[0] = $nativeGrid.PSObject.BaseObject
-$nativeGridArgs[1] = [string[]]@('定额编号', '定额编号DE')
-$nativeCodeIndex = [int]$findNativeColumn.Invoke($null, $nativeGridArgs)
-if ($nativeCodeIndex -ne 0) { throw '原生单行输入未找到宿主定额编号列' }
-$nativeGridArgs[1] = [string[]]@('工程数量输入', '工程数量')
-$nativeQuantityIndex = [int]$findNativeColumn.Invoke($null, $nativeGridArgs)
-if ($nativeQuantityIndex -ne 2) { throw '原生单行输入未优先选择可编辑的工程数量输入列' }
-$nativeRowArgs = New-Object 'object[]' 2
-$nativeRowArgs[0] = $nativeGrid.PSObject.BaseObject
-$nativeRowArgs[1] = $nativeCodeIndex
-$nativeInputRow = [int]$findNativeInputRow.Invoke($null, $nativeRowArgs)
-if ($nativeInputRow -ne 1 -or $nativeInputRow -eq $nativeGrid.NewRowIndex -or $nativeGrid.Rows[$nativeInputRow].IsNewRow) {
-    throw '原生单行输入未选中宿主自管末尾空白行，或误选 WinForms 新增占位行'
-}
-$nativeGrid.Rows[1].Cells[0].Value = 'LY-2'
-if ([int]$findNativeInputRow.Invoke($null, $nativeRowArgs) -ne -1) {
-    throw '没有空白行时原生单行输入误覆盖了已有定额'
-}
-$nativeGrid.Rows[0].Cells[0].Value = ''
-if ([int]$findNativeInputRow.Invoke($null, $nativeRowArgs) -ne -1) {
-    throw '原生单行输入误选了中间空白行，只允许使用末尾空白行'
-}
-$nativeGrid.Dispose()
-foreach ($case in @(
-    @('PY-415', 6),
-    @('QY-215*9', 8),
-    @('252/10', 6),
-    @('F10/1000+F11/1000', 17)
-)) {
-    [int[]]$keyPlan = $buildNativeVirtualKeyPlan.Invoke($null, @([string]$case[0]))
-    if ($null -eq $keyPlan -or $keyPlan.Length -ne [int]$case[1] -or
-        @($keyPlan | Where-Object { ($_ -band 0xFF) -eq 0 }).Count -gt 0) {
-        throw "宿主虚拟键计划错误：$($case[0]) => $($keyPlan -join ',')"
-    }
-}
-[int[]]$shiftPlan = $buildNativeVirtualKeyPlan.Invoke($null, @('pP+*'))
-if (($shiftPlan[0] -shr 8) -ne 0 -or (($shiftPlan[1] -shr 8) -band 1) -eq 0 -or
-    (($shiftPlan[2] -shr 8) -band 1) -eq 0 -or (($shiftPlan[3] -shr 8) -band 1) -eq 0) {
-    throw "宿主虚拟键计划没有正确保留 Shift 修饰键：$($shiftPlan -join ',')"
-}
-Write-Host 'PASS 正式定额 Win32 键盘路径精确定位末尾空白行并映射编号/数量'
-
 if (-not [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @('', [long]8123)) -or
     -not [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @($null, [long]8123)) -or
     -not [bool]$isOptionalTreeSequenceConsistent.Invoke($null, @('8123', [long]8123))) {
@@ -525,63 +371,44 @@ function New-CompleteRow([string]$Code, [string]$Name, [string]$Unit, [string]$Q
     $row['额外宿主字段'] = '保留'
     return $row
 }
-function New-Record($Item, [int]$ExpectedCount) {
-    $plan = [Activator]::CreateInstance($planType, $true).PSObject.BaseObject
-    $planType.GetField('Item', $flags).SetValue($plan, $Item)
-    $record = [Activator]::CreateInstance($recordType, $true).PSObject.BaseObject
-    $recordType.GetField('ExpectedCount', $flags).SetValue($record, $ExpectedCount)
-    [void]$recordType.GetField('Items', $flags).GetValue($record).Add($plan)
-    return $record
-}
-function Invoke-Classify($Record, $Rows) {
-    $args = New-Object 'object[]' 4
-    $args[0] = $Record
-    $args[1] = $Rows
-    $args[2] = $null
-    $args[3] = $null
-    return [pscustomobject]@{ State=[string]$classify.Invoke($null, $args); Owned=$args[2]; Unowned=$args[3] }
-}
-
-$official = New-Item 'LY-1' '测试定额' 'm3' '2'
-$record = New-Record $official 1
-$rowDictionaryType = $classify.GetParameters()[1].ParameterType
-$rows = [Activator]::CreateInstance($rowDictionaryType).PSObject.BaseObject
-$rows.Add([long]101, (New-CompleteRow 'LY-1' '测试定额' 'm3' '2'))
-$confirmed = Invoke-Classify $record $rows
-if ($confirmed.State -ne 'Confirmed' -or $confirmed.Owned.Count -ne 1 -or $confirmed.Unowned.Count -ne 0) {
-    throw 'L3 完整身份与数量相符的单行未进入 Confirmed'
-}
-$recordType.GetField('ExpectedCount', $flags).SetValue($record, 2)
-$partial = Invoke-Classify $record $rows
-if ($partial.State -ne 'PartiallyConfirmed' -or $partial.Owned.Count -ne 1) {
-    throw 'L3 少于预期的新行未进入 PartiallyConfirmed'
-}
-$recordType.GetField('ExpectedCount', $flags).SetValue($record, 1)
-$rows[101]['工程或费用项目名称'] = ''
-$shell = Invoke-Classify $record $rows
-if ($shell.State -ne 'Indeterminate' -or $shell.Owned.Count -ne 1) {
-    throw '只有编号和数量的原生壳行被误认为完整写入'
-}
-$rows.Clear()
-$rows.Add([long]102, (New-CompleteRow 'OTHER-1' '其他定额' 'm3' '2'))
-$unowned = Invoke-Classify $record $rows
-if ($unowned.State -ne 'Indeterminate' -or $unowned.Unowned.Count -ne 1 -or $unowned.Owned.Count -ne 0) {
-    throw '无法归属的同期新行未与本批可补偿 ID 隔离'
-}
-$rows.Clear()
-$failed = Invoke-Classify $record $rows
-if ($failed.State -ne 'Failed') { throw '未检测到新行时未进入 Failed' }
-Write-Host 'PASS L3 状态机按完整身份、数量和归属区分 Confirmed/Partial/Indeterminate/Failed'
-
 $aux = New-Item 'SH' '弃土消纳费' 'm3' '3'
 $itemType.GetField('LearnedUnitPrice', $flags).SetValue($aux, [decimal]12.5)
 $structural = New-CompleteRow 'LY-9' '结构模板行' '100m3' '1'
 $l2 = $buildL2.Invoke($null, @($structural, $aux))
 if ($l2['定额编号'] -ne 'SH' -or $l2['工程或费用项目名称'] -ne '弃土消纳费' -or
-    $l2['单位'] -ne 'm3' -or [decimal]$l2['单价'] -ne [decimal]12.5 -or
+    $l2['单位'] -ne 'm3' -or $l2['工程数量输入'] -ne '3' -or [decimal]$l2['工程数量'] -ne 3 -or
+    [decimal]$l2['单价'] -ne [decimal]12.5 -or
     [decimal]$l2['基价'] -ne 0 -or $l2.ContainsKey('定额序号') -or $l2['额外宿主字段'] -ne '保留') {
     throw 'L2 未在完整宿主结构副本上正确覆盖辅助码身份、数量和学习单价'
 }
 Write-Host 'PASS L2 保留宿主行结构并覆盖辅助码身份、数量和学习单价'
 
-Write-Host 'PASS SmartFill manual-entry safety contract'
+$formal = New-Item 'PY-415' '充填式注浆 Φ560×33.2mm' '10m' '252/10'
+$itemType.GetField('LearnedUnitPrice', $flags).SetValue($formal, [decimal]0)
+$identityArgs = New-Object 'object[]' 1
+$identityArgs[0] = $formal
+if (-not [bool]$hasConstructedIdentity.Invoke($null, $identityArgs)) {
+    throw '有完整名称和单位的正式定额未获准进入结构模板构造'
+}
+$missingName = New-Item 'PY-415' '' '10m' '252/10'
+$identityArgs[0] = $missingName
+if ([bool]$hasConstructedIdentity.Invoke($null, $identityArgs)) {
+    throw '缺少名称的正式定额未阻断整组构造写入'
+}
+$missingUnit = New-Item 'PY-415' '充填式注浆 Φ560×33.2mm' '' '252/10'
+$identityArgs[0] = $missingUnit
+if ([bool]$hasConstructedIdentity.Invoke($null, $identityArgs)) {
+    throw '缺少单位的正式定额未阻断整组构造写入'
+}
+$formalRow = $buildL2.Invoke($null, @($structural, $formal))
+if ($formalRow['定额编号'] -ne 'PY-415' -or
+    $formalRow['工程或费用项目名称'] -ne '充填式注浆 Φ560×33.2mm' -or
+    $formalRow['单位'] -ne '10m' -or $formalRow['工程数量输入'] -ne '252/10' -or
+    [decimal]$formalRow['工程数量'] -ne [decimal]25.2 -or [decimal]$formalRow['单价'] -ne 0 -or
+    [decimal]$formalRow['基价'] -ne 0 -or [decimal]$formalRow['合重'] -ne 0 -or
+    $formalRow.ContainsKey('定额序号') -or $formalRow['额外宿主字段'] -ne '保留') {
+    throw '无完整源行的正式定额未按编号、名称、单位、数量和零价构造完整业务行'
+}
+Write-Host 'PASS 无完整源行的正式定额统一构造完整业务行，缺名称或单位时阻断'
+
+Write-Host 'PASS SmartFill constructed-row write safety contract'
