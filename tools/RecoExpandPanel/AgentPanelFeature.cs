@@ -759,7 +759,8 @@ namespace RecoNet
                 replaceHint.Height = 52;
                 replaceHint.ForeColor = AgentPanelHintFore;
                 replaceHint.Text = "被替换的就是上面「目标」里列的那些行，不用在这里再选一遍。\r\n" +
-                    "一对一、一对多（拆成几条）、多对一（合并成一条）都支持。拆成多条时只能作用于一个单元。";
+                    "一对一、一对多（拆成几条）、多对一（合并成一条）都支持，跨条目跨单元都可以。\r\n" +
+                    "新增出来的行费用列为 0，执行后请在主程序点一次「重算」。";
 
                 replacePage.Controls.Add(replaceGrid);
                 replacePage.Controls.Add(replaceGridHeader);
@@ -2034,11 +2035,6 @@ namespace RecoNet
                     }
                 }
 
-                if (command.ToQuotas.Count > 1 && allUnitsBox.Checked)
-                {
-                    throw new AgentPlanException("一条拆成多条时不能选「所有单元」，请限定到一个单元。");
-                }
-
                 return command;
             }
 
@@ -2476,23 +2472,26 @@ namespace RecoNet
                     grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
                     grid.Columns.Add("Action", "操作");
                     grid.Columns.Add("Unit", "单元");
+                    grid.Columns.Add("ItemNo", "条目");
                     grid.Columns.Add("Item", "工程或费用项目名称");
                     grid.Columns.Add("Code", "定额编号");
                     grid.Columns.Add("Old", "原值");
                     grid.Columns.Add("New", "新值");
-                    grid.Columns["Action"].FillWeight = 13;
+                    grid.Columns["Action"].FillWeight = 11;
                     grid.Columns["Unit"].FillWeight = 9;
-                    grid.Columns["Item"].FillWeight = 28;
-                    grid.Columns["Code"].FillWeight = 14;
-                    grid.Columns["Old"].FillWeight = 18;
-                    grid.Columns["New"].FillWeight = 18;
+                    grid.Columns["ItemNo"].FillWeight = 14;
+                    grid.Columns["Item"].FillWeight = 24;
+                    grid.Columns["Code"].FillWeight = 13;
+                    grid.Columns["Old"].FillWeight = 14;
+                    grid.Columns["New"].FillWeight = 15;
 
                     foreach (AgentPlanRow row in plan.PreviewRows.Take(2000))
                     {
                         grid.Rows.Add(
                             row.Action,
                             AgentUnitDisplay(plan.UnitCodes, row.UnitId),
-                            !String.IsNullOrEmpty(row.ItemName) ? row.ItemName : (row.ItemNo ?? ""),
+                            row.ItemNo ?? "",
+                            row.ItemName ?? "",
                             row.QuotaCode ?? "",
                             row.OldValue ?? "",
                             row.NewValue ?? "");

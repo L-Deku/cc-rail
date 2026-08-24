@@ -18,6 +18,8 @@ namespace RecoNet
             public string Code;
             public string Name;
             public string Quantity;
+            public string Unit;                    // 新增行要写的单位，计划阶段解析
+            public long SameCodeQuotaSequence;     // 可整行克隆的同编号行；0=没有，走结构行兜底
         }
 
         private sealed class AgentCommand

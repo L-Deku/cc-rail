@@ -148,6 +148,78 @@ if ($null -ne $validate) {
     Assert-True ($null -ne $result) 'ValidateAgentCommandShape should reject replace_quotas from the AI channel'
 }
 
+# 8) 新增行改为事务内 SQL 插入（结构行克隆），不再走剪贴板粘贴
+foreach ($methodName in @(
+        'ExecuteAgentInsertGroupSql',
+        'ResolveAgentInsertIdentity',
+        'ResolveAgentInsertQuotaIdentities',
+        'ResolveAgentInsertUnitIds',
+        'ResolveAgentItemSequence',
+        'LoadAgentStructuralRow',
+        'AllocateAgentInsertOrders')) {
+    Assert-True ($null -ne $formType.GetMethod($methodName, $flags)) "method $methodName missing"
+}
+
+$quotaInput = $formType.GetNestedType('AgentQuotaInput', $flags)
+foreach ($f in @('Unit', 'SameCodeQuotaSequence')) {
+    Assert-True ($null -ne $quotaInput.GetField($f, $flags)) "AgentQuotaInput.$f missing"
+}
+Assert-True ($null -ne $groupType.GetField('AnchorQuotaSequence', $flags)) 'AgentInsertGroup.AnchorQuotaSequence missing'
+
+# 9) 源码级：智能指令的执行路径不再调用剪贴板粘贴，且跨单元硬拒已解除
+$executorPath = Join-Path $PSScriptRoot '..\AgentExecutor.cs'
+if (Test-Path -LiteralPath $executorPath) {
+    $executor = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $executorPath).Path, [System.Text.Encoding]::UTF8)
+    $planStart = $executor.IndexOf('private static string ExecuteAgentPlan(')
+    Assert-True ($planStart -ge 0) 'ExecuteAgentPlan not found in source'
+    if ($planStart -ge 0) {
+        $planBody = $executor.Substring($planStart, [Math]::Min(9000, $executor.Length - $planStart))
+        Assert-True ($planBody.Contains('ExecuteAgentInsertGroupSql')) 'ExecuteAgentPlan should insert via SQL'
+        Assert-True (-not ($planBody -match 'ExecuteAgentInsertGroup\(')) 'ExecuteAgentPlan must not use the clipboard paste path'
+        Assert-True ($planBody.Contains('using (SqlTransaction transaction = conn.BeginTransaction())')) 'ExecuteAgentPlan should open one SQL transaction'
+        Assert-True ($planBody.Contains('ExecuteAgentInsertGroupSql(conn, transaction')) 'insert groups must use the active transaction'
+        Assert-True ($planBody.Contains('transaction.Commit()')) 'ExecuteAgentPlan should commit the transaction'
+        Assert-True ($planBody.Contains('transaction.Rollback()')) 'ExecuteAgentPlan should roll back on failure'
+        Assert-True ($planBody.Contains('undo.Rows.Clear()')) 'rolled-back groups must not keep undo rows'
+        Assert-True ($planBody.Contains('if (affected != 1)')) 'changed or missing target rows must roll back the group'
+        Assert-True ($planBody.Contains('Object.ReferenceEquals(conn, plan.ProjectConnection)')) 'project connection object gate must remain'
+        Assert-True ($planBody.Contains('plan.ProjectConnectionIdentity')) 'project connection identity gate must remain'
+    }
+
+    $insertStart = $executor.IndexOf('private static int ExecuteAgentInsertGroupSql(')
+    $insertEnd = $executor.IndexOf('private static void SetAgentRowValue(', $insertStart)
+    Assert-True ($insertStart -ge 0 -and $insertEnd -gt $insertStart) 'ExecuteAgentInsertGroupSql source block not found'
+    if ($insertStart -ge 0 -and $insertEnd -gt $insertStart) {
+        $insertBody = $executor.Substring($insertStart, $insertEnd - $insertStart)
+        Assert-True ($insertBody.Contains('LoadTemplateFullRow(conn, transaction')) 'same-code and anchor rows must be cloned inside the transaction'
+        Assert-True ($insertBody.Contains('LoadAgentStructuralRow(conn, transaction')) 'fallback structural row must be read inside the transaction'
+        Assert-True ($insertBody.Contains('HasSmartFillRequiredSourceColumns')) 'insert source must be a complete business row'
+        Assert-True ($insertBody.Contains('SetAgentRowValue(row, "工程或费用项目名称", quota.Name)')) 'inserted name must be written'
+        Assert-True ($insertBody.Contains('SetAgentRowValue(row, "单位", quota.Unit)')) 'inserted unit must be written'
+        Assert-True ($insertBody.Contains('SetAgentRowValue(row, "工程数量输入", quantityInput)')) 'inserted quantity expression must be written'
+        Assert-True ($insertBody.Contains('SetAgentRowValue(row, "工程数量", quantity)')) 'inserted calculated quantity must be written'
+        Assert-True ($insertBody.Contains('InsertQuotaRowReturnId(conn, transaction, row)')) 'insert must use the active transaction'
+    }
+
+    $orderStart = $executor.IndexOf('private static int AllocateAgentInsertOrders(')
+    $orderEnd = $executor.IndexOf('private static void BuildDeletePlan(', $orderStart)
+    Assert-True ($orderStart -ge 0 -and $orderEnd -gt $orderStart) 'AllocateAgentInsertOrders source block not found'
+    if ($orderStart -ge 0 -and $orderEnd -gt $orderStart) {
+        $orderBody = $executor.Substring($orderStart, $orderEnd - $orderStart)
+        Assert-True ($orderBody.Contains('AgentUndoRecord undo')) 'shifted order rows must receive the undo record'
+        Assert-True ($orderBody.Contains('undo.Rows.Add(new AgentUndoRow')) 'shifted order rows must be undoable'
+        Assert-True ($orderBody.Contains('ExecuteAgentFieldUpdate(conn, transaction')) 'order shifts must stay in the active transaction'
+    }
+
+    Assert-True ($executor.Contains('quota.Name = sourceQuota.Name;')) 'replace extra rows must retain the resolved name'
+    Assert-True ($executor.Contains('quota.Unit = sourceQuota.Unit;')) 'replace extra rows must retain the resolved unit'
+    Assert-True ($executor.Contains('quota.SameCodeQuotaSequence = sourceQuota.SameCodeQuotaSequence;')) 'replace extra rows must retain the same-code clone source'
+    Assert-True ($executor.Contains('oldValues["单位"] = anchor.Unit;')) 'undo must restore the original unit'
+    Assert-True (-not $executor.Contains('LoadSmartFillStructuralRow(conn, group.UnitId')) 'agent structural reads must not escape the active transaction'
+    Assert-True (-not $executor.Contains('一条定额拆成多条时只能作用于一个单元')) 'cross-unit block should be removed'
+    Assert-True (-not $executor.Contains('一条定额拆成多条时只能作用于当前正在显示的单元')) 'current-unit block should be removed'
+}
+
 if ($failures.Count -gt 0) {
     foreach ($failure in $failures) { Write-Host "FAIL: $failure" }
     throw "Test-AgentReplaceQuotas: $($failures.Count) assertion(s) failed."
