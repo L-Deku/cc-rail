@@ -27,7 +27,11 @@ $requiredPanel = @(
     'Smart fill apply rejected',
     'PromptSmartSfBindingChoice',
     'SmartSfBindingChoice.Append',
-    'MergePreviewTargetGroup'
+    'MergePreviewTargetGroup',
+    'ValidateSmartSfEntryConstraint',
+    'DescribeSmartSfEntryConflict',
+    'replaceWarning',
+    'appendWarning'
 )
 foreach ($marker in $requiredPanel) {
     if (-not $panel.Contains($marker)) {
@@ -128,6 +132,18 @@ foreach ($marker in @('approvedEntrySequence', '写入前项目或条目已变�
     'currentSmartEntry.EntrySequence != approvedEntrySequence')) {
     if (-not $panel.Contains($marker)) { throw "推荐定额缺少临写入前项目/条目二次核对：$marker" }
 }
+$previewContextStart = $panel.IndexOf('private bool IsSmartPreviewContextCurrent', [StringComparison]::Ordinal)
+$previewContextEnd = $panel.IndexOf('private bool StampSelectedSmartEntries', $previewContextStart, [StringComparison]::Ordinal)
+if ($previewContextStart -lt 0 -or $previewContextEnd -le $previewContextStart) {
+    throw '缺少推荐定额预览上下文校验入口'
+}
+$previewContextBody = $panel.Substring($previewContextStart, $previewContextEnd - $previewContextStart)
+foreach ($unitGateMarker in @('Object.ReferenceEquals(context.ProjectConnection', 'ProjectConnectionIdentity',
+    'context.CurrentUnitId != entry.UnitId', 'context.CurrentUnitCode', '项目或当前单元已切换，请重新预览')) {
+    if (-not $previewContextBody.Contains($unitGateMarker)) {
+        throw "同一预览不得跨单元写入的门禁被误删：$unitGateMarker"
+    }
+}
 if (-not $feature.Contains('out bool succeeded') -or
     -not $feature.Contains('succeeded = true;') -or
     $panel.Contains('smartResult.StartsWith(') -or
@@ -149,10 +165,25 @@ if (-not $smartApplyBody.Contains('MessageBox.Show(this, smartResult, "推荐定
 }
 foreach ($sfBindingMarker in @('PromptSmartSfBindingChoice', 'SmartSfBindingChoice.Replace',
     'SmartSfBindingChoice.Append', 'MergePreviewTargetGroup(oldGroup, replacements)',
-    'replace.Text = "替换"', 'append.Text = "补充"', 'target.LearningFeedbackAttempted = false')) {
+    'replace.Text = "替换"', 'append.Text = "补充"', 'cancel.Text = "取消"',
+    'replaceWarning', 'appendWarning', 'Smart fill sf replace blocked',
+    'Smart fill sf append blocked',
+    'replace.Enabled = String.IsNullOrWhiteSpace(replaceWarning)',
+    'append.Enabled = String.IsNullOrWhiteSpace(appendWarning)',
+    'ValidateSmartSfEntryConstraint(conn, currentSmartEntry, replacements',
+    'ValidateSmartSfEntryConstraint(conn, currentSmartEntry, appendCandidates',
+    'RefreshSmartSfEntryState();', 'target.LearningFeedbackAttempted = false')) {
     if (-not $panel.Contains($sfBindingMarker)) {
         throw "SF 右键绑定缺少替换/补充行为：$sfBindingMarker"
     }
+}
+if ($panel.Contains('Smart fill apply rejected: exception') -or
+    -not $panel.Contains('Smart fill apply failed: 界面异常')) {
+    throw '推荐定额界面异常未正确归类为 failed'
+}
+if (-not $applyBody.Contains('elapsedMs=') -or
+    $applyBody.Contains('return blocked("transaction_failed"')) {
+    throw '推荐定额 blocked 缺少耗时，或事务 failed 仍重复记 blocked'
 }
 if (-not $panel.Contains('smartOnly ? "推荐定额" : "模板铺量"')) {
     throw '推荐定额异常弹框标题仍被硬编码成模板铺量'
@@ -241,6 +272,7 @@ $panelType = $formType.GetNestedType('TemplateFillPanel', $nested)
 $resolveTreeNode = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('ResolveSmartHostTreeNode', $flags) }
 $isEditableGrid = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsEditableAgentQuotaGrid', $flags) }
 $isOptionalTreeSequenceConsistent = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsOptionalSmartTreeSequenceConsistent', $flags) }
+$describeSfConflict = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('DescribeSmartSfEntryConflict', $flags) }
 if ($null -eq $itemType -or $null -eq $buildL2 -or $null -eq $hasConstructedIdentity -or
     $null -eq $mergePreviewTargetGroup -or
     $null -eq $resolveSourceDatabase -or
@@ -249,7 +281,7 @@ if ($null -eq $itemType -or $null -eq $buildL2 -or $null -eq $hasConstructedIden
     $null -eq $resolveSmartPreviewUnitPrice -or $null -eq $filterLearningTargetUnitPrice -or
     $null -eq $resolveLearningTargetKind -or
     $null -eq $resolveTreeNode -or $null -eq $isEditableGrid -or
-    $null -eq $isOptionalTreeSequenceConsistent) {
+    $null -eq $isOptionalTreeSequenceConsistent -or $null -eq $describeSfConflict) {
     throw '缺少推荐定额统一构造写入的可测试行为入口'
 }
 
@@ -457,5 +489,16 @@ if ($merged.Count -ne 2 -or
     throw 'SF 补充未保留普通定额、加入 SF 或去除同身份重复项'
 }
 Write-Host 'PASS SF 补充保留原组件并加入唯一设备费目标'
+
+$equipmentConflict = $describeSfConflict.Invoke($null, @($true, $true, $true, $true))
+$missingSiblingConflict = $describeSfConflict.Invoke($null, @($false, $true, $true, $false))
+$resolvedSiblingConflict = $describeSfConflict.Invoke($null, @($false, $true, $true, $true))
+$ordinaryOnlyConflict = $describeSfConflict.Invoke($null, @($false, $false, $true, $false))
+if ($equipmentConflict -ne '设备购置费条目只接受 SF，所选组件整组未写入' -or
+    $missingSiblingConflict -ne '未找到唯一同级设备购置费条目，所选组件整组未写入' -or
+    $resolvedSiblingConflict -ne '' -or $ordinaryOnlyConflict -ne '') {
+    throw 'SF 双向约束纯判定与既有阻断文案不一致'
+}
+Write-Host 'PASS SF 替换与补充候选可共用双向约束纯判定'
 
 Write-Host 'PASS SmartFill constructed-row write safety contract'

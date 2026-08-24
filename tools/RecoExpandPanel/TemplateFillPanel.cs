@@ -1976,17 +1976,19 @@ namespace RecoNet
                 Append
             }
 
-            private SmartSfBindingChoice PromptSmartSfBindingChoice(int existingCount, int selectedCount)
+            private SmartSfBindingChoice PromptSmartSfBindingChoice(int existingCount, int selectedCount,
+                string replaceWarning, string appendWarning)
             {
                 using (Form dialog = new Form())
                 {
+                    bool hasWarning = !String.IsNullOrWhiteSpace(replaceWarning) || !String.IsNullOrWhiteSpace(appendWarning);
                     dialog.Text = "SF 设备费绑定方式";
                     dialog.StartPosition = FormStartPosition.CenterParent;
                     dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
                     dialog.MinimizeBox = false;
                     dialog.MaximizeBox = false;
                     dialog.ShowInTaskbar = false;
-                    dialog.ClientSize = new Size(460, 135);
+                    dialog.ClientSize = new Size(460, hasWarning ? 205 : 135);
 
                     Label message = new Label();
                     message.SetBounds(18, 14, 424, 58);
@@ -1995,23 +1997,44 @@ namespace RecoNet
                         existingCount.ToString(CultureInfo.InvariantCulture) + " 条并加入本次所选行。";
                     message.TextAlign = ContentAlignment.MiddleLeft;
 
+                    Label warning = new Label();
+                    warning.SetBounds(18, 74, 424, 68);
+                    warning.ForeColor = Color.DarkRed;
+                    warning.Text = String.Join("\n", new[]
+                    {
+                        String.IsNullOrWhiteSpace(replaceWarning) ? "" : "替换不可用：" + replaceWarning,
+                        String.IsNullOrWhiteSpace(appendWarning) ? "" : "补充不可用：" + appendWarning
+                    }.Where(text => text.Length > 0).ToArray());
+                    warning.Visible = hasWarning;
+
                     Button replace = new Button();
                     replace.Text = "替换";
-                    replace.SetBounds(245, 88, 90, 30);
+                    replace.SetBounds(150, hasWarning ? 160 : 88, 90, 30);
                     replace.DialogResult = DialogResult.Yes;
+                    replace.Enabled = String.IsNullOrWhiteSpace(replaceWarning);
 
                     Button append = new Button();
                     append.Text = "补充";
-                    append.SetBounds(350, 88, 90, 30);
+                    append.SetBounds(250, hasWarning ? 160 : 88, 90, 30);
                     append.DialogResult = DialogResult.No;
+                    append.Enabled = String.IsNullOrWhiteSpace(appendWarning);
+
+                    Button cancel = new Button();
+                    cancel.Text = "取消";
+                    cancel.SetBounds(350, hasWarning ? 160 : 88, 90, 30);
+                    cancel.DialogResult = DialogResult.Cancel;
 
                     dialog.Controls.Add(message);
+                    dialog.Controls.Add(warning);
                     dialog.Controls.Add(replace);
                     dialog.Controls.Add(append);
-                    dialog.AcceptButton = replace;
+                    dialog.Controls.Add(cancel);
+                    dialog.AcceptButton = replace.Enabled ? (IButtonControl)replace
+                        : append.Enabled ? (IButtonControl)append : cancel;
+                    dialog.CancelButton = cancel;
                     DialogResult result = dialog.ShowDialog(this);
-                    if (result == DialogResult.Yes) return SmartSfBindingChoice.Replace;
-                    if (result == DialogResult.No) return SmartSfBindingChoice.Append;
+                    if (result == DialogResult.Yes && replace.Enabled) return SmartSfBindingChoice.Replace;
+                    if (result == DialogResult.No && append.Enabled) return SmartSfBindingChoice.Append;
                     return SmartSfBindingChoice.Cancel;
                 }
             }
@@ -2145,11 +2168,31 @@ namespace RecoNet
                     if (smartOnly && oldGroup.Any(target => target != null && !String.IsNullOrWhiteSpace(target.QuotaCode)) &&
                         replacements.Any(target => String.Equals((target.QuotaCode ?? "").Trim(), "SF", StringComparison.OrdinalIgnoreCase)))
                     {
+                        List<FillPreviewItem> appendCandidates = MergePreviewTargetGroup(oldGroup, replacements);
+                        string replaceWarning = "";
+                        string appendWarning = "";
+                        if (currentEntryWritable && currentSmartEntry != null)
+                        {
+                            long sfSequence;
+                            string sfCode;
+                            string sfName;
+                            if (!ValidateSmartSfEntryConstraint(conn, currentSmartEntry, replacements,
+                                out sfSequence, out sfCode, out sfName, out replaceWarning))
+                            {
+                                Log("Smart fill sf replace blocked: entry=" + (currentSmartEntry.EntryCode ?? "") + " " + replaceWarning);
+                            }
+                            if (!ValidateSmartSfEntryConstraint(conn, currentSmartEntry, appendCandidates,
+                                out sfSequence, out sfCode, out sfName, out appendWarning))
+                            {
+                                Log("Smart fill sf append blocked: entry=" + (currentSmartEntry.EntryCode ?? "") + " " + appendWarning);
+                            }
+                        }
                         SmartSfBindingChoice choice = PromptSmartSfBindingChoice(
-                            oldGroup.Count(target => target != null && !String.IsNullOrWhiteSpace(target.QuotaCode)), replacements.Count);
+                            oldGroup.Count(target => target != null && !String.IsNullOrWhiteSpace(target.QuotaCode)), replacements.Count,
+                            replaceWarning, appendWarning);
                         if (choice == SmartSfBindingChoice.Cancel) return;
                         appendToExisting = choice == SmartSfBindingChoice.Append;
-                        if (appendToExisting) replacements = MergePreviewTargetGroup(oldGroup, replacements);
+                        if (appendToExisting) replacements = appendCandidates;
                     }
                     if (smartOnly)
                     {
@@ -2188,6 +2231,11 @@ namespace RecoNet
                     else
                     {
                         replacements[0].AlignNote = "绑定关系未变化，未重复学习";
+                    }
+                    if (smartOnly)
+                    {
+                        RefreshSmartSfEntryState();
+                        RefreshApplyEnabled();
                     }
                     RefreshTargetGroupInGrid(groupLeader.TargetRow);
                 }
@@ -2242,42 +2290,59 @@ namespace RecoNet
                 return true;
             }
 
-            private bool StampSelectedSmartEntries(List<FillPreviewItem> selectedItems, CurrentSmartEntry entry, out string error)
+            internal static string DescribeSmartSfEntryConflict(bool currentIsEquipment, bool hasSf,
+                bool hasNonSf, bool siblingResolved)
+            {
+                if (currentIsEquipment && hasNonSf) return "设备购置费条目只接受 SF，所选组件整组未写入";
+                if (hasSf && !currentIsEquipment && !siblingResolved)
+                    return "未找到唯一同级设备购置费条目，所选组件整组未写入";
+                return "";
+            }
+
+            private static bool ValidateSmartSfEntryConstraint(SqlConnection conn, CurrentSmartEntry entry,
+                IEnumerable<FillPreviewItem> items, out long sfSequence, out string sfCode, out string sfName, out string error)
             {
                 error = "";
+                sfSequence = entry.EntrySequence;
+                sfCode = entry.EntryCode;
+                sfName = entry.EntryName;
                 bool currentIsEquipment = (entry.EntryName ?? "").IndexOf("设备购置费", StringComparison.OrdinalIgnoreCase) >= 0;
-                long sfSequence = entry.EntrySequence;
-                string sfCode = entry.EntryCode;
-                string sfName = entry.EntryName;
-                bool needsSfRedirect = selectedItems.Any(item => String.Equals((item.QuotaCode ?? "").Trim(), "SF", StringComparison.OrdinalIgnoreCase)) &&
+                List<FillPreviewItem> targets = (items ?? Enumerable.Empty<FillPreviewItem>())
+                    .Where(item => item != null).ToList();
+                bool needsSfRedirect = targets.Any(item => String.Equals((item.QuotaCode ?? "").Trim(), "SF", StringComparison.OrdinalIgnoreCase)) &&
                     !currentIsEquipment;
-                if (needsSfRedirect && !TryResolveSiblingEquipmentEntry(entry.ProjectConnection, entry.EntryCode,
+                if (needsSfRedirect && !TryResolveSiblingEquipmentEntry(conn, entry.EntryCode,
                     out sfSequence, out sfCode, out sfName, out error)) return false;
 
-                foreach (IGrouping<int, FillPreviewItem> group in selectedItems.GroupBy(item => item.TargetRow))
+                foreach (IGrouping<int, FillPreviewItem> group in targets.GroupBy(item => item.TargetRow))
                 {
                     bool hasSf = group.Any(item => String.Equals((item.QuotaCode ?? "").Trim(), "SF", StringComparison.OrdinalIgnoreCase));
                     bool hasNonSf = group.Any(item => !String.Equals((item.QuotaCode ?? "").Trim(), "SF", StringComparison.OrdinalIgnoreCase));
-                    if (currentIsEquipment && hasNonSf)
-                    {
-                        error = "设备购置费条目只接受 SF，所选组件整组未写入";
-                        return false;
-                    }
-                    if (hasSf && !currentIsEquipment && sfSequence <= 0)
-                    {
-                        error = "未找到唯一同级设备购置费条目，所选组件整组未写入";
-                        return false;
-                    }
-                    foreach (FillPreviewItem item in group)
-                    {
-                        bool sf = String.Equals((item.QuotaCode ?? "").Trim(), "SF", StringComparison.OrdinalIgnoreCase);
-                        item.ChosenItemSeq = sf ? sfSequence : entry.EntrySequence;
-                        item.ChosenItemNo = sf ? sfCode : entry.EntryCode;
-                        item.ChosenItemName = sf ? sfName : entry.EntryName;
-                        item.SfRedirect = sf && !currentIsEquipment;
-                        item.EntrySource = item.SfRedirect ? "sf-sibling-redirect" : "user-selected";
-                        item.Selected = true;
-                    }
+                    string conflict = DescribeSmartSfEntryConflict(currentIsEquipment, hasSf, hasNonSf, sfSequence > 0);
+                    if (conflict.Length == 0) continue;
+                    error = conflict;
+                    return false;
+                }
+                return true;
+            }
+
+            private bool StampSelectedSmartEntries(List<FillPreviewItem> selectedItems, CurrentSmartEntry entry, out string error)
+            {
+                long sfSequence;
+                string sfCode;
+                string sfName;
+                if (!ValidateSmartSfEntryConstraint(entry.ProjectConnection, entry, selectedItems,
+                    out sfSequence, out sfCode, out sfName, out error)) return false;
+                bool currentIsEquipment = (entry.EntryName ?? "").IndexOf("设备购置费", StringComparison.OrdinalIgnoreCase) >= 0;
+                foreach (FillPreviewItem item in selectedItems)
+                {
+                    bool sf = String.Equals((item.QuotaCode ?? "").Trim(), "SF", StringComparison.OrdinalIgnoreCase);
+                    item.ChosenItemSeq = sf ? sfSequence : entry.EntrySequence;
+                    item.ChosenItemNo = sf ? sfCode : entry.EntryCode;
+                    item.ChosenItemName = sf ? sfName : entry.EntryName;
+                    item.SfRedirect = sf && !currentIsEquipment;
+                    item.EntrySource = item.SfRedirect ? "sf-sibling-redirect" : "user-selected";
+                    item.Selected = true;
                 }
                 return true;
             }
@@ -2374,7 +2439,7 @@ namespace RecoNet
                 }
                 catch (Exception ex)
                 {
-                    if (smartOnly) Log("Smart fill apply rejected: exception " + ex.GetType().Name + ": " + ex.Message);
+                    if (smartOnly) Log("Smart fill apply failed: 界面异常 " + ex.GetType().Name + ": " + ex.Message);
                     MessageBox.Show(this, "写入失败：" + ex.Message, smartOnly ? "推荐定额" : "模板铺量");
                 }
                 finally

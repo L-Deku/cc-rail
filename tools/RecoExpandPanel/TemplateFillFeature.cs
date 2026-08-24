@@ -1197,7 +1197,8 @@ namespace RecoNet
             Stopwatch applyWatch = Stopwatch.StartNew();
             Func<string, string, string> blocked = delegate(string reasonCode, string userMessage)
             {
-                Log("Smart fill apply blocked: entry=" + (entryNo ?? "") + " reason=" + reasonCode);
+                Log("Smart fill apply blocked: entry=" + (entryNo ?? "") + " reason=" + reasonCode +
+                    " elapsedMs=" + applyWatch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture));
                 return userMessage;
             };
             Log("Smart fill apply begin: unit=" + (targetUnitNo ?? "") + "#" +
@@ -1342,7 +1343,7 @@ namespace RecoNet
                 Log("Smart fill apply failed: entry=" + (entryNo ?? "") + " " + ex.GetType().Name +
                     ": " + ex.Message + innerMessage + " elapsedMs=" +
                     applyWatch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture));
-                return blocked("transaction_failed", "项目业务事务已整体回滚，未学习。失败原因：" + ex.Message);
+                return "项目业务事务已整体回滚，未学习。失败原因：" + ex.Message;
             }
 
             GetAgentUndoStack(mainForm).Add(undo);
