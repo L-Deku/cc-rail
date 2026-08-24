@@ -64,7 +64,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - Windows PowerShell 5 中用 `[IO.File]::Replace` 原子更新已有状态文件时，不要把备份路径传 `$null`；应使用同目录唯一临时旧版路径，提交后清理，并用“首次写入 + 已有文件替换 + 无临时残留”运行态测试验证。备份已成功而状态落盘失败的恢复流程必须重新验证服务器侧备份且禁止覆盖已有备份。
 - `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 默认加载 `RecoQuotaRecommend/bin/RecoExpandPanel.dll`，不会自动编译当前源码；做源码级红绿回归时，应先把 `tools/RecoExpandPanel/` 当前全部 C# 源文件编译到工作区验证目录并设置 `RECO_EXPAND_DLL`，避免把旧 DLL 的结果误判为新代码结果。
 - 批量运行 `tools/RecoExpandPanel/tests/` 前先读取每个脚本的 `param(...)`；多数反射脚本接受 `RECO_EXPAND_DLL`，但 `Test-SmartFillPartitionAndEntryCandidates.ps1` 必须显式传 `-ExpandDll <候选 DLL>`，不得因统一环境变量漏传参数而误报回归失败。
-- `build.ps1 -BuildOnly` 必须显式传入工作区内的 `-OutputDirectory`；输出目录按白名单只含两个插件 DLL 和清单，不携带 NPOI 运行依赖。反射测试新 `RecoExpandPanel.dll` 前应在工作区 `artifacts/test-runtime/` 创建隔离测试目录，仅复制该 DLL 与既有 NPOI 依赖。测试依赖不得复制到运行目录或发布包。
+- `build.ps1 -BuildOnly` 必须显式传入工作区内的 `-OutputDirectory`；输出目录按白名单只含两个插件 DLL 和清单，不携带 NPOI 运行依赖。反射测试新 `RecoExpandPanel.dll` 前应在工作区 `artifacts/test-runtime/` 创建隔离测试目录，仅复制该 DLL 与既有 NPOI 依赖；复制前必须枚举现有依赖的真实文件名，不得猜测 `SharpZipLib` 等程序集文件名。测试依赖不得复制到运行目录或发布包。
 - `build.ps1 -BuildOnly` 要求 `-OutputDirectory` 在启动时不存在或为空；源码修改后重建应使用新的隔离输出目录，不得直接复用已放入测试依赖的旧目录。
 - BuildOnly 清单中的源码哈希必须来自实际传给编译器的只读快照，不得在编译后重新哈希可能已被并行修改的工作树原文件；`source_commit` 只表示基线 HEAD，dirty 工作树必须另行显式标记。
 - 当前 .NET Framework `csc.exe` 构建不是确定性编译，两次独立编译即使源码完全相同，DLL SHA256 也可能因程序集标识变化而不同；应用 BuildOnly 的 `source_commit`、`source_file_hashes`和回归结果证明源与行为一致，然后对实际部署的同一候选 DLL 做全链路哈希一致性核对，不得要求跨编译 DLL 哈希相等。
