@@ -377,7 +377,9 @@ namespace RecoNet
                 };
 
                 ContextMenuStrip gridMenu = new ContextMenuStrip();
-                ToolStripMenuItem miBindSelected = new ToolStripMenuItem("绑定软件选中的定额到此行");
+                ToolStripMenuItem miBindSelected = new ToolStripMenuItem(smartOnly
+                    ? "替换/补充软件选中的定额到此行"
+                    : "绑定软件选中的定额到此行");
                 gridMenu.Items.Add(miBindSelected);
                 grid.ContextMenuStrip = gridMenu;
                 grid.MouseDown += delegate(object sender, MouseEventArgs e)
@@ -1967,6 +1969,53 @@ namespace RecoNet
             // 右键：把软件定额输入表当前选中的一行，绑定为该预览行的复制来源（含所在条目）。
             // 注意：与"绑定Excel工程量"同款用主程序共享连接（克隆连接在部分环境登录失败，
             // 会导致 ResolveQuotaSequence 查不到序号）；共享连接不得 using 释放。
+            private enum SmartSfBindingChoice
+            {
+                Cancel,
+                Replace,
+                Append
+            }
+
+            private SmartSfBindingChoice PromptSmartSfBindingChoice(int existingCount, int selectedCount)
+            {
+                using (Form dialog = new Form())
+                {
+                    dialog.Text = "SF 设备费绑定方式";
+                    dialog.StartPosition = FormStartPosition.CenterParent;
+                    dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
+                    dialog.MinimizeBox = false;
+                    dialog.MaximizeBox = false;
+                    dialog.ShowInTaskbar = false;
+                    dialog.ClientSize = new Size(460, 135);
+
+                    Label message = new Label();
+                    message.SetBounds(18, 14, 424, 58);
+                    message.Text = "软件选中行包含 SF 设备费。\n替换：用本次 " +
+                        selectedCount.ToString(CultureInfo.InvariantCulture) + " 条替换当前组件；补充：保留当前 " +
+                        existingCount.ToString(CultureInfo.InvariantCulture) + " 条并加入本次所选行。";
+                    message.TextAlign = ContentAlignment.MiddleLeft;
+
+                    Button replace = new Button();
+                    replace.Text = "替换";
+                    replace.SetBounds(245, 88, 90, 30);
+                    replace.DialogResult = DialogResult.Yes;
+
+                    Button append = new Button();
+                    append.Text = "补充";
+                    append.SetBounds(350, 88, 90, 30);
+                    append.DialogResult = DialogResult.No;
+
+                    dialog.Controls.Add(message);
+                    dialog.Controls.Add(replace);
+                    dialog.Controls.Add(append);
+                    dialog.AcceptButton = replace;
+                    DialogResult result = dialog.ShowDialog(this);
+                    if (result == DialogResult.Yes) return SmartSfBindingChoice.Replace;
+                    if (result == DialogResult.No) return SmartSfBindingChoice.Append;
+                    return SmartSfBindingChoice.Cancel;
+                }
+            }
+
             private void OnBindSelectedQuotaToRow()
             {
                 try
@@ -2092,6 +2141,16 @@ namespace RecoNet
                         return;
                     }
                     if (replacements.Count == 0) return;
+                    bool appendToExisting = false;
+                    if (smartOnly && oldGroup.Any(target => target != null && !String.IsNullOrWhiteSpace(target.QuotaCode)) &&
+                        replacements.Any(target => String.Equals((target.QuotaCode ?? "").Trim(), "SF", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        SmartSfBindingChoice choice = PromptSmartSfBindingChoice(
+                            oldGroup.Count(target => target != null && !String.IsNullOrWhiteSpace(target.QuotaCode)), replacements.Count);
+                        if (choice == SmartSfBindingChoice.Cancel) return;
+                        appendToExisting = choice == SmartSfBindingChoice.Append;
+                        if (appendToExisting) replacements = MergePreviewTargetGroup(oldGroup, replacements);
+                    }
                     if (smartOnly)
                     {
                         replacements = replacements
@@ -2113,6 +2172,16 @@ namespace RecoNet
                     if (!ReplacePreviewTargetGroup(preview, groupLeader.TargetRow, replacements)) return;
                     if (bindingChanged)
                     {
+                        if (appendToExisting)
+                        {
+                            foreach (FillPreviewItem target in replacements)
+                            {
+                                target.LearningFeedbackAttempted = false;
+                                target.SqlFeedbackDurable = false;
+                            }
+                            replacements[0].AlignNote = "已补充 SF 设备费（组 " +
+                                replacements.Count.ToString(CultureInfo.InvariantCulture) + " 条）";
+                        }
                         FeedbackNameMatches(groupLeader.TemplateName, replacements,
                             System.IO.Path.GetFileName(GetSelectedTargetWorkbookPath() ?? ""), cmbTargetSheet.Text.Trim(), conn, oldGroup);
                     }
@@ -2225,16 +2294,23 @@ namespace RecoNet
                         if (!currentEntryWritable || currentSmartEntry == null ||
                             !IsSmartPreviewContextCurrent(currentSmartEntry, out contextError))
                         {
-                            MessageBox.Show(this, String.IsNullOrWhiteSpace(contextError)
+                            string rejectedReason = String.IsNullOrWhiteSpace(contextError)
                                 ? "当前树节点不是可写入的条目，请选中具体条目后重试。"
-                                : contextError, "推荐定额");
+                                : contextError;
+                            Log("Smart fill apply rejected: 上下文不可写 " + rejectedReason);
+                            MessageBox.Show(this, rejectedReason, "推荐定额");
                             return;
                         }
                         HashSet<int> selectedRows = GetSelectedSmartTargetRows();
                         HashSet<int> checkedRows = GetCheckedSmartTargetRows();
+                        int selectedCountBeforeIntersect = selectedRows.Count;
+                        int checkedCountBeforeIntersect = checkedRows.Count;
                         selectedRows.IntersectWith(checkedRows);
                         if (selectedRows.Count == 0)
                         {
+                            Log("Smart fill apply rejected: 无选中∩勾选 selected=" +
+                                selectedCountBeforeIntersect.ToString(CultureInfo.InvariantCulture) + " checked=" +
+                                checkedCountBeforeIntersect.ToString(CultureInfo.InvariantCulture));
                             MessageBox.Show(this, "没有同时被选中且勾选的定额。请先在表格中选中要写的行（可 Ctrl/Shift 多选），再勾选左侧复选框。", "推荐定额");
                             return;
                         }
@@ -2243,43 +2319,41 @@ namespace RecoNet
                         string stampError;
                         if (!StampSelectedSmartEntries(selectedItems, currentSmartEntry, out stampError))
                         {
+                            Log("Smart fill apply rejected: " + stampError);
                             MessageBox.Show(this, stampError, "推荐定额");
                             return;
                         }
                         long approvedEntrySequence = currentSmartEntry.EntrySequence;
                         string approvedEntryCode = currentSmartEntry.EntryCode;
-                        if (MessageBox.Show(this, "确认把选中且勾选的 " + selectedItems.Count.ToString(CultureInfo.InvariantCulture) +
-                            " 条定额写入当前条目【" + currentSmartEntry.EntryCode + " " + currentSmartEntry.EntryName + "】？\n写入动作本身会保存；“计算”只刷新价格和汇总。",
-                            "推荐定额", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
-                        // 用户确认框的嵌套消息循环期间仍可能切换项目/条目；真正写入前再读一次并与确认文案中的目标对比。
+                        // 真正写入前再读一次目标和项目身份；推荐窗口保持可见，不再弹前置确认框。
                         RefreshCurrentSmartEntry(true);
-                        contextError = "确认后项目或条目已变化，请重新选择并写入。";
+                        contextError = "写入前项目或条目已变化，请重新选择并写入。";
                         if (!currentEntryWritable || currentSmartEntry == null ||
                             !IsSmartPreviewContextCurrent(currentSmartEntry, out contextError) ||
                             currentSmartEntry.EntrySequence != approvedEntrySequence ||
                             !String.Equals(currentSmartEntry.EntryCode, approvedEntryCode, StringComparison.OrdinalIgnoreCase))
                         {
-                            MessageBox.Show(this, String.IsNullOrWhiteSpace(contextError)
-                                ? "确认后项目或条目已变化，请重新选择并写入。"
-                                : contextError, "推荐定额");
+                            string currentCode = currentSmartEntry == null ? "" : currentSmartEntry.EntryCode ?? "";
+                            string changedReason = String.IsNullOrWhiteSpace(contextError)
+                                ? "写入前项目或条目已变化，请重新选择并写入。"
+                                : contextError;
+                            Log("Smart fill apply rejected: 写入前目标变化 approved=" + (approvedEntryCode ?? "") +
+                                " current=" + currentCode + " " + changedReason);
+                            MessageBox.Show(this, changedReason, "推荐定额");
                             return;
                         }
                         if (!StampSelectedSmartEntries(selectedItems, currentSmartEntry, out stampError))
                         {
+                            Log("Smart fill apply rejected: " + stampError);
                             MessageBox.Show(this, stampError, "推荐定额");
                             return;
                         }
                         SetBusy(true, "写入中...");
                         string sourceWorkbook = Path.GetFileName(previewContext.WorkbookPath);
-                        Hide();
-                        mainForm.Activate();
-                        mainForm.BringToFront();
-                        WaitAgentUiIdle(100);
                         bool smartSucceeded;
                         string smartResult = ApplyFillToSelectedEntry(mainForm, currentSmartEntry.UnitId, currentSmartEntry.UnitCode,
                             currentSmartEntry.EntrySequence, currentSmartEntry.EntryCode, currentSmartEntry.EntryName,
                             selectedItems, sourceWorkbook, previewContext.Worksheet, out smartSucceeded);
-                        RestoreSmartPanelAfterHostWrite();
                         MessageBox.Show(this, smartResult, "推荐定额");
                         if (smartSucceeded)
                         {
@@ -2300,21 +2374,13 @@ namespace RecoNet
                 }
                 catch (Exception ex)
                 {
-                    RestoreSmartPanelAfterHostWrite();
+                    if (smartOnly) Log("Smart fill apply rejected: exception " + ex.GetType().Name + ": " + ex.Message);
                     MessageBox.Show(this, "写入失败：" + ex.Message, smartOnly ? "推荐定额" : "模板铺量");
                 }
                 finally
                 {
-                    RestoreSmartPanelAfterHostWrite();
                     SetBusy(false, "");
                 }
-            }
-
-            private void RestoreSmartPanelAfterHostWrite()
-            {
-                if (!smartOnly || IsDisposed || Disposing || Visible) return;
-                Show(mainForm);
-                Activate();
             }
 
             private void SetBusy(bool busy, string action)

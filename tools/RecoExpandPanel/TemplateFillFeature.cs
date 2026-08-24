@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
+using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
@@ -1193,9 +1194,20 @@ namespace RecoNet
                 .OrderBy(item => item.TargetRow).ThenBy(item => item.GroupOrder).ToList();
             List<List<FillPreviewItem>> groups = candidates.GroupBy(item => item.TargetRow)
                 .Select(group => group.ToList()).ToList();
-            if (groups.Count == 0) return "没有同时被选中且勾选的定额。";
+            Stopwatch applyWatch = Stopwatch.StartNew();
+            Func<string, string, string> blocked = delegate(string reasonCode, string userMessage)
+            {
+                Log("Smart fill apply blocked: entry=" + (entryNo ?? "") + " reason=" + reasonCode);
+                return userMessage;
+            };
+            Log("Smart fill apply begin: unit=" + (targetUnitNo ?? "") + "#" +
+                targetUnitSeq.ToString(CultureInfo.InvariantCulture) + " entry=" + (entryNo ?? "") + "#" +
+                entrySeq.ToString(CultureInfo.InvariantCulture) + " items=" +
+                candidates.Count.ToString(CultureInfo.InvariantCulture) + " groups=" +
+                groups.Count.ToString(CultureInfo.InvariantCulture));
+            if (groups.Count == 0) return blocked("empty_selection", "没有同时被选中且勾选的定额。");
             if (groups.Any(group => !IsNameQuotaGroupSafeForWrite(group)))
-                return "选中的组件存在数量、单位、公式或 SF 条目阻断，整组未写入。";
+                return blocked("unsafe_group", "选中的组件存在数量、单位、公式或 SF 条目阻断，整组未写入。");
 
             SqlConnection conn = GetOpenProjectConnection(mainForm);
             string connectionIdentity = GetProjectConnectionIdentity(conn);
@@ -1208,7 +1220,8 @@ namespace RecoNet
                 decimal quantity;
                 string quantityError;
                 if (!TryEvaluateDecimal(item.QuantityText, out quantity, out quantityError) || quantity <= 0m)
-                    return "组件数量无效，整组未写入：" + (item.TargetFullName ?? item.TargetName ?? "");
+                    return blocked("invalid_quantity code=" + (item.QuotaCode ?? ""),
+                        "组件数量无效，整组未写入：" + (item.TargetFullName ?? item.TargetName ?? ""));
                 Dictionary<string, object> source = null;
                 if (item.ChosenQuotaSeq > 0)
                 {
@@ -1231,20 +1244,33 @@ namespace RecoNet
                 else
                 {
                     if (!HasSmartFillConstructedIdentity(item))
-                        return "定额缺少完整名称或单位，整组未写入：" + (item.QuotaCode ?? "");
+                        return blocked("missing_identity code=" + (item.QuotaCode ?? ""),
+                            "定额缺少完整名称或单位，整组未写入：" + (item.QuotaCode ?? ""));
                     Dictionary<string, object> structuralRow;
                     if (!structuralRows.TryGetValue(item.ChosenItemSeq, out structuralRow))
                     {
                         structuralRow = LoadSmartFillStructuralRow(conn, targetUnitSeq, item.ChosenItemSeq);
                         structuralRows[item.ChosenItemSeq] = structuralRow;
                     }
-                    if (structuralRow == null) return "当前项目没有可用于构造完整定额行的业务结构，整组未写入。";
+                    if (structuralRow == null) return blocked("missing_structure entrySeq=" +
+                        item.ChosenItemSeq.ToString(CultureInfo.InvariantCulture),
+                        "当前项目没有可用于构造完整定额行的业务结构，整组未写入。");
                     if (!IsContextSensitiveLearningCode(item.QuotaCode)) item.LearnedUnitPrice = 0m;
                     plan.Layer = SmartFillWriteLayer.L2;
                     plan.SourceRow = BuildSmartFillL2Row(structuralRow, item);
                 }
                 prepared.Add(plan);
             }
+
+            int l1Count = prepared.Count(plan => plan.Layer == SmartFillWriteLayer.L1);
+            int l2Count = prepared.Count(plan => plan.Layer == SmartFillWriteLayer.L2);
+            int sfCount = prepared.Count(plan => plan.Item != null && plan.Item.SfRedirect);
+            string entryBreakdown = String.Join(", ", prepared
+                .GroupBy(plan => plan.Item == null ? "" : plan.Item.ChosenItemNo ?? "")
+                .Select(group => group.Key + ":" + group.Count().ToString(CultureInfo.InvariantCulture)).ToArray());
+            Log("Smart fill apply plan: L1=" + l1Count.ToString(CultureInfo.InvariantCulture) +
+                " L2=" + l2Count.ToString(CultureInfo.InvariantCulture) +
+                " sf=" + sfCount.ToString(CultureInfo.InvariantCulture) + " entries=" + entryBreakdown);
 
             AgentUndoRecord undo = new AgentUndoRecord
             {
@@ -1310,7 +1336,13 @@ namespace RecoNet
             }
             catch (Exception ex)
             {
-                return "项目业务事务已整体回滚，未学习。失败原因：" + ex.Message;
+                string innerMessage = ex.InnerException == null || String.IsNullOrWhiteSpace(ex.InnerException.Message)
+                    ? ""
+                    : " inner=" + ex.InnerException.Message;
+                Log("Smart fill apply failed: entry=" + (entryNo ?? "") + " " + ex.GetType().Name +
+                    ": " + ex.Message + innerMessage + " elapsedMs=" +
+                    applyWatch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture));
+                return blocked("transaction_failed", "项目业务事务已整体回滚，未学习。失败原因：" + ex.Message);
             }
 
             GetAgentUndoStack(mainForm).Add(undo);
@@ -1330,6 +1362,18 @@ namespace RecoNet
             {
                 Log("Apply accept feedback failed: " + ex.Message);
             }
+            List<long> writtenIds = undo.Rows.Where(row => row != null && row.QuotaSequence > 0)
+                .Select(row => row.QuotaSequence).ToList();
+            long firstId = writtenIds.Count == 0 ? 0L : writtenIds.Min();
+            long lastId = writtenIds.Count == 0 ? 0L : writtenIds.Max();
+            Log("Smart fill apply ok: unit=" + (targetUnitNo ?? "") + "#" +
+                targetUnitSeq.ToString(CultureInfo.InvariantCulture) + " business=" +
+                candidates.Count.ToString(CultureInfo.InvariantCulture) + " marker=" +
+                markerRows.ToString(CultureInfo.InvariantCulture) + " undoRows=" +
+                undo.Rows.Count.ToString(CultureInfo.InvariantCulture) + " firstId=" +
+                firstId.ToString(CultureInfo.InvariantCulture) + " lastId=" +
+                lastId.ToString(CultureInfo.InvariantCulture) + " elapsedMs=" +
+                applyWatch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture));
             RefreshCurrentQuotaGrid(mainForm);
             int businessRows = candidates.Count;
             succeeded = true;

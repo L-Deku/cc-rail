@@ -1199,6 +1199,31 @@ namespace RecoNet
             return true;
         }
 
+        internal static List<FillPreviewItem> MergePreviewTargetGroup(List<FillPreviewItem> existing,
+            List<FillPreviewItem> additions)
+        {
+            List<FillPreviewItem> merged = new List<FillPreviewItem>();
+            HashSet<string> identities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (FillPreviewItem item in (existing ?? new List<FillPreviewItem>())
+                .Concat(additions ?? new List<FillPreviewItem>()))
+            {
+                if (item == null || String.IsNullOrWhiteSpace(item.QuotaCode)) continue;
+                string entryCode = !String.IsNullOrWhiteSpace(item.ChosenItemNo) ? item.ChosenItemNo : item.ItemNo;
+                string identity = String.Join("\u001f", new[]
+                {
+                    ResolveLearningTargetKind(item.TargetKind, item.QuotaCode),
+                    (item.QuotaCode ?? "").Trim().ToUpperInvariant(),
+                    NormalizeForSignature(item.SourceName),
+                    NormalizeForSignature(item.Unit),
+                    (entryCode ?? "").Trim().ToUpperInvariant(),
+                    (item.Adjust ?? "").Trim(),
+                    (item.FormulaTemplate ?? "").Trim()
+                });
+                if (identities.Add(identity)) merged.Add(item);
+            }
+            return merged;
+        }
+
         private static string BuildNameBindingTargetSetSignature(IEnumerable<FillPreviewItem> items, bool includeFormula = true)
         {
             return String.Join("\u001e", (items ?? Enumerable.Empty<FillPreviewItem>())

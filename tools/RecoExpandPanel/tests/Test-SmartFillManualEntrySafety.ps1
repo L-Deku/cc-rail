@@ -23,7 +23,11 @@ $requiredPanel = @(
     'InvalidateSmartPreview',
     'grid.ClearSelection()',
     'DataGridViewSelectionMode.FullRowSelect',
-    'GetSelectedSmartTargetRows'
+    'GetSelectedSmartTargetRows',
+    'Smart fill apply rejected',
+    'PromptSmartSfBindingChoice',
+    'SmartSfBindingChoice.Append',
+    'MergePreviewTargetGroup'
 )
 foreach ($marker in $requiredPanel) {
     if (-not $panel.Contains($marker)) {
@@ -43,6 +47,11 @@ $requiredFeature = @(
     'IsSmartFillSourceIdentityMatch',
     'foreach (PreparedSmartFillItem plan in prepared)',
     '项目业务事务已整体回滚，未学习。失败原因：',
+    'Smart fill apply begin',
+    'Smart fill apply plan',
+    'Smart fill apply ok',
+    'Smart fill apply blocked',
+    'Smart fill apply failed',
     'ProjectConnection = conn',
     'ProjectConnectionIdentity = GetProjectConnectionIdentity(conn)'
 )
@@ -115,9 +124,9 @@ if ($sourceRowBody.IndexOf('if (!IsSmartFillSourceIdentityMatch(item, values)) r
     $sourceRowBody.IndexOf('return values;', [StringComparison]::Ordinal)) {
     throw '跨库源行在完整身份核对前已经返回，无法安全回退到旧候选'
 }
-foreach ($marker in @('approvedEntrySequence', '确认后项目或条目已变化',
+foreach ($marker in @('approvedEntrySequence', '写入前项目或条目已变化',
     'currentSmartEntry.EntrySequence != approvedEntrySequence')) {
-    if (-not $panel.Contains($marker)) { throw "用户确认后缺少临写入前项目/条目二次核对：$marker" }
+    if (-not $panel.Contains($marker)) { throw "推荐定额缺少临写入前项目/条目二次核对：$marker" }
 }
 if (-not $feature.Contains('out bool succeeded') -or
     -not $feature.Contains('succeeded = true;') -or
@@ -125,10 +134,24 @@ if (-not $feature.Contains('out bool succeeded') -or
     $panel.Contains('if (smartSucceeded) InvalidateSmartPreview();')) {
     throw '推荐写入成功后不得清空预览，用户还要继续选择其他组写入别的条目'
 }
-foreach ($marker in @('Hide();', 'mainForm.Activate();', 'mainForm.BringToFront();',
-    'RestoreSmartPanelAfterHostWrite();')) {
-    if (-not $panel.Contains($marker)) {
-        throw "推荐写入未在保留预览数据的前提下把编辑焦点交还宿主表格：$marker"
+$smartApplyStart = $panel.IndexOf('private void OnApply()', [StringComparison]::Ordinal)
+$smartApplyEnd = $panel.IndexOf('private void SetBusy(', $smartApplyStart, [StringComparison]::Ordinal)
+if ($smartApplyStart -lt 0 -or $smartApplyEnd -le $smartApplyStart) { throw '缺少推荐定额界面写入入口' }
+$smartApplyBody = $panel.Substring($smartApplyStart, $smartApplyEnd - $smartApplyStart)
+foreach ($forbiddenUiMarker in @('确认把选中且勾选的', 'Hide();', 'mainForm.Activate();',
+    'mainForm.BringToFront();', 'RestoreSmartPanelAfterHostWrite();')) {
+    if ($smartApplyBody.Contains($forbiddenUiMarker)) {
+        throw "推荐写入仍会弹前置确认或隐藏窗口：$forbiddenUiMarker"
+    }
+}
+if (-not $smartApplyBody.Contains('MessageBox.Show(this, smartResult, "推荐定额")')) {
+    throw '推荐写入完成后的结果确定窗口被误删'
+}
+foreach ($sfBindingMarker in @('PromptSmartSfBindingChoice', 'SmartSfBindingChoice.Replace',
+    'SmartSfBindingChoice.Append', 'MergePreviewTargetGroup(oldGroup, replacements)',
+    'replace.Text = "替换"', 'append.Text = "补充"', 'target.LearningFeedbackAttempted = false')) {
+    if (-not $panel.Contains($sfBindingMarker)) {
+        throw "SF 右键绑定缺少替换/补充行为：$sfBindingMarker"
     }
 }
 if (-not $panel.Contains('smartOnly ? "推荐定额" : "模板铺量"')) {
@@ -206,6 +229,7 @@ $flags = [Reflection.BindingFlags]'Public,NonPublic,Static,Instance'
 $itemType = $formType.GetNestedType('FillPreviewItem', $nested)
 $buildL2 = $formType.GetMethod('BuildSmartFillL2Row', $flags)
 $hasConstructedIdentity = $formType.GetMethod('HasSmartFillConstructedIdentity', $flags)
+$mergePreviewTargetGroup = $formType.GetMethod('MergePreviewTargetGroup', $flags)
 $resolveSourceDatabase = $formType.GetMethod('ResolveSmartSourceDatabaseName', $flags)
 $shouldLoadCurrentQuotaTarget = $formType.GetMethod('ShouldLoadCurrentSmartQuotaTarget', $flags)
 $smartTargetType = $formType.GetNestedType('SmartBoxTarget', $nested)
@@ -218,6 +242,7 @@ $resolveTreeNode = if ($null -eq $panelType) { $null } else { $panelType.GetMeth
 $isEditableGrid = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsEditableAgentQuotaGrid', $flags) }
 $isOptionalTreeSequenceConsistent = if ($null -eq $panelType) { $null } else { $panelType.GetMethod('IsOptionalSmartTreeSequenceConsistent', $flags) }
 if ($null -eq $itemType -or $null -eq $buildL2 -or $null -eq $hasConstructedIdentity -or
+    $null -eq $mergePreviewTargetGroup -or
     $null -eq $resolveSourceDatabase -or
     $null -eq $shouldLoadCurrentQuotaTarget -or
     $null -eq $smartTargetType -or $null -eq $projectQuotaType -or
@@ -410,5 +435,27 @@ if ($formalRow['定额编号'] -ne 'PY-415' -or
     throw '无完整源行的正式定额未按编号、名称、单位、数量和零价构造完整业务行'
 }
 Write-Host 'PASS 无完整源行的正式定额统一构造完整业务行，缺名称或单位时阻断'
+
+$ordinary = New-Item 'PY-415' '充填式注浆 Φ560×33.2mm' '10m' '252/10'
+$itemType.GetField('ChosenItemNo', $flags).SetValue($ordinary, '0821-01-04-05-01')
+$sf = New-Item 'SF' '设备购置费' '元' '1'
+$itemType.GetField('ChosenItemNo', $flags).SetValue($sf, '0821-01-04-05-02')
+$existingType = $mergePreviewTargetGroup.GetParameters()[0].ParameterType
+$additionType = $mergePreviewTargetGroup.GetParameters()[1].ParameterType
+$existing = [Activator]::CreateInstance($existingType).PSObject.BaseObject
+$additions = [Activator]::CreateInstance($additionType).PSObject.BaseObject
+[void]$existing.Add($ordinary)
+[void]$additions.Add($sf)
+[void]$additions.Add($sf)
+$mergeArgs = New-Object 'object[]' 2
+$mergeArgs[0] = $existing
+$mergeArgs[1] = $additions
+$merged = $mergePreviewTargetGroup.Invoke($null, $mergeArgs)
+if ($merged.Count -ne 2 -or
+    @($merged | Where-Object { $itemType.GetField('QuotaCode', $flags).GetValue($_) -eq 'PY-415' }).Count -ne 1 -or
+    @($merged | Where-Object { $itemType.GetField('QuotaCode', $flags).GetValue($_) -eq 'SF' }).Count -ne 1) {
+    throw 'SF 补充未保留普通定额、加入 SF 或去除同身份重复项'
+}
+Write-Host 'PASS SF 补充保留原组件并加入唯一设备费目标'
 
 Write-Host 'PASS SmartFill constructed-row write safety contract'
