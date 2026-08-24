@@ -2472,27 +2472,24 @@ namespace RecoNet
                     grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
                     grid.Columns.Add("Action", "操作");
                     grid.Columns.Add("Unit", "单元");
-                    grid.Columns.Add("ItemNo", "条目");
-                    grid.Columns.Add("Item", "工程或费用项目名称");
                     grid.Columns.Add("Code", "定额编号");
+                    grid.Columns.Add("Item", "工程或费用项目名称");
                     grid.Columns.Add("Old", "原值");
                     grid.Columns.Add("New", "新值");
-                    grid.Columns["Action"].FillWeight = 11;
-                    grid.Columns["Unit"].FillWeight = 9;
-                    grid.Columns["ItemNo"].FillWeight = 14;
-                    grid.Columns["Item"].FillWeight = 24;
-                    grid.Columns["Code"].FillWeight = 13;
-                    grid.Columns["Old"].FillWeight = 14;
-                    grid.Columns["New"].FillWeight = 15;
+                    grid.Columns["Action"].FillWeight = 12;
+                    grid.Columns["Unit"].FillWeight = 10;
+                    grid.Columns["Code"].FillWeight = 16;
+                    grid.Columns["Item"].FillWeight = 28;
+                    grid.Columns["Old"].FillWeight = 17;
+                    grid.Columns["New"].FillWeight = 17;
 
                     foreach (AgentPlanRow row in plan.PreviewRows.Take(2000))
                     {
                         grid.Rows.Add(
                             row.Action,
                             AgentUnitDisplay(plan.UnitCodes, row.UnitId),
-                            row.ItemNo ?? "",
-                            row.ItemName ?? "",
                             row.QuotaCode ?? "",
+                            row.ItemName ?? "",
                             row.OldValue ?? "",
                             row.NewValue ?? "");
                     }
