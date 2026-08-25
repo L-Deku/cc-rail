@@ -34,6 +34,7 @@ namespace RecoNet
             public string Factor;
             public string SourceItem;
             public List<string> TargetItems = new List<string>();
+            public List<string> TargetUnits = new List<string>();   // copy/move 的目标单元；空=落回来源所在单元
             public List<AgentQuotaInput> Quotas = new List<AgentQuotaInput>();
             public string NewName;                            // create_unit 用
             public string Target = "quantity";                // multiply_quantity/remove_text: quantity / quota_code / unit_price

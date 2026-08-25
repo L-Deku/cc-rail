@@ -193,7 +193,10 @@ if (Test-Path -LiteralPath $executorPath) {
         $insertBody = $executor.Substring($insertStart, $insertEnd - $insertStart)
         Assert-True ($insertBody.Contains('LoadTemplateFullRow(conn, transaction')) 'same-code and anchor rows must be cloned inside the transaction'
         Assert-True ($insertBody.Contains('LoadAgentStructuralRow(conn, transaction')) 'fallback structural row must be read inside the transaction'
-        Assert-True ($insertBody.Contains('HasSmartFillRequiredSourceColumns')) 'insert source must be a complete business row'
+        # 不能用推荐定额那份 22 列清单卡：智能指令只写少数几列，费用列是"存在才清零"。
+        # 列少的项目会被那道门禁整批拦下（现场实测：替换和新增全部失败）。
+        Assert-True ($insertBody.Contains('FindMissingAgentInsertColumns')) 'insert gate must check only the columns the agent writes'
+        Assert-True (-not $insertBody.Contains('HasSmartFillRequiredSourceColumns')) 'insert must not reuse the SmartFill column gate'
         Assert-True ($insertBody.Contains('SetAgentRowValue(row, "工程或费用项目名称", quota.Name)')) 'inserted name must be written'
         Assert-True ($insertBody.Contains('SetAgentRowValue(row, "单位", quota.Unit)')) 'inserted unit must be written'
         Assert-True ($insertBody.Contains('SetAgentRowValue(row, "工程数量输入", quantityInput)')) 'inserted quantity expression must be written'

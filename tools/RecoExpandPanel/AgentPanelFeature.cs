@@ -433,7 +433,8 @@ namespace RecoNet
             private readonly Label rowHintLabel;
 
             private readonly ComboBox crossActionBox;
-            private readonly ListBox crossTargetList;
+            private readonly ListBox crossSourceList;
+            private readonly Label crossSourceLabel;
             private readonly Label crossHintLabel;
 
             private readonly TextBox textBox;
@@ -452,7 +453,7 @@ namespace RecoNet
             private readonly List<string> selectedUnitKeys = new List<string>();
             private readonly List<string> selectedItemNos = new List<string>();
             private readonly List<AgentTargetEntry> targetEntries = new List<AgentTargetEntry>();
-            private readonly List<string> crossTargetItems = new List<string>();
+            private int crossSourceRowCount;
 
             private bool busy;
             private bool suppressSentence;
@@ -842,55 +843,39 @@ namespace RecoNet
                 crossActionRow.Controls.Add(crossActionLabel);
                 crossActionRow.Controls.Add(crossActionBox);
 
+                Button crossReloadButton = new Button();
+                crossReloadButton.SetBounds(190, 3, 132, 27);
+                crossReloadButton.Text = "重新读取选中行";
+                crossReloadButton.Click += delegate
+                {
+                    RefreshCrossSourceList();
+                    UpdateSentence();
+                };
+                crossActionRow.Controls.Add(crossReloadButton);
+
                 crossHintLabel = new Label();
                 crossHintLabel.Dock = DockStyle.Top;
-                crossHintLabel.Height = 44;
+                crossHintLabel.Height = 46;
                 crossHintLabel.ForeColor = AgentPanelHintFore;
 
-                Panel crossTargetHeader = new Panel();
-                crossTargetHeader.Dock = DockStyle.Top;
-                crossTargetHeader.Height = 28;
+                crossSourceLabel = new Label();
+                crossSourceLabel.Dock = DockStyle.Top;
+                crossSourceLabel.Height = 24;
+                crossSourceLabel.TextAlign = ContentAlignment.MiddleLeft;
 
-                Label crossTargetLabel = new Label();
-                crossTargetLabel.Dock = DockStyle.Fill;
-                crossTargetLabel.TextAlign = ContentAlignment.MiddleLeft;
-                crossTargetLabel.Text = "目标条目（在左侧树点中后按「添加条目」，可反复加）";
+                crossSourceList = new ListBox();
+                crossSourceList.Dock = DockStyle.Fill;
+                crossSourceList.IntegralHeight = false;
+                crossSourceList.SelectionMode = SelectionMode.None;
+                crossSourceList.BackColor = SystemColors.Control;
+                crossSourceList.BorderStyle = BorderStyle.FixedSingle;
 
-                Button crossAddButton = new Button();
-                crossAddButton.Dock = DockStyle.Right;
-                crossAddButton.Width = 110;
-                crossAddButton.Text = "◀ 添加条目";
-                crossAddButton.Click += delegate { AddCrossTargetFromTree(); };
-
-                Button crossRemoveButton = new Button();
-                crossRemoveButton.Dock = DockStyle.Right;
-                crossRemoveButton.Width = 88;
-                crossRemoveButton.Text = "移除选中";
-                crossRemoveButton.Click += delegate { RemoveSelectedCrossTargets(); };
-
-                Button crossClearButton = new Button();
-                crossClearButton.Dock = DockStyle.Right;
-                crossClearButton.Width = 88;
-                crossClearButton.Text = "全部清空";
-                crossClearButton.Click += delegate { ClearCrossTargets(); };
-
-                crossTargetHeader.Controls.Add(crossTargetLabel);
-                crossTargetHeader.Controls.Add(crossAddButton);
-                crossTargetHeader.Controls.Add(crossRemoveButton);
-                crossTargetHeader.Controls.Add(crossClearButton);
-
-                crossTargetList = new ListBox();
-                crossTargetList.Dock = DockStyle.Fill;
-                crossTargetList.IntegralHeight = false;
-                crossTargetList.SelectionMode = SelectionMode.MultiExtended;
-                crossTargetList.BorderStyle = BorderStyle.FixedSingle;
-
-                crossPage.Controls.Add(crossTargetList);
-                crossPage.Controls.Add(crossTargetHeader);
+                crossPage.Controls.Add(crossSourceList);
+                crossPage.Controls.Add(crossSourceLabel);
                 crossPage.Controls.Add(crossHintLabel);
                 crossPage.Controls.Add(crossActionRow);
 
-                // --- 页签：说一句话 ---
+                // --- 页签：指令 ---
                 TabPage textPage = new TabPage(TabText);
                 textPage.UseVisualStyleBackColor = true;
                 textPage.Padding = new Padding(16, 12, 16, 12);
@@ -945,6 +930,11 @@ namespace RecoNet
                 tabs.TabPages.Add(textPage);
                 tabs.SelectedIndexChanged += delegate
                 {
+                    if (tabs.SelectedTab != null && tabs.SelectedTab.Text == TabCross)
+                    {
+                        RefreshCrossSourceList();
+                    }
+
                     RefreshScopeAvailability();
                     UpdateSentence();
                 };
@@ -1059,11 +1049,14 @@ namespace RecoNet
             public void OnActivatedFromHost()
             {
                 ReloadScopeOptionsIfProjectChanged();
+                // 项目没换但用户可能刚新建了单元或条目，每次激活都重取一遍候选。
+                RefreshScopeCandidates();
                 if (selectedItemNos.Count == 0)
                 {
                     AddItemFromTree(true);
                 }
 
+                RefreshCrossSourceList();
                 RefreshUndoRedoButtons();
                 UpdateSentence();
             }
@@ -1088,8 +1081,6 @@ namespace RecoNet
 
                 selectedUnitKeys.Clear();
                 selectedItemNos.Clear();
-                crossTargetItems.Clear();
-                UpdateCrossTargetList();
                 targetEntries.Clear();
                 UpdateTargetDisplay();
                 UpdateItemList();
@@ -1138,6 +1129,54 @@ namespace RecoNet
 
                 UpdateUnitBox();
                 AddItemFromTree(true);
+            }
+
+            // 只重取单元/条目候选，保留用户已选的东西；选中的项如果已经不存在了就剔掉。
+            // 用户在软件里新建单元、新增条目后，靠这个才能认到最新结构。
+            private void RefreshScopeCandidates()
+            {
+                List<AgentUnitOption> units = new List<AgentUnitOption>();
+                List<AgentItemOption> items = new List<AgentItemOption>();
+                try
+                {
+                    SqlConnection conn = GetOpenProjectConnection(mainForm);
+                    units.AddRange(LoadAgentUnitOptions(conn));
+                    items.AddRange(LoadAgentItemOptions(conn));
+                    scopeProjectIdentity = GetProjectConnectionIdentity(conn);
+                }
+                catch (Exception ex)
+                {
+                    Log("Agent panel refresh scope candidates failed: " + ex.Message);
+                    return;
+                }
+
+                if (units.Count == 0 && items.Count == 0)
+                {
+                    return;
+                }
+
+                unitOptions.Clear();
+                unitOptions.AddRange(units);
+                itemOptions.Clear();
+                itemOptions.AddRange(items);
+
+                HashSet<string> unitKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (AgentUnitOption unit in unitOptions)
+                {
+                    unitKeys.Add(UnitKey(unit));
+                }
+
+                HashSet<string> itemNos = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (AgentItemOption item in itemOptions)
+                {
+                    itemNos.Add(item.ItemNo);
+                }
+
+                selectedUnitKeys.RemoveAll(delegate(string key) { return !unitKeys.Contains(key); });
+                selectedItemNos.RemoveAll(delegate(string no) { return !itemNos.Contains(no); });
+
+                UpdateUnitBox();
+                UpdateItemList();
             }
 
             private static string UnitKey(AgentUnitOption unit)
@@ -1208,13 +1247,10 @@ namespace RecoNet
 
             private void PickUnits()
             {
+                RefreshScopeCandidates();
                 if (unitOptions.Count == 0)
                 {
-                    LoadScopeOptions();
-                    if (unitOptions.Count == 0)
-                    {
-                        return;
-                    }
+                    return;
                 }
 
                 List<AgentPickItem> items = new List<AgentPickItem>();
@@ -1520,98 +1556,40 @@ namespace RecoNet
                 return names;
             }
 
-            private void AddCrossTargetFromTree()
+            // 跨条目复制的"源"就是主程序定额表里选中的那几行，这里只读回显。
+            private void RefreshCrossSourceList()
             {
-                TreeView tree = GetField<TreeView>(mainForm, "Tv_tree");
-                TreeNode node = tree != null ? tree.SelectedNode : GetField<TreeNode>(mainForm, "CurrNode");
-                if (node == null)
-                {
-                    SetStatus("左侧树上还没有选中节点，请先在树上点一个目标条目。", true);
-                    return;
-                }
-
-                string itemNo;
+                crossSourceList.Items.Clear();
+                crossSourceRowCount = 0;
                 try
                 {
-                    SqlConnection hostConn = GetProjectConnection(mainForm);
-                    itemNo = hostConn == null ? null : ResolveChapterNo(mainForm, hostConn, node);
+                    DataGridView host = GetField<DataGridView>(mainForm, "dataGridViewDE");
+                    if (host != null)
+                    {
+                        foreach (DataGridViewRow row in GetSelectedQuotaRows(host))
+                        {
+                            crossSourceRowCount++;
+                            string code = (GetRowValue(row, "定额编号DE", "定额编号") ?? "").Trim();
+                            string name = (GetRowValue(row, "工程或费用项目名称", "名称", "项目名称") ?? "").Trim();
+                            crossSourceList.Items.Add((code + "  " + name).Trim());
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
-                    SetStatus("读取当前条目失败：" + ex.Message, true);
-                    Log("Agent panel add cross target failed: " + ex);
-                    return;
+                    Log("Agent panel read cross source failed: " + ex.Message);
                 }
 
-                if (String.IsNullOrEmpty(itemNo))
+                if (crossSourceRowCount > 0)
                 {
-                    SetStatus("无法识别当前条目编号。", true);
-                    return;
+                    crossSourceLabel.ForeColor = AgentPanelOkFore;
+                    crossSourceLabel.Text = "源：主程序定额表里选中的 " +
+                        crossSourceRowCount.ToString(CultureInfo.InvariantCulture) + " 行";
                 }
-
-                if (crossTargetItems.Contains(itemNo))
+                else
                 {
-                    SetStatus("目标条目 " + ItemDisplayOf(itemNo) + " 已经在列表里了。", false);
-                    return;
-                }
-
-                bool move = crossActionBox.Text == "移动到";
-                if (move && crossTargetItems.Count > 0)
-                {
-                    // 移动只能有一个目标，直接换成新点的这个。
-                    crossTargetItems.Clear();
-                }
-
-                crossTargetItems.Add(itemNo);
-                RememberAgentItemNode(itemNo, node);
-                UpdateCrossTargetList();
-                UpdateSentence();
-                SetStatus("已加入目标条目 " + ItemDisplayOf(itemNo) +
-                    (move ? "。移动只能有一个目标。" : "，共 " +
-                        crossTargetItems.Count.ToString(CultureInfo.InvariantCulture) + " 个。"), false);
-            }
-
-            private void RemoveSelectedCrossTargets()
-            {
-                List<int> indexes = new List<int>();
-                foreach (int index in crossTargetList.SelectedIndices)
-                {
-                    indexes.Add(index);
-                }
-
-                if (indexes.Count == 0)
-                {
-                    SetStatus("请先在目标条目列表里选中要移除的行。", true);
-                    return;
-                }
-
-                indexes.Sort();
-                for (int i = indexes.Count - 1; i >= 0; i--)
-                {
-                    if (indexes[i] >= 0 && indexes[i] < crossTargetItems.Count)
-                    {
-                        crossTargetItems.RemoveAt(indexes[i]);
-                    }
-                }
-
-                UpdateCrossTargetList();
-                UpdateSentence();
-            }
-
-            private void ClearCrossTargets()
-            {
-                crossTargetItems.Clear();
-                UpdateCrossTargetList();
-                UpdateSentence();
-                SetStatus("目标条目已清空。", false);
-            }
-
-            private void UpdateCrossTargetList()
-            {
-                crossTargetList.Items.Clear();
-                foreach (string itemNo in crossTargetItems)
-                {
-                    crossTargetList.Items.Add(ItemDisplayOf(itemNo));
+                    crossSourceLabel.ForeColor = AgentPanelErrorFore;
+                    crossSourceLabel.Text = "源：主程序定额表里还没有选中行";
                 }
             }
 
@@ -1620,7 +1598,8 @@ namespace RecoNet
             {
                 string tab = tabs.SelectedTab == null ? "" : tabs.SelectedTab.Text;
                 bool scopeUsed = tab != TabText;
-                bool targetUsed = scopeUsed && !(tab == TabRows && rowActionBox.Text == "新增定额");
+                bool targetUsed = scopeUsed && tab != TabCross &&
+                    !(tab == TabRows && rowActionBox.Text == "新增定额");
 
                 unitBox.Enabled = scopeUsed;
                 allUnitsBox.Enabled = scopeUsed;
@@ -1748,14 +1727,10 @@ namespace RecoNet
             {
                 bool move = crossActionBox.Text == "移动到";
                 crossHintLabel.Text = move
-                    ? "移动不保留来源副本，目标只能有一个条目。\r\n来源条目只能有一个，请把上面的条目列表减到一条。"
-                    : "复制会在目标条目下新增同样的定额，来源保持不变，目标条目可以选多个。\r\n来源条目只能有一个。";
-                if (move && crossTargetItems.Count > 1)
-                {
-                    crossTargetItems.RemoveRange(1, crossTargetItems.Count - 1);
-                    UpdateCrossTargetList();
-                }
-
+                    ? "把主程序定额表里选中的行，移动到上面圈定的【单元 × 条目】下，来源行不再保留。\r\n" +
+                      "移动只能有一个去处：上面的单元和条目都各只能选一个。"
+                    : "把主程序定额表里选中的行，复制到上面圈定的【单元 × 条目】下，来源保持不变。\r\n" +
+                      "上面选了几个单元、几个条目，就复制到几处；跨单元的同名条目也可以。";
                 UpdateSentence();
             }
 
@@ -2063,39 +2038,31 @@ namespace RecoNet
 
             private AgentCommand BuildCrossCommand()
             {
-                if (crossTargetItems.Count == 0)
+                if (crossSourceRowCount == 0)
                 {
-                    throw new AgentPlanException("请先选择目标条目。");
+                    throw new AgentPlanException("请先在主程序定额表里选中要复制/移动的行（按住 Ctrl 或 Shift 可多选），再点「重新读取选中行」。");
                 }
 
+                List<string> targetItems = BuildItemTokens();
+                List<string> targetUnits = BuildUnitTokens();
                 bool move = crossActionBox.Text == "移动到";
-                if (move && crossTargetItems.Count != 1)
+                if (move && targetItems.Count != 1)
                 {
-                    throw new AgentPlanException("移动定额只能有一个目标条目。");
+                    throw new AgentPlanException("移动只能有一个去处：请把上面的条目列表减到一个。");
                 }
 
-                List<string> sources = BuildItemTokens();
-                if (sources.Count > 1)
+                if (move && targetUnits.Count != 1)
                 {
-                    throw new AgentPlanException("复制 / 移动的来源只能是一个条目，请把上面的条目列表减到一条。");
+                    throw new AgentPlanException("移动只能有一个去处：请把上面的单元减到一个（也不能选「所有单元」）。");
                 }
 
                 AgentCommand command = new AgentCommand();
                 command.Type = move ? "move_quotas" : "copy_quotas";
-                command.IncludeChildren = includeChildrenBox.Checked;
-                command.Units = BuildUnitTokens();
-                command.SourceItem = sources[0];
-                command.TargetItems = new List<string>(crossTargetItems);
-                ApplyTarget(command);
-
-                foreach (string target in crossTargetItems)
-                {
-                    if (String.Equals(target, command.SourceItem, StringComparison.OrdinalIgnoreCase))
-                    {
-                        throw new AgentPlanException("来源条目和目标条目不能相同。");
-                    }
-                }
-
+                command.IncludeChildren = false;          // 源是具体的行，不涉及子条目
+                command.Units = new List<string>(targetUnits);
+                command.SourceItem = AgentSelectedToken;   // 源=主程序定额表选中行
+                command.TargetItems = targetItems;
+                command.TargetUnits = targetUnits;
                 return command;
             }
 
@@ -2167,9 +2134,11 @@ namespace RecoNet
 
             private AgentSelectionSnapshot CaptureAgentSelectionForPanel()
             {
-                // 本面板不用"主程序选中行"当作用范围，快照里的行选中一律丢弃，
-                // 避免宿主表格里顺带选中的当前行影响批量范围。
-                s_agentInvokeFromTree = true;
+                // 一般情况下不拿"主程序选中行"当作用范围，快照里的行选中要丢弃，
+                // 免得宿主表格里顺带选中的当前行影响批量范围。
+                // 但跨条目复制的源恰恰就是那些选中行，这时必须保留。
+                bool keepSelectedRows = tabs.SelectedTab != null && tabs.SelectedTab.Text == TabCross;
+                s_agentInvokeFromTree = !keepSelectedRows;
                 try
                 {
                     return CaptureAgentSelection(mainForm);
