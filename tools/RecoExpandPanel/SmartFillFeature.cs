@@ -1277,20 +1277,13 @@ namespace RecoNet
         {
             List<SmartMapCandidateScore> scores = RankSmartMapEntries(snapshot, hits, currentQuotaByCode);
             if (scores.Count == 0) return false;
-            if (CanAutoSelectSmartMapEntry(scores))
-            {
-                AppendSmartItems(items, row, targetRows, scores[0].Entry, snapshot, currentQuotaByCode,
-                    false, baseNote + "，" + BuildSmartCandidateLabel(scores[0]), signature);
-                return true;
-            }
-
             List<NameQuotaCandidateGroup> candidates = new List<NameQuotaCandidateGroup>();
             foreach (SmartMapCandidateScore score in scores)
             {
                 List<FillPreviewItem> candidateItems = new List<FillPreviewItem>();
                 string label = BuildSmartCandidateLabel(score);
                 AppendSmartItems(candidateItems, row, targetRows, score.Entry, snapshot, currentQuotaByCode,
-                    true, baseNote + "，候选：" + label, signature);
+                    false, baseNote + "，候选：" + label, signature);
                 if (candidateItems.Count == 0) continue;
                 candidates.Add(new NameQuotaCandidateGroup
                 {
@@ -1303,17 +1296,34 @@ namespace RecoNet
             if (candidates.Count == 0) return false;
 
             List<FillPreviewItem> active = candidates[0].Items.Select(item => item.CloneForNameCandidate()).ToList();
-            foreach (FillPreviewItem item in active)
+            AttachSmartCandidateOptions(active, candidates, !CanAutoSelectSmartMapEntry(scores));
+            items.AddRange(active);
+            return true;
+        }
+
+        private static void AttachSmartCandidateOptions(List<FillPreviewItem> active,
+            List<NameQuotaCandidateGroup> candidates, bool requireConfirmation)
+        {
+            if (active == null || active.Count == 0 || candidates == null || candidates.Count == 0) return;
+            if (requireConfirmation)
             {
-                item.Selected = false;
-                item.NeedExactNameConfirmation = true;
+                foreach (FillPreviewItem item in active)
+                {
+                    item.Selected = false;
+                    item.NeedExactNameConfirmation = true;
+                }
             }
             active[0].NameQuotaCandidates = candidates;
             active[0].SelectedNameQuotaCandidateKey = candidates[0].Key;
-            active[0].AlignNote = AppendPreviewNote(active[0].AlignNote,
-                candidates.Count > 1 ? "组件候选接近，请确认完整组件" : "请确认组件");
-            items.AddRange(active);
-            return true;
+            if (requireConfirmation)
+            {
+                active[0].AlignNote = AppendPreviewNote(active[0].AlignNote,
+                    candidates.Count > 1 ? "组件候选接近，请确认完整组件" : "请确认组件");
+            }
+            else if (candidates.Count > 1)
+            {
+                active[0].AlignNote = AppendPreviewNote(active[0].AlignNote, "已按最高分勾选，可下拉切换完整组件");
+            }
         }
 
         private static List<KeyValuePair<int, string>> BuildSmartFuzzyScoresIfUnmatched(bool matched, string nameSignature,

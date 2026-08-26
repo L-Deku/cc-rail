@@ -24,6 +24,7 @@ foreach ($dependency in @('NPOI.dll', 'NPOI.OpenXmlFormats.dll', 'NPOI.OpenXml4N
 }
 
 if ($smart -notmatch 'BuildPreview_SmartFill') { throw '缺少 BuildPreview_SmartFill' }
+if ($smart -notmatch 'AttachSmartCandidateOptions') { throw '高分组件自动选中后没有保留其他有效组件下拉。' }
 if ($smart -notmatch 'LoadSmartLearningSnapshot') { throw '缺少学习库快照加载 LoadSmartLearningSnapshot' }
 if ($smart -match 'LoadMappingBoxRows\(' -or $smart -match '本地映射\(jsonl回退\)') { throw '推荐定额仍可能从本地学习配对' }
 if ($smart -notmatch 'local learning is disabled') { throw 'SQL 失败没有明确关闭本地学习' }
@@ -75,7 +76,10 @@ $targetType = $panelType.GetNestedType('SmartBoxTarget', [System.Reflection.Bind
 $mappingFeedbackTargetType = $panelType.GetNestedType('MappingFeedbackTarget', [System.Reflection.BindingFlags]'Public,NonPublic')
 $routeType = $panelType.GetNestedType('SmartMethodRoute', [System.Reflection.BindingFlags]'Public,NonPublic')
 $snapshotType = $panelType.GetNestedType('SmartLearningSnapshot', [System.Reflection.BindingFlags]'Public,NonPublic')
+$previewItemType = $panelType.GetNestedType('FillPreviewItem', [System.Reflection.BindingFlags]'Public,NonPublic')
+$nameCandidateType = $panelType.GetNestedType('NameQuotaCandidateGroup', [System.Reflection.BindingFlags]'Public,NonPublic')
 $canAutoSelect = $panelType.GetMethod('CanAutoSelectSmartMapEntry', $allFlags)
+$attachCandidateOptions = $panelType.GetMethod('AttachSmartCandidateOptions', $allFlags)
 $isClassifiedEntryCode = $panelType.GetMethod('IsSmartClassifiedEntryCode', $allFlags)
 $resolveRoute = $panelType.GetMethod('ResolveSmartMethodRoute', $allFlags)
 $orderCandidates = $panelType.GetMethod('OrderSmartMapCandidateScores', $allFlags)
@@ -86,14 +90,43 @@ $isSmartTargetSetRecommendable = $panelType.GetMethod('IsSmartTargetSetRecommend
 $isSingleQuotaTargetBox = $panelType.GetMethod('IsSingleQuotaTargetBox', $allFlags)
 $hasCompatibleSpecifications = $panelType.GetMethod('HaveCompatibleSmartSpecificationNumbers', $allFlags)
 if ($null -eq $candidateType -or $null -eq $entryType -or $null -eq $targetType -or $null -eq $routeType -or
-    $null -eq $mappingFeedbackTargetType -or
+    $null -eq $mappingFeedbackTargetType -or $null -eq $previewItemType -or $null -eq $nameCandidateType -or
     $null -eq $snapshotType -or $null -eq $canAutoSelect -or $null -eq $resolveRoute -or
+    $null -eq $attachCandidateOptions -or
     $null -eq $isClassifiedEntryCode -or
     $null -eq $orderCandidates -or
     $null -eq $isPrimaryTarget -or $null -eq $isEngineeringScopeTarget -or $null -eq $isLearningGroupRecommendable -or
     $null -eq $isSmartTargetSetRecommendable -or $null -eq $isSingleQuotaTargetBox -or $null -eq $hasCompatibleSpecifications) {
     throw '缺少跨专业同名冲突判定入口'
 }
+
+$previewListType = [System.Collections.Generic.List``1].MakeGenericType($previewItemType)
+$candidateListType = [System.Collections.Generic.List``1].MakeGenericType($nameCandidateType)
+$activePreview = [Activator]::CreateInstance($previewListType).PSObject.BaseObject
+$activeItem = [Activator]::CreateInstance($previewItemType, $true).PSObject.BaseObject
+[void]$activePreview.Add($activeItem)
+$candidateOptions = [Activator]::CreateInstance($candidateListType).PSObject.BaseObject
+foreach ($definition in @(
+    [pscustomobject]@{ Key='smart:three'; Label='DY-310 + DY-480 + 7015511*1.02' },
+    [pscustomobject]@{ Key='smart:two'; Label='DY-480 + 7015511*1.02' }
+)) {
+    $candidate = [Activator]::CreateInstance($nameCandidateType, $true).PSObject.BaseObject
+    $nameCandidateType.GetField('Key', $allFlags).SetValue($candidate, $definition.Key)
+    $nameCandidateType.GetField('Label', $allFlags).SetValue($candidate, $definition.Label)
+    [void]$candidateOptions.Add($candidate)
+}
+$attachArgs = New-Object 'object[]' 3
+$attachArgs[0] = $activePreview
+$attachArgs[1] = $candidateOptions
+$attachArgs[2] = $false
+$attachCandidateOptions.Invoke($null, $attachArgs)
+if (-not [bool]$previewItemType.GetField('Selected', $allFlags).GetValue($activeItem) -or
+    [bool]$previewItemType.GetField('NeedExactNameConfirmation', $allFlags).GetValue($activeItem) -or
+    $previewItemType.GetField('SelectedNameQuotaCandidateKey', $allFlags).GetValue($activeItem) -ne 'smart:three' -or
+    $previewItemType.GetField('NameQuotaCandidates', $allFlags).GetValue($activeItem).Count -ne 2) {
+    throw '最高分组件默认勾选后未保留三条/两条完整组件下拉。'
+}
+Write-Host 'PASS 最高分组件默认勾选且保留其他有效完整组件下拉'
 if ($null -ne $candidateType.GetField('PendingLocal', $allFlags)) {
     throw 'PendingLocal 不应在 SmartMapCandidateScore 重复存储'
 }

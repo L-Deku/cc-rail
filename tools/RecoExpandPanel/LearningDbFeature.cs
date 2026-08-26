@@ -166,9 +166,16 @@ namespace RecoNet
                 {
                     try
                     {
-                        for (int groupIndex = 0; groupIndex < groups.Count; groupIndex++)
+                        List<MappingFeedbackGroup> writeGroups = groups;
+                        if (String.Equals(source, "excel-bind-batch", StringComparison.OrdinalIgnoreCase))
                         {
-                            MappingFeedbackGroup group = groups[groupIndex];
+                            List<MappingFeedbackGroup> priorGroups =
+                                LoadPriorAutomaticBindingGroups(conn, transaction, groups);
+                            writeGroups = BuildAutomaticRebindFeedbackGroups(groups, priorGroups);
+                        }
+                        for (int groupIndex = 0; groupIndex < writeGroups.Count; groupIndex++)
+                        {
+                            MappingFeedbackGroup group = writeGroups[groupIndex];
                             if (group == null || String.IsNullOrWhiteSpace(group.QuantityName))
                             {
                                 continue;
@@ -262,6 +269,124 @@ namespace RecoNet
                         throw;
                     }
                 }
+            }
+        }
+
+        private static List<MappingFeedbackGroup> LoadPriorAutomaticBindingGroups(SqlConnection conn,
+            SqlTransaction transaction, List<MappingFeedbackGroup> desiredGroups)
+        {
+            Dictionary<string, MappingFeedbackGroup> byGroupKey =
+                new Dictionary<string, MappingFeedbackGroup>(StringComparer.OrdinalIgnoreCase);
+            foreach (MappingFeedbackGroup desired in desiredGroups ?? new List<MappingFeedbackGroup>())
+            {
+                if (desired == null || String.IsNullOrWhiteSpace(desired.QuantityName) ||
+                    String.IsNullOrWhiteSpace(desired.Workbook) || String.IsNullOrWhiteSpace(desired.Worksheet) ||
+                    (desired.ExcelRow <= 0 && String.IsNullOrWhiteSpace(desired.SourceCell))) continue;
+                using (SqlCommand cmd = conn.CreateCommand())
+                {
+                    cmd.Transaction = transaction;
+                    cmd.CommandTimeout = 5;
+                    cmd.CommandText =
+                        "SELECT group_key,quantity_name,quantity_unit,method,software_partition,method_no,project_id," +
+                        "entry_code,entry_name,target_kind,target_code,target_name,target_unit,extra " +
+                        "FROM dbo.BindingLog WITH (HOLDLOCK) WHERE source IN ('plugin:excel-bind-batch','plugin:template-right-click') " +
+                        "AND software_partition=@software_partition AND method=@method AND method_no=@method_no " +
+                        "AND project_id=@project AND quantity_name=@quantity";
+                    cmd.Parameters.AddWithValue("@software_partition", desired.SoftwarePartition ?? "");
+                    cmd.Parameters.AddWithValue("@method", NormalizeLearningDbMethod(desired.Method));
+                    cmd.Parameters.AddWithValue("@method_no", NormalizeLearningMethodNo(desired.MethodNo));
+                    cmd.Parameters.AddWithValue("@project", desired.ProjectId ?? "");
+                    cmd.Parameters.AddWithValue("@quantity", desired.QuantityName ?? "");
+                    using (SqlDataReader reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            Dictionary<string, string> extra = ParseFlatJson(reader.IsDBNull(13) ? "" : reader.GetString(13));
+                            int acceptedCount = ReadFlatInt(extra, "accepted_count", 1);
+                            int correctedCount = ReadFlatInt(extra, "corrected_count", 0);
+                            int rejectedCount = ReadFlatInt(extra, "rejected_count", 0);
+                            if (acceptedCount + correctedCount <= 0 || rejectedCount > 0) continue;
+
+                            string groupKey = reader.IsDBNull(0) ? "" : reader.GetString(0);
+                            if (String.IsNullOrWhiteSpace(groupKey)) continue;
+                            MappingFeedbackGroup prior;
+                            if (!byGroupKey.TryGetValue(groupKey, out prior))
+                            {
+                                prior = new MappingFeedbackGroup
+                                {
+                                    QuantityName = reader.IsDBNull(1) ? "" : reader.GetString(1),
+                                    QuantityUnit = reader.IsDBNull(2) ? "" : reader.GetString(2),
+                                    Method = reader.IsDBNull(3) ? "" : reader.GetString(3),
+                                    SoftwarePartition = reader.IsDBNull(4) ? "" : reader.GetString(4),
+                                    MethodNo = reader.IsDBNull(5) ? "" : reader.GetString(5),
+                                    ProjectId = reader.IsDBNull(6) ? "" : reader.GetString(6),
+                                    EntryCode = reader.IsDBNull(7) ? "" : reader.GetString(7),
+                                    EntryName = reader.IsDBNull(8) ? "" : reader.GetString(8),
+                                    Workbook = GetFlat(extra, "workbook"),
+                                    Worksheet = GetFlat(extra, "worksheet"),
+                                    ExcelRow = ReadFlatInt(extra, "excel_row", 0),
+                                    BoxId = GetFlat(extra, "box_id"),
+                                    Expression = GetFlat(extra, "expression"),
+                                    SourceCell = GetFlat(extra, "source_cell"),
+                                    AcceptedCount = acceptedCount,
+                                    CorrectedCount = correctedCount,
+                                    RejectedCount = 0,
+                                    UserAction = GetFlat(extra, "user_action")
+                                };
+                                byGroupKey[groupKey] = prior;
+                            }
+                            prior.Targets.Add(new MappingFeedbackTarget
+                            {
+                                Kind = reader.IsDBNull(9) ? "quota" : reader.GetString(9),
+                                Code = reader.IsDBNull(10) ? "" : reader.GetString(10),
+                                Name = reader.IsDBNull(11) ? "" : reader.GetString(11),
+                                Unit = reader.IsDBNull(12) ? "" : reader.GetString(12),
+                                EntryCode = reader.IsDBNull(7) ? "" : reader.GetString(7),
+                                EntryName = reader.IsDBNull(8) ? "" : reader.GetString(8),
+                                QuotaSequence = ReadFlatLong(extra, "quota_sequence", 0),
+                                SourceEndpointIdentity = GetFlat(extra, "source_endpoint_identity"),
+                                UnitPrice = ReadFlatDecimal(extra, "unit_price", 0m),
+                                EntrySource = GetFlat(extra, "entry_source")
+                            });
+                        }
+                    }
+                }
+            }
+
+            return byGroupKey.Values
+                .Where(group => IsPositiveAutomaticBindingAggregate(conn, transaction, group))
+                .ToList();
+        }
+
+        private static bool IsPositiveAutomaticBindingAggregate(SqlConnection conn, SqlTransaction transaction,
+            MappingFeedbackGroup group)
+        {
+            List<MappingFeedbackTarget> targets = (group == null || group.Targets == null
+                    ? new List<MappingFeedbackTarget>() : group.Targets)
+                .Where(target => target != null && !String.IsNullOrWhiteSpace(target.Code))
+                .GroupBy(target => BuildMappingTargetKey(target.Kind, target.Code), StringComparer.OrdinalIgnoreCase)
+                .Select(items => items.First())
+                .OrderBy(target => BuildMappingTargetKey(target.Kind, target.Code), StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (targets.Count == 0) return false;
+            string targetSetHash = BuildLearningMd5(String.Join(";", targets.Select(target =>
+                BuildLearningTargetIdentityKey(target.Kind, target.Code, target.Name, target.Unit)).ToArray()));
+            string signature = NormalizeForSignature(group.QuantityName) + "|";
+            if (signature.Length > 450) signature = signature.Substring(0, 450);
+            using (SqlCommand cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandTimeout = 5;
+                cmd.CommandText =
+                    "SELECT CASE WHEN EXISTS(SELECT 1 FROM dbo.QuotaBox q WITH (HOLDLOCK) " +
+                    "JOIN dbo.SignatureBoxMap m WITH (HOLDLOCK) ON m.box_id=q.box_id " +
+                    "WHERE q.target_set_hash=@target_set_hash AND m.software_partition=@software_partition " +
+                    "AND m.signature=@signature AND m.method=@method AND m.weight>0) THEN 1 ELSE 0 END";
+                cmd.Parameters.AddWithValue("@target_set_hash", targetSetHash);
+                cmd.Parameters.AddWithValue("@software_partition", group.SoftwarePartition ?? "");
+                cmd.Parameters.AddWithValue("@signature", signature);
+                cmd.Parameters.AddWithValue("@method", NormalizeLearningDbMethod(group.Method));
+                return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) != 0;
             }
         }
 

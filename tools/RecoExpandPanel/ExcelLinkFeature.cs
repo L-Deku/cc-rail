@@ -2596,6 +2596,93 @@ namespace RecoNet
             return groups;
         }
 
+        // 用户重新自动绑定时，完整组件应取代同一工作簿/工作表/来源行留下的旧缺项组件。
+        // 非严格子集仍是有效备选，不在这里降权。
+        private static List<MappingFeedbackGroup> BuildAutomaticRebindFeedbackGroups(
+            List<MappingFeedbackGroup> desiredGroups, List<MappingFeedbackGroup> priorGroups)
+        {
+            List<MappingFeedbackGroup> result = new List<MappingFeedbackGroup>();
+            HashSet<string> emittedRejections = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (MappingFeedbackGroup desired in desiredGroups ?? new List<MappingFeedbackGroup>())
+            {
+                if (desired == null) continue;
+                HashSet<string> desiredTargets = BuildAutomaticRebindTargetSet(desired);
+                List<MappingFeedbackGroup> staleSubsets = (priorGroups ?? new List<MappingFeedbackGroup>())
+                    .Where(prior => prior != null && HaveSameAutomaticRebindContext(desired, prior))
+                    .Where(prior => IsStrictAutomaticRebindTargetSubset(BuildAutomaticRebindTargetSet(prior), desiredTargets))
+                    .GroupBy(prior => BuildAutomaticRebindTargetSetKey(prior), StringComparer.OrdinalIgnoreCase)
+                    .Select(group => group.First())
+                    .ToList();
+                if (staleSubsets.Count > 0)
+                {
+                    desired.AcceptedCount = 0;
+                    desired.CorrectedCount = Math.Max(1, desired.CorrectedCount);
+                    desired.RejectedCount = 0;
+                    desired.UserAction = "correction";
+                }
+                result.Add(desired);
+
+                foreach (MappingFeedbackGroup stale in staleSubsets)
+                {
+                    string rejectionKey = BuildAutomaticRebindContextKey(stale) + "|" +
+                        BuildAutomaticRebindTargetSetKey(stale);
+                    if (!emittedRejections.Add(rejectionKey)) continue;
+                    stale.AcceptedCount = 0;
+                    stale.CorrectedCount = 0;
+                    stale.RejectedCount = 1;
+                    stale.UserAction = "rejection";
+                    result.Add(stale);
+                }
+            }
+            return result;
+        }
+
+        private static bool IsStrictAutomaticRebindTargetSubset(HashSet<string> priorTargets,
+            HashSet<string> desiredTargets)
+        {
+            return priorTargets != null && desiredTargets != null && priorTargets.Count > 0 &&
+                priorTargets.Count < desiredTargets.Count && priorTargets.All(desiredTargets.Contains);
+        }
+
+        private static HashSet<string> BuildAutomaticRebindTargetSet(MappingFeedbackGroup group)
+        {
+            return new HashSet<string>((group == null || group.Targets == null
+                    ? new List<MappingFeedbackTarget>() : group.Targets)
+                .Where(target => target != null && !String.IsNullOrWhiteSpace(target.Code))
+                .Select(target => BuildLearningTargetIdentityKey(target.Kind, target.Code, target.Name, target.Unit)),
+                StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static string BuildAutomaticRebindTargetSetKey(MappingFeedbackGroup group)
+        {
+            return String.Join(";", BuildAutomaticRebindTargetSet(group)
+                .OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray());
+        }
+
+        private static bool HaveSameAutomaticRebindContext(MappingFeedbackGroup left,
+            MappingFeedbackGroup right)
+        {
+            string leftKey = BuildAutomaticRebindContextKey(left);
+            return leftKey.Length > 0 && String.Equals(leftKey, BuildAutomaticRebindContextKey(right),
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string BuildAutomaticRebindContextKey(MappingFeedbackGroup group)
+        {
+            if (group == null || String.IsNullOrWhiteSpace(group.Workbook) ||
+                String.IsNullOrWhiteSpace(group.Worksheet) ||
+                (group.ExcelRow <= 0 && String.IsNullOrWhiteSpace(group.SourceCell))) return "";
+            string method = NormalizeLearningDbMethod(group.Method);
+            if (String.IsNullOrEmpty(method)) method = (group.Method ?? "").Trim();
+            string sourcePosition = group.ExcelRow > 0
+                ? "ROW:" + group.ExcelRow.ToString(CultureInfo.InvariantCulture)
+                : "CELL:" + NormalizeExpressionOperators(group.SourceCell);
+            return (group.SoftwarePartition ?? "").Trim() + "|" + method + "|" +
+                NormalizeLearningMethodNo(group.MethodNo) + "|" + (group.ProjectId ?? "").Trim() + "|" +
+                NormalizeForSignature(group.QuantityName) + "|" + (group.Workbook ?? "").Trim() + "|" +
+                (group.Worksheet ?? "").Trim() + "|" + sourcePosition;
+        }
+
         private static string BuildBindingFeedbackSourceKey(ExcelQuotaLink link)
         {
             if (link == null) return "";

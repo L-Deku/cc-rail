@@ -3,10 +3,12 @@
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..\..')).Path
 $excelLinkPath = Join-Path $repoRoot 'tools\RecoExpandPanel\ExcelLinkFeature.cs'
+$learningDbPath = Join-Path $repoRoot 'tools\RecoExpandPanel\LearningDbFeature.cs'
 $autoMatchPath = Join-Path $repoRoot 'tools\RecoExpandPanel\AutoMatchFeature.cs'
 $smartFillPath = Join-Path $repoRoot 'tools\RecoExpandPanel\SmartFillFeature.cs'
 $templatePanelPath = Join-Path $repoRoot 'tools\RecoExpandPanel\TemplateFillPanel.cs'
 $excelLink = [System.IO.File]::ReadAllText($excelLinkPath, [System.Text.Encoding]::UTF8)
+$learningDb = [System.IO.File]::ReadAllText($learningDbPath, [System.Text.Encoding]::UTF8)
 $autoMatch = [System.IO.File]::ReadAllText($autoMatchPath, [System.Text.Encoding]::UTF8)
 $smartFill = [System.IO.File]::ReadAllText($smartFillPath, [System.Text.Encoding]::UTF8)
 $templatePanel = [System.IO.File]::ReadAllText($templatePanelPath, [System.Text.Encoding]::UTF8)
@@ -17,6 +19,17 @@ function Assert-Contains([string]$Text, [string]$Expected, [string]$Message) {
 
 Assert-Contains $excelLink 'ExtractPositiveAdditiveCellAddresses' '缺少正向相加单元格拆分入口。'
 Assert-Contains $excelLink 'BuildBindingFeedbackGroups' '缺少按原始表达式构建独立学习组的入口。'
+Assert-Contains $excelLink 'BuildAutomaticRebindFeedbackGroups' '自动重新绑定没有把完整组件扶正并否定旧缺项组件。'
+Assert-Contains $learningDb 'LoadPriorAutomaticBindingGroups(conn, transaction, groups)' '自动重新绑定没有在同一 SQL 事务内读取旧绑定组件。'
+Assert-Contains $learningDb "source IN ('plugin:excel-bind-batch','plugin:template-right-click')" '自动重新绑定没有识别此前右键扶正形成的旧缺项组件。'
+$transactionStart = $learningDb.IndexOf('using (SqlTransaction transaction = conn.BeginTransaction())', [StringComparison]::Ordinal)
+$priorLoadPosition = $learningDb.IndexOf('LoadPriorAutomaticBindingGroups(conn, transaction, groups)', $transactionStart, [StringComparison]::Ordinal)
+$writeLoopPosition = $learningDb.IndexOf('groupIndex < writeGroups.Count', $priorLoadPosition, [StringComparison]::Ordinal)
+$transactionCommit = $learningDb.IndexOf('transaction.Commit();', $writeLoopPosition, [StringComparison]::Ordinal)
+if ($transactionStart -lt 0 -or $priorLoadPosition -le $transactionStart -or
+    $writeLoopPosition -le $priorLoadPosition -or $transactionCommit -le $writeLoopPosition) {
+    throw '旧组件读取、扶正/否定流水和聚合更新没有处于同一个 SQL 事务边界。'
+}
 if ($excelLink.Contains('(entryScope ?? "").Trim()')) { throw '绑定组件仍按组级条目拆分，跨条目目标无法组成完整组件。' }
 Assert-Contains $excelLink 'string targetEntryCode = LearningPartitionIdentity.NormalizeLearningEntryCode(' 'SQL 学习组件没有规范化目标条目上下文。'
 Assert-Contains $excelLink 'GetMappingFeedbackTargetEntryCode(group, target));' 'SQL 学习组件没有按目标保存条目上下文。'
@@ -43,6 +56,7 @@ Assert-Contains $templatePanel 'target.TargetKind = ResolveLearningTargetKind(li
 Assert-Contains $templatePanel 'target.LearnedUnitPrice = FilterLearningTargetUnitPrice(link.QuotaCode, link.UnitPrice);' '右键绑定没有把辅助码软件行单价按业务边界传入预览和 SQL 学习链。'
 Assert-Contains $templatePanel 'target.SourceEndpointIdentity = link.SourceEndpointIdentity;' '右键绑定没有保存可核验的来源端点身份。'
 Assert-Contains $templatePanel 'target.SourceDb = conn.Database;' '右键绑定没有保存来源项目数据库。'
+Write-Host 'PASS 自动重新绑定的旧组件读取、反馈流水与聚合更新共用一个 SQL 事务'
 
 $dll = if (-not [String]::IsNullOrWhiteSpace($env:RECO_EXPAND_DLL)) { $env:RECO_EXPAND_DLL } else { Join-Path $repoRoot 'RecoQuotaRecommend\bin\RecoExpandPanel.dll' }
 if (-not (Test-Path -LiteralPath $dll)) { throw "找不到 $dll，先构建" }
@@ -271,6 +285,70 @@ try {
         throw "DY-310 未分别进入 3X70/3X50 完整组件：$($cableFacts -join ';')"
     }
     Write-Host 'PASS 正向相加定额按来源单元格分别进入不同换算表达式的完整组件'
+
+    $feedbackGroupType = $type.GetNestedType('MappingFeedbackGroup', $flags)
+    $feedbackTargetType = $type.GetNestedType('MappingFeedbackTarget', $flags)
+    $feedbackGroupListType = [Collections.Generic.List``1].MakeGenericType($feedbackGroupType)
+    function New-AutomaticRebindGroup([string]$sourceCell, [string[]]$codes) {
+        $group = [Activator]::CreateInstance($feedbackGroupType)
+        foreach ($pair in @{
+            QuantityName='10kV贯通架空线路改电缆 YJV22-8.7/10kV 3X70'; QuantityUnit='m';
+            Method='budget'; MethodNo='2024'; SoftwarePartition='2024'; ProjectId='project-a';
+            Workbook='binding.xlsx'; Worksheet='Cable'; SourceCell=$sourceCell;
+            ExcelRow=$(if ($sourceCell -eq 'F2') { 2 } else { 1 })
+        }.GetEnumerator()) { $feedbackGroupType.GetField($pair.Key, $flags).SetValue($group, $pair.Value) }
+        $targets = $feedbackGroupType.GetField('Targets', $flags).GetValue($group)
+        foreach ($code in $codes) {
+            $target = [Activator]::CreateInstance($feedbackTargetType)
+            $feedbackTargetType.GetField('Kind', $flags).SetValue($target, $(if ($code.StartsWith('7')) { 'material' } else { 'quota' }))
+            $feedbackTargetType.GetField('Code', $flags).SetValue($target, $code)
+            $feedbackTargetType.GetField('Name', $flags).SetValue($target, 'target-' + $code)
+            $feedbackTargetType.GetField('Unit', $flags).SetValue($target, $(if ($code.StartsWith('7')) { 'm' } else { 'hm' }))
+            $targets.Add($target)
+        }
+        return $group
+    }
+
+    $desiredRebinds = [Activator]::CreateInstance($feedbackGroupListType)
+    $desiredRebinds.Add((New-AutomaticRebindGroup 'F1' @('DY-310', 'DY-478', '7015473*1.01')))
+    $priorRebinds = [Activator]::CreateInstance($feedbackGroupListType)
+    $rightClickSubset = New-AutomaticRebindGroup 'F1' @('DY-478', '7015473*1.01')
+    $feedbackGroupType.GetField('SourceCell', $flags).SetValue($rightClickSubset, '')
+    $priorRebinds.Add($rightClickSubset)
+    $priorRebinds.Add((New-AutomaticRebindGroup 'F1' @('DY-310')))
+    $priorRebinds.Add((New-AutomaticRebindGroup 'F1' @('DY-999')))
+    $priorRebinds.Add((New-AutomaticRebindGroup 'F2' @('DY-478', '7015473*1.01')))
+    $priorRebinds.Add((New-AutomaticRebindGroup 'F1' @('DY-310', 'DY-478', '7015473*1.01')))
+    $buildRebindFeedback = $type.GetMethod('BuildAutomaticRebindFeedbackGroups', $flags)
+    if ($null -eq $buildRebindFeedback) { throw '编译结果缺少自动重新绑定扶正入口。' }
+    $rebindArgs = [object[]]::new(2)
+    $rebindArgs[0] = $desiredRebinds.PSObject.BaseObject
+    $rebindArgs[1] = $priorRebinds.PSObject.BaseObject
+    $rebindFeedback = @($buildRebindFeedback.Invoke($null, $rebindArgs.PSObject.BaseObject))
+    if ($rebindFeedback.Count -ne 3) {
+        throw "三目标重新绑定应生成一条扶正和两条旧缺项否定，实际 $($rebindFeedback.Count) 条。"
+    }
+    $feedbackFacts = @()
+    foreach ($group in $rebindFeedback) {
+        $action = [string]$feedbackGroupType.GetField('UserAction', $flags).GetValue($group)
+        $accepted = [int]$feedbackGroupType.GetField('AcceptedCount', $flags).GetValue($group)
+        $corrected = [int]$feedbackGroupType.GetField('CorrectedCount', $flags).GetValue($group)
+        $rejected = [int]$feedbackGroupType.GetField('RejectedCount', $flags).GetValue($group)
+        $codes = @($feedbackGroupType.GetField('Targets', $flags).GetValue($group) | ForEach-Object {
+            [string]$feedbackTargetType.GetField('Code', $flags).GetValue($_)
+        } | Sort-Object)
+        $feedbackFacts += "$action|$accepted|$corrected|$rejected|$($codes -join ',')"
+    }
+    $feedbackFacts = @($feedbackFacts | Sort-Object)
+    $expectedFeedbackFacts = @(
+        'correction|0|1|0|7015473*1.01,DY-310,DY-478',
+        'rejection|0|0|1|7015473*1.01,DY-478',
+        'rejection|0|0|1|DY-310'
+    ) | Sort-Object
+    if (($feedbackFacts -join ';') -ne ($expectedFeedbackFacts -join ';')) {
+        throw "自动重新绑定反馈不正确：$($feedbackFacts -join ';')"
+    }
+    Write-Host 'PASS 自动重新绑定完整组件扶正并仅否定同来源旧缺项组件'
 
     $partialLinks = [Activator]::CreateInstance($dictionaryType)
     $partialLink = [Activator]::CreateInstance($linkType)
