@@ -28,7 +28,7 @@ Assert-NotContains $excelLink 'SmartBindSelectedQuotasToExcel' 'The legacy smart
 Assert-Contains $excelLink 'private static int SaveAutoMatchPreviewAccepted(Form mainForm, SqlConnection conn, List<AiMatchPreviewItem> accepted)' 'The auto-match save callback does not report the saved count from the entry layer.'
 Assert-Contains $excelLink 'Dictionary<ExcelQuotaLink, string> savedQuantityNames = new Dictionary<ExcelQuotaLink, string>();' 'The auto-match save callback does not collect saved quantity names for mapping feedback.'
 Assert-Contains $excelLink 'savedQuantityNames[item.Link] = item.QuantityName ?? "";' 'The auto-match save callback does not associate saved bindings with their quantity names.'
-Assert-Contains $excelLink 'RecordBindingsToMappingStore(savedQuantityNames);' 'Accepted auto-match bindings are not written to the recommendation mapping pool.'
+Assert-Contains $excelLink 'RecordBindingsToLearningDb(savedQuantityNames);' 'Accepted auto-match bindings are not written to the SQL recommendation learning pool.'
 Assert-Contains $autoMatch 'manualMatchButton.Text = "\u624b\u52a8\u5339\u914d";' 'The manual-match button inside AutoMatchDialog was removed.'
 Assert-Contains $autoMatch 'private void PollManualMatchCell()' 'The manual-match polling flow inside AutoMatchDialog was removed.'
 Assert-Contains $autoMatch 'private void AcceptCurrentItem()' 'The single-bind flow inside AutoMatchDialog was removed.'

@@ -29,10 +29,11 @@ namespace RecoQuotaRecommend
         public string MethodNo;           // 项目编制办法文号，用于区分 30号文/101号文/2024 等条目池
         public string SoftwarePartition;  // 只由当前进程身份产生，未知时禁止条目学习
         public HashSet<string> PoolKeys;  // "kind:CODE"（大写）
+        public bool IsExplicitPool;       // 当前条目已物化独立池；即使为空也禁止继续回退到父级池
 
         public bool Strict
         {
-            get { return !String.IsNullOrEmpty(MatchedEntryCode) && PoolKeys != null && PoolKeys.Count > 0; }
+            get { return !String.IsNullOrEmpty(MatchedEntryCode) && PoolKeys != null && (IsExplicitPool || PoolKeys.Count > 0); }
         }
 
         // 条目学习标签必须同时具备软件分区、办法文号和合法条目编号。
@@ -90,6 +91,16 @@ namespace RecoQuotaRecommend
         }
     }
 
+    internal sealed class ReferencePoolMutationItem
+    {
+        public string Kind = "quota";
+        public string Code = "";
+        public string Name = "";
+        public string Unit = "";
+        public string Price = "";
+        public int ProjectCount;
+    }
+
     // 章节条目定额库：chapter-entries.jsonl（删减后的条目树）+ chapter-quota-library.jsonl（条目定额池）。
     // chapter-entries.jsonl 不存在时 IsEmpty=true，推荐行为与历史版本完全一致。
     internal sealed class ChapterLibraryStore
@@ -97,10 +108,12 @@ namespace RecoQuotaRecommend
         private readonly Dictionary<string, string> entryNames = new Dictionary<string, string>(StringComparer.Ordinal); // method_no|entry_code -> name
         private readonly Dictionary<string, string> entryTypes = new Dictionary<string, string>(StringComparer.Ordinal); // method_no|entry_code -> type
         private readonly Dictionary<string, HashSet<string>> pools = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        private readonly HashSet<string> explicitPools = new HashSet<string>(StringComparer.Ordinal);
         // 规范化条目名称 → 小计/指标条目编号列表（识别用户复制条目的来源）
         private readonly Dictionary<string, List<string>> nameIndex = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         private static readonly object StoreCacheLock = new object();
         private static readonly Dictionary<string, ChapterLibraryCacheEntry> StoreCache = new Dictionary<string, ChapterLibraryCacheEntry>(StringComparer.OrdinalIgnoreCase);
+        private const string ChapterLibraryWriteMutexName = "Local\\RecoQuotaRecommend.ChapterQuotaLibrary";
         public string MethodKey = "";
         public string MethodNo = "";
 
@@ -186,7 +199,17 @@ namespace RecoQuotaRecommend
                     string code = QuotaEntry.NormalizeCode(LearningStore.Get(values, "quota_code").Trim());
                     string methodNo = LearningStore.Get(values, "method_no").Trim();
                     string targetKind = LearningStore.Get(values, "target_kind").Trim();
-                    if (String.IsNullOrEmpty(entryCode) || String.IsNullOrEmpty(code))
+                    if (String.IsNullOrEmpty(entryCode))
+                    {
+                        continue;
+                    }
+                    string entryPoolKey = PoolKey(methodNo, entryCode);
+                    if (String.Equals(LearningStore.Get(values, "record_type").Trim(), "entry_quota_pool", StringComparison.OrdinalIgnoreCase)
+                        && LearningStore.Get(values, "override").Trim() == "1")
+                    {
+                        store.explicitPools.Add(entryPoolKey);
+                    }
+                    if (String.IsNullOrEmpty(code))
                     {
                         continue;
                     }
@@ -277,6 +300,11 @@ namespace RecoQuotaRecommend
             foreach (KeyValuePair<string, HashSet<string>> pair in source.pools)
             {
                 pools[pair.Key] = new HashSet<string>(pair.Value, StringComparer.Ordinal);
+            }
+            explicitPools.Clear();
+            foreach (string poolKey in source.explicitPools)
+            {
+                explicitPools.Add(poolKey);
             }
             MethodKey = source.MethodKey;
             MethodNo = source.MethodNo;
@@ -747,7 +775,13 @@ namespace RecoQuotaRecommend
         private EntryScope BuildScope(string methodNo, string projectEntryCode, string matchedCode, string fallbackEntryName)
         {
             HashSet<string> pool;
-            if (!pools.TryGetValue(PoolKey(methodNo, matchedCode), out pool) || pool.Count == 0)
+            string poolKey = PoolKey(methodNo, matchedCode);
+            bool isExplicitPool = explicitPools.Contains(poolKey);
+            if (!pools.TryGetValue(poolKey, out pool))
+            {
+                pool = new HashSet<string>(StringComparer.Ordinal);
+            }
+            if (pool.Count == 0 && !isExplicitPool)
             {
                 return null;
             }
@@ -761,6 +795,7 @@ namespace RecoQuotaRecommend
             scope.MethodNo = methodNo;
             scope.SoftwarePartition = ResolveLearningSoftwarePartition();
             scope.PoolKeys = pool;
+            scope.IsExplicitPool = isExplicitPool;
             return scope;
         }
 
@@ -776,143 +811,226 @@ namespace RecoQuotaRecommend
             scope.SoftwarePartition = ResolveLearningSoftwarePartition();
             HashSet<string> pool;
             scope.PoolKeys = pools.TryGetValue(PoolKey(methodNo, matchedCode), out pool) ? pool : new HashSet<string>(StringComparer.Ordinal);
+            scope.IsExplicitPool = explicitPools.Contains(PoolKey(methodNo, matchedCode));
             return scope;
         }
 
-        // 用户扶正/采纳了池外定额时补进池子，严格模式不与用户作对；追加 source=user 行持久化
-        public void AddUserQuota(EntryScope scope, string targetKind, string code, string name, string unit)
+        // 用户编辑采用当前条目的完整物化池。每次原子重写当前条目记录；删除项不会留下 deleted=1 墓碑。
+        public bool ReplaceUserQuotaPool(string methodNo, string entryCode, string entryName, IEnumerable<ReferencePoolMutationItem> items, out string error)
         {
-            AddUserQuota(scope, targetKind, code, name, unit, "");
-        }
-
-        public void AddUserQuota(EntryScope scope, string targetKind, string code, string name, string unit, string price)
-        {
-            if (scope == null || String.IsNullOrEmpty(scope.MatchedEntryCode) || String.IsNullOrWhiteSpace(code))
-            {
-                return;
-            }
-
-            AddUserQuota(scope.MethodNo, scope.MatchedEntryCode, scope.EntryName, targetKind, code, name, unit, price);
-        }
-
-        public void AddUserQuota(string methodNo, string entryCode, string entryName, string targetKind, string code, string name, string unit)
-        {
-            AddUserQuota(methodNo, entryCode, entryName, targetKind, code, name, unit, "");
-        }
-
-        public void AddUserQuota(string methodNo, string entryCode, string entryName, string targetKind, string code, string name, string unit, string price)
-        {
-            code = QuotaEntry.NormalizeCode(code);
-            if (String.IsNullOrEmpty(entryCode) || String.IsNullOrWhiteSpace(code))
-            {
-                return;
-            }
-
+            error = "";
+            entryCode = (entryCode ?? "").Trim();
             methodNo = EffectiveMethodNo(methodNo);
-            string kind = String.IsNullOrWhiteSpace(targetKind) ? QuotaEntry.GuessKind(code) : targetKind.Trim().ToLowerInvariant();
-            if (!IsAllowedReferencePoolCode(entryName, kind, code, LoadReferenceQuotaCodes(LearningStore.FindDataDir())))
+            if (String.IsNullOrEmpty(entryCode))
             {
-                QuotaRecommendPanel.Log("ChapterLibrary user quota ignored by reference-pool rule. entry=" + entryCode + " code=" + code + " kind=" + kind);
-                return;
-            }
-            kind = ReferencePoolKind(entryName, kind, code);
-            string key = ReferencePoolItemKey(kind, code, name, unit, price);
-            HashSet<string> pool;
-            if (pools.TryGetValue(PoolKey(methodNo, entryCode), out pool) && pool.Contains(key))
-            {
-                return;
+                error = "entry code is empty";
+                return false;
             }
 
+            HashSet<string> validQuotaCodes = LoadReferenceQuotaCodes(LearningStore.FindDataDir());
+            Dictionary<string, ReferencePoolMutationItem> unique = new Dictionary<string, ReferencePoolMutationItem>(StringComparer.Ordinal);
+            List<string> order = new List<string>();
+            foreach (ReferencePoolMutationItem sourceItem in items ?? new List<ReferencePoolMutationItem>())
+            {
+                if (sourceItem == null)
+                {
+                    continue;
+                }
+                string code = QuotaEntry.NormalizeCode(sourceItem.Code);
+                string kind = String.IsNullOrWhiteSpace(sourceItem.Kind) ? QuotaEntry.GuessKind(code) : sourceItem.Kind.Trim().ToLowerInvariant();
+                if (!IsAllowedReferencePoolCode(entryName, kind, code, validQuotaCodes))
+                {
+                    error = "invalid reference quota: " + code;
+                    return false;
+                }
+                kind = ReferencePoolKind(entryName, kind, code);
+                ReferencePoolMutationItem normalized = new ReferencePoolMutationItem();
+                normalized.Kind = kind;
+                normalized.Code = code;
+                normalized.Name = sourceItem.Name ?? "";
+                normalized.Unit = sourceItem.Unit ?? "";
+                normalized.Price = sourceItem.Price ?? "";
+                normalized.ProjectCount = Math.Max(0, sourceItem.ProjectCount);
+                string itemKey = ReferencePoolItemKey(kind, code, normalized.Name, normalized.Unit, normalized.Price);
+                if (!unique.ContainsKey(itemKey))
+                {
+                    order.Add(itemKey);
+                }
+                unique[itemKey] = normalized;
+            }
+
+            List<ReferencePoolMutationItem> normalizedItems = new List<ReferencePoolMutationItem>();
+            foreach (string itemKey in order)
+            {
+                normalizedItems.Add(unique[itemKey]);
+            }
+
+            string path = Path.Combine(LearningStore.FindDataDir(), "chapter-quota-library.jsonl");
             try
             {
-                Dictionary<string, string> record = new Dictionary<string, string>();
-                record["record_type"] = "entry_quota";
-                record["method"] = MethodKey;
-                record["method_no"] = methodNo;
-                record["entry_code"] = entryCode;
-                record["entry_name"] = entryName ?? "";
-                record["target_kind"] = kind;
-                record["quota_code"] = code.Trim();
-                record["quota_name"] = name ?? "";
-                record["quota_unit"] = unit ?? "";
-                if (!String.IsNullOrWhiteSpace(price))
+                RewriteUserQuotaPool(path, methodNo, entryCode, entryName, normalizedItems);
+                string targetPoolKey = PoolKey(methodNo, entryCode);
+                pools.Remove(targetPoolKey);
+                explicitPools.Add(targetPoolKey);
+                foreach (ReferencePoolMutationItem item in normalizedItems)
                 {
-                    record["base_price"] = price.Trim();
+                    AddPoolKey(methodNo, entryCode, item.Kind, item.Code, item.Name, item.Unit, item.Price);
                 }
-                record["project_count"] = "0";
-                record["source"] = "user";
-                record["last_seen"] = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-                string path = Path.Combine(LearningStore.FindDataDir(), "chapter-quota-library.jsonl");
-                File.AppendAllText(path, LearningStore.ToJson(record) + Environment.NewLine, Encoding.UTF8);
-                AddPoolKey(methodNo, entryCode, kind, code.Trim(), name, unit, price);
+                if (!String.IsNullOrWhiteSpace(entryName))
+                {
+                    entryNames[targetPoolKey] = entryName.Trim();
+                }
                 BuildNameIndex();
                 RefreshCachedFingerprint();
-                QuotaRecommendPanel.Log("ChapterLibrary user quota added. methodNo=" + methodNo + " entry=" + entryCode + " code=" + code);
+                QuotaRecommendPanel.Log("ChapterLibrary user quota pool replaced. methodNo=" + methodNo + " entry=" + entryCode + " count=" + normalizedItems.Count.ToString(CultureInfo.InvariantCulture));
+                return true;
             }
             catch (Exception ex)
             {
-                QuotaRecommendPanel.Log("ChapterLibrary user quota append failed: " + ex.Message);
+                error = ex.Message;
+                QuotaRecommendPanel.Log("ChapterLibrary user quota pool replace failed: " + ex.Message);
+                return false;
             }
         }
 
-        // 用户从参考池删除定额：从内存池移除并追加 deleted=1 墓碑行（软删除，可被后续 add 覆盖恢复）
-        public void RemoveUserQuota(EntryScope scope, string targetKind, string code)
+        private void RewriteUserQuotaPool(string path, string methodNo, string entryCode, string entryName, IList<ReferencePoolMutationItem> items)
         {
-            if (scope == null || String.IsNullOrEmpty(scope.MatchedEntryCode) || String.IsNullOrWhiteSpace(code))
-            {
-                return;
-            }
-
-            RemoveUserQuota(scope.MethodNo, scope.MatchedEntryCode, scope.EntryName, targetKind, code);
-        }
-
-        public void RemoveUserQuota(string methodNo, string entryCode, string entryName, string targetKind, string code)
-        {
-            RemoveUserQuota(methodNo, entryCode, entryName, targetKind, code, "", "", "");
-        }
-
-        public void RemoveUserQuota(string methodNo, string entryCode, string entryName, string targetKind, string code, string name, string unit, string price)
-        {
-            code = QuotaEntry.NormalizeCode(code);
-            if (String.IsNullOrEmpty(entryCode) || String.IsNullOrWhiteSpace(code))
-            {
-                return;
-            }
-
-            methodNo = EffectiveMethodNo(methodNo);
-            string kind = String.IsNullOrWhiteSpace(targetKind) ? QuotaEntry.GuessKind(code) : targetKind.Trim().ToLowerInvariant();
-
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            string uniqueSuffix = Guid.NewGuid().ToString("N");
+            string tempPath = path + "." + uniqueSuffix + ".tmp";
+            string backupPath = path + "." + uniqueSuffix + ".old";
+            Mutex writeMutex = new Mutex(false, ChapterLibraryWriteMutexName);
+            bool mutexHeld = false;
             try
             {
-                Dictionary<string, string> record = new Dictionary<string, string>();
-                record["record_type"] = "entry_quota";
-                record["method"] = MethodKey;
-                record["method_no"] = methodNo;
-                record["entry_code"] = entryCode;
-                record["entry_name"] = entryName ?? "";
-                record["target_kind"] = kind;
-                record["quota_code"] = code.Trim();
-                record["quota_name"] = name ?? "";
-                record["quota_unit"] = unit ?? "";
-                if (!String.IsNullOrWhiteSpace(price))
+                try
                 {
-                    record["base_price"] = price.Trim();
+                    mutexHeld = writeMutex.WaitOne(TimeSpan.FromSeconds(15));
                 }
-                record["project_count"] = "0";
-                record["source"] = "user";
-                record["deleted"] = "1";
-                record["last_seen"] = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-                string path = Path.Combine(LearningStore.FindDataDir(), "chapter-quota-library.jsonl");
-                File.AppendAllText(path, LearningStore.ToJson(record) + Environment.NewLine, Encoding.UTF8);
-                RemovePoolKey(methodNo, entryCode, kind, code.Trim(), name, unit, price);
-                BuildNameIndex();
-                RefreshCachedFingerprint();
-                QuotaRecommendPanel.Log("ChapterLibrary user quota removed. methodNo=" + methodNo + " entry=" + entryCode + " code=" + code);
+                catch (AbandonedMutexException)
+                {
+                    mutexHeld = true;
+                }
+                if (!mutexHeld)
+                {
+                    throw new IOException("reference quota pool is busy");
+                }
+
+                using (StreamWriter writer = new StreamWriter(tempPath, false, Encoding.UTF8))
+                {
+                    if (File.Exists(path))
+                    {
+                        foreach (string line in File.ReadLines(path, Encoding.UTF8))
+                        {
+                            if (!ShouldRemoveUserPoolLine(line, methodNo, entryCode))
+                            {
+                                writer.WriteLine(line);
+                            }
+                        }
+                    }
+                    writer.WriteLine(BuildPoolOverrideRecord(methodNo, entryCode, entryName));
+                    foreach (ReferencePoolMutationItem item in items)
+                    {
+                        writer.WriteLine(BuildUserQuotaRecord(methodNo, entryCode, entryName, item));
+                    }
+                }
+
+                if (File.Exists(path))
+                {
+                    File.Replace(tempPath, path, backupPath);
+                    if (File.Exists(backupPath))
+                    {
+                        try
+                        {
+                            File.Delete(backupPath);
+                        }
+                        catch (Exception cleanupEx)
+                        {
+                            QuotaRecommendPanel.Log("ChapterLibrary old snapshot cleanup failed: " + cleanupEx.Message);
+                        }
+                    }
+                }
+                else
+                {
+                    File.Move(tempPath, path);
+                }
             }
-            catch (Exception ex)
+            finally
             {
-                QuotaRecommendPanel.Log("ChapterLibrary user quota remove append failed: " + ex.Message);
+                if (mutexHeld)
+                {
+                    writeMutex.ReleaseMutex();
+                }
+                writeMutex.Dispose();
+                if (File.Exists(tempPath))
+                {
+                    try
+                    {
+                        File.Delete(tempPath);
+                    }
+                    catch (Exception cleanupEx)
+                    {
+                        QuotaRecommendPanel.Log("ChapterLibrary temp snapshot cleanup failed: " + cleanupEx.Message);
+                    }
+                }
             }
+        }
+
+        private static bool ShouldRemoveUserPoolLine(string line, string methodNo, string entryCode)
+        {
+            if (String.IsNullOrWhiteSpace(line))
+            {
+                return false;
+            }
+            if (line.IndexOf(entryCode, StringComparison.Ordinal) < 0)
+            {
+                return false;
+            }
+            Dictionary<string, string> values = LearningStore.ParseFlatJson(line);
+            if (!String.Equals(PoolKey(LearningStore.Get(values, "method_no"), LearningStore.Get(values, "entry_code")), PoolKey(methodNo, entryCode), StringComparison.Ordinal))
+            {
+                return false;
+            }
+            string recordType = LearningStore.Get(values, "record_type").Trim();
+            return recordType.Length == 0
+                || String.Equals(recordType, "entry_quota", StringComparison.OrdinalIgnoreCase)
+                || String.Equals(recordType, "entry_quota_pool", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private string BuildPoolOverrideRecord(string methodNo, string entryCode, string entryName)
+        {
+            Dictionary<string, string> record = new Dictionary<string, string>();
+            record["record_type"] = "entry_quota_pool";
+            record["method"] = MethodKey;
+            record["method_no"] = methodNo;
+            record["entry_code"] = entryCode;
+            record["entry_name"] = entryName ?? "";
+            record["override"] = "1";
+            record["source"] = "user";
+            record["last_seen"] = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            return LearningStore.ToJson(record);
+        }
+
+        private string BuildUserQuotaRecord(string methodNo, string entryCode, string entryName, ReferencePoolMutationItem item)
+        {
+            Dictionary<string, string> record = new Dictionary<string, string>();
+            record["record_type"] = "entry_quota";
+            record["method"] = MethodKey;
+            record["method_no"] = methodNo;
+            record["entry_code"] = entryCode;
+            record["entry_name"] = entryName ?? "";
+            record["target_kind"] = item.Kind;
+            record["quota_code"] = item.Code;
+            record["quota_name"] = item.Name;
+            record["quota_unit"] = item.Unit;
+            if (!String.IsNullOrWhiteSpace(item.Price))
+            {
+                record["base_price"] = item.Price.Trim();
+            }
+            record["project_count"] = item.ProjectCount.ToString(CultureInfo.InvariantCulture);
+            record["source"] = "user";
+            record["last_seen"] = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            return LearningStore.ToJson(record);
         }
     }
 }

@@ -119,6 +119,16 @@ try {
     $nonlinearRow.CreateCell(0).SetCellValue('桩半径')
     $nonlinearRow.CreateCell(1).SetCellValue('m')
     $nonlinearRow.CreateCell(5).SetCellValue([double]2)
+    $cableSheet = $book.CreateSheet('Cable')
+    foreach ($definition in @(
+        [pscustomobject]@{ Row = 0; Name = '10kV贯通架空线路改电缆 YJV22-8.7/10kV 3X70'; Unit = 'm'; Value = 120 },
+        [pscustomobject]@{ Row = 1; Name = '10kV自闭架空线路改电缆 YJV22-8.7/10kV 3X50'; Unit = 'm'; Value = 240 }
+    )) {
+        $row = $cableSheet.CreateRow($definition.Row)
+        $row.CreateCell(0).SetCellValue($definition.Name)
+        $row.CreateCell(1).SetCellValue($definition.Unit)
+        $row.CreateCell(5).SetCellValue([double]$definition.Value)
+    }
     $stream = [IO.File]::Create($fixturePath)
     try { $book.Write($stream) } finally { $stream.Dispose() }
 
@@ -218,6 +228,49 @@ try {
         throw "独立别名/单位/行号不正确：'$($actual -join ';')'"
     }
     Write-Host 'PASS 工程量/定额单位分开、组件共用条目且重复 HRB/HPB 不跨表达式合并'
+
+    $cableLinks = [Activator]::CreateInstance($dictionaryType)
+    foreach ($definition in @(
+        [pscustomobject]@{ Cell = 'F1'; Expression = 'F1/100+F2/100'; Code = 'DY-310'; Name = '挖填电缆沟'; Unit = 'hm'; Kind = 'quota' },
+        [pscustomobject]@{ Cell = 'F1'; Expression = 'F1/100'; Code = 'DY-478'; Name = '三芯电缆敷设70'; Unit = 'hm'; Kind = 'quota' },
+        [pscustomobject]@{ Cell = 'F1'; Expression = 'F1'; Code = '7015473*1.01'; Name = '三芯电缆材料70'; Unit = 'm'; Kind = 'material' },
+        [pscustomobject]@{ Cell = 'F2'; Expression = 'F2/100'; Code = 'DY-477'; Name = '三芯电缆敷设50'; Unit = 'hm'; Kind = 'quota' },
+        [pscustomobject]@{ Cell = 'F2'; Expression = 'F2'; Code = '7015454'; Name = '三芯电缆材料50'; Unit = 'm'; Kind = 'material' }
+    )) {
+        $link = [Activator]::CreateInstance($linkType)
+        foreach ($pair in @{
+            ExcelPath=$fixturePath; WorksheetName='Cable'; CellAddress=$definition.Cell; Expression=$definition.Expression;
+            QuotaCode=$definition.Code; QuotaName=$definition.Name; QuotaUnit=$definition.Unit; TargetKind=$definition.Kind;
+            EntryCode='0719-01-01-04'; EntryName='高压干线电缆线路'; Method='2024'
+        }.GetEnumerator()) { $linkType.GetProperty($pair.Key, $flags).SetValue($link, $pair.Value, $null) }
+        $cableLinks.Add($link, '')
+    }
+    $cableGroups = @($buildGroups.Invoke($null, @($cableLinks.PSObject.BaseObject)))
+    if ($cableGroups.Count -ne 2) {
+        throw "同一工程量来源单元格的不同换算表达式应合成两套完整电缆组件，实际 $($cableGroups.Count) 套。"
+    }
+    $cableFacts = @()
+    foreach ($group in $cableGroups) {
+        $groupType = $group.GetType()
+        $sourceCell = [string]$groupType.GetField('SourceCell', $flags).GetValue($group)
+        $targets = @($groupType.GetField('Targets', $flags).GetValue($group))
+        $targetFacts = @($targets | ForEach-Object {
+            $targetType = $_.GetType()
+            $formula = [string]$targetType.GetField('FormulaTemplate', $flags).GetValue($_)
+            if (-not [String]::IsNullOrEmpty($formula)) { throw "标准 m→hm 换算不应学习历史表达式：$formula" }
+            [string]$targetType.GetField('Code', $flags).GetValue($_)
+        } | Sort-Object)
+        $cableFacts += "$sourceCell|$($targetFacts -join ',')"
+    }
+    $cableFacts = @($cableFacts | Sort-Object)
+    $expectedCableFacts = @(
+        'F1|7015473*1.01,DY-310,DY-478',
+        'F2|7015454,DY-310,DY-477'
+    ) | Sort-Object
+    if (($cableFacts -join ';') -ne ($expectedCableFacts -join ';')) {
+        throw "DY-310 未分别进入 3X70/3X50 完整组件：$($cableFacts -join ';')"
+    }
+    Write-Host 'PASS 正向相加定额按来源单元格分别进入不同换算表达式的完整组件'
 
     $partialLinks = [Activator]::CreateInstance($dictionaryType)
     $partialLink = [Activator]::CreateInstance($linkType)

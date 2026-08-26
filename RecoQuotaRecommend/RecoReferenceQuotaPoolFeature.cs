@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
+using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
@@ -85,6 +86,11 @@ namespace RecoQuotaRecommend
             private TreeView tree;
             private string currentKey;
             private string lastScopeDiag; // 诊断：仅在条目解析结果变化时记录，定位某些项目不显示定额
+            private string lastGridChapterSequence;
+            private bool originalGridMultiSelect;
+            private bool gridMultiSelectChanged;
+            private bool suppressRefresh;
+            private bool applyingPoolItem;
             private bool disposed;
 
             public Runtime(Form mainForm, DataGridView grid)
@@ -124,11 +130,11 @@ namespace RecoQuotaRecommend
                 bar.Dock = DockStyle.Top;
                 ToolStripButton addBtn = new ToolStripButton("\u589e\u52a0\u5b9a\u989d");
                 addBtn.DisplayStyle = ToolStripItemDisplayStyle.Text;
-                addBtn.ToolTipText = "\u628a\u4e00\u6761\u5b9a\u989d\u52a0\u5165\u5f53\u524d\u6761\u76ee\u7684\u53c2\u8003\u5b9a\u989d\u6c60\uff08\u9ed8\u8ba4\u53d6\u5b9a\u989d\u8f93\u5165\u8868\u5f53\u524d\u884c\u7684\u5b9a\u989d\u7f16\u53f7\uff09";
+                addBtn.ToolTipText = "\u628a\u5b9a\u989d\u8f93\u5165\u8868\u4e2d\u9009\u4e2d\u7684\u4e00\u884c\u6216\u591a\u884c\u52a0\u5165\u5f53\u524d\u6761\u76ee\u53c2\u8003\u6c60";
                 addBtn.Click += AddButtonClick;
                 ToolStripButton delBtn = new ToolStripButton("\u5220\u9664\u5b9a\u989d");
                 delBtn.DisplayStyle = ToolStripItemDisplayStyle.Text;
-                delBtn.ToolTipText = "\u628a\u53c2\u8003\u6846\u4e2d\u9009\u4e2d\u7684\u5b9a\u989d\u4ece\u5f53\u524d\u6761\u76ee\u7684\u53c2\u8003\u5b9a\u989d\u6c60\u79fb\u9664";
+                delBtn.ToolTipText = "\u628a\u53c2\u8003\u6846\u4e2d\u9009\u4e2d\u7684\u4e00\u884c\u6216\u591a\u884c\u4ece\u5f53\u524d\u6761\u76ee\u53c2\u8003\u6c60\u7269\u7406\u5220\u9664";
                 delBtn.Click += DeleteButtonClick;
                 entryLabel = new ToolStripLabel("");
                 entryLabel.Alignment = ToolStripItemAlignment.Right;
@@ -159,8 +165,14 @@ namespace RecoQuotaRecommend
 
                 grid.CurrentCellChanged -= OnGridMove;
                 grid.CurrentCellChanged += OnGridMove;
-                grid.DataSourceChanged -= OnGridMove;
-                grid.DataSourceChanged += OnGridMove;
+                grid.DataSourceChanged -= OnGridDataSourceChanged;
+                grid.DataSourceChanged += OnGridDataSourceChanged;
+                originalGridMultiSelect = grid.MultiSelect;
+                if (!grid.MultiSelect)
+                {
+                    grid.MultiSelect = true;
+                    gridMultiSelectChanged = true;
+                }
                 tree = GetField<TreeView>(mainForm, "Tv_tree");
                 if (tree != null)
                 {
@@ -184,7 +196,8 @@ namespace RecoQuotaRecommend
                 timer.Stop();
                 timer.Dispose();
                 try { grid.CurrentCellChanged -= OnGridMove; } catch { }
-                try { grid.DataSourceChanged -= OnGridMove; } catch { }
+                try { grid.DataSourceChanged -= OnGridDataSourceChanged; } catch { }
+                try { if (gridMultiSelectChanged) grid.MultiSelect = originalGridMultiSelect; } catch { }
                 try { if (tree != null) tree.AfterSelect -= OnTreeSelect; } catch { }
                 try { if (refContainer != null) refContainer.VisibleChanged -= OnContainerVisibleChanged; } catch { }
                 try { if (nativeGrid != null) { nativeGrid.VisibleChanged -= NativeGridVisibleChanged; nativeGrid.Visible = true; } } catch { }
@@ -246,12 +259,18 @@ namespace RecoQuotaRecommend
                 g.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
                 g.ColumnHeadersHeight = 28; // 固定表头高度，避免 AutoSize 压成 0 导致表头不显示
                 g.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-                g.MultiSelect = false;
+                g.MultiSelect = true;
                 g.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None; // 列用自然宽度，不强行铺满整框
                 g.AllowUserToResizeColumns = true;                            // 允许手动拉伸列宽
                 g.ScrollBars = ScrollBars.Both;                               // 放不下时出横向/纵向滚动条
                 g.EditMode = DataGridViewEditMode.EditProgrammatically;
                 g.BackgroundColor = SystemColors.Window;
+                try
+                {
+                    PropertyInfo doubleBuffered = typeof(DataGridView).GetProperty("DoubleBuffered", BindingFlags.Instance | BindingFlags.NonPublic);
+                    if (doubleBuffered != null) doubleBuffered.SetValue(g, true, null);
+                }
+                catch { }
                 try { g.Font = grid.Font; } catch { }
                 // 表头加粗 + 蓝底，确保一眼可辨、与数据行区分
                 g.EnableHeadersVisualStyles = false;
@@ -283,11 +302,29 @@ namespace RecoQuotaRecommend
 
             private void ScheduleRefresh()
             {
+                if (suppressRefresh || applyingPoolItem)
+                {
+                    return;
+                }
                 timer.Stop();
                 timer.Start();
             }
 
-            private void OnGridMove(object sender, EventArgs e) { ScheduleRefresh(); }
+            private void OnGridMove(object sender, EventArgs e)
+            {
+                string chapterSequence = CurrentGridChapterSequence();
+                if (String.Equals(chapterSequence, lastGridChapterSequence, StringComparison.Ordinal))
+                {
+                    return;
+                }
+                lastGridChapterSequence = chapterSequence;
+                ScheduleRefresh();
+            }
+            private void OnGridDataSourceChanged(object sender, EventArgs e)
+            {
+                lastGridChapterSequence = null;
+                ScheduleRefresh();
+            }
             private void OnTreeSelect(object sender, TreeViewEventArgs e) { ScheduleRefresh(); }
 
             // 切到"参考定额"页（容器变可见）时强制重新加载：此时表格已激活，Rows.Add 才会真正加进去
@@ -320,6 +357,7 @@ namespace RecoQuotaRecommend
             private void Refresh()
             {
                 KeepOnTop();
+                lastGridChapterSequence = CurrentGridChapterSequence();
                 EntryScope scope = ResolveCurrentScope();
                 UpdateEntryLabel(scope);
                 if (scope == null || String.IsNullOrEmpty(scope.MatchedEntryCode))
@@ -373,6 +411,15 @@ namespace RecoQuotaRecommend
                     QuotaRecommendPanel.Log("Reference scope diag: " + diag);
                 }
                 return scope;
+            }
+
+            private string CurrentGridChapterSequence()
+            {
+                if (grid == null || grid.CurrentRow == null || grid.CurrentRow.IsNewRow)
+                {
+                    return "";
+                }
+                return GetRowValue(grid.CurrentRow, new[] { "\u6761\u76ee\u5e8f\u53f7" });
             }
 
             private string ResolveEffectiveEntryName(EntryScope scope)
@@ -446,8 +493,16 @@ namespace RecoQuotaRecommend
                 {
                     return;
                 }
-                refGrid.Rows.Clear();
-                refGrid.ClearSelection();
+                refGrid.SuspendLayout();
+                try
+                {
+                    refGrid.Rows.Clear();
+                    refGrid.ClearSelection();
+                }
+                finally
+                {
+                    refGrid.ResumeLayout(false);
+                }
             }
 
             private void BindItems(List<PoolItem> items)
@@ -457,7 +512,7 @@ namespace RecoQuotaRecommend
                 {
                     return;
                 }
-                refGrid.Rows.Clear();
+                List<DataGridViewRow> rows = new List<DataGridViewRow>();
                 foreach (PoolItem it in items)
                 {
                     QuotaInfo info;
@@ -466,9 +521,24 @@ namespace RecoQuotaRecommend
                     string unit = info != null && info.Unit.Length > 0 ? info.Unit : it.Unit;
                     string price = info != null && info.Price.Length > 0 ? info.Price : it.Price;
                     string content = info != null ? info.Content : "";
-                    refGrid.Rows.Add(it.Code, name, unit, price, content);
+                    DataGridViewRow row = (DataGridViewRow)refGrid.RowTemplate.Clone();
+                    row.CreateCells(refGrid, it.Code, name, unit, price, content);
+                    rows.Add(row);
                 }
-                refGrid.ClearSelection();
+                refGrid.SuspendLayout();
+                try
+                {
+                    refGrid.Rows.Clear();
+                    if (rows.Count > 0)
+                    {
+                        refGrid.Rows.AddRange(rows.ToArray());
+                    }
+                    refGrid.ClearSelection();
+                }
+                finally
+                {
+                    refGrid.ResumeLayout(false);
+                }
             }
 
             private void RefGridDoubleClick(object sender, DataGridViewCellEventArgs e)
@@ -498,10 +568,15 @@ namespace RecoQuotaRecommend
             private void ApplyPoolItem(PoolItem item)
             {
                 string code = item == null ? "" : QuotaEntry.NormalizeCode(item.Code);
-                if (String.IsNullOrWhiteSpace(code) || grid == null)
+                if (String.IsNullOrWhiteSpace(code) || grid == null || applyingPoolItem)
                 {
                     return;
                 }
+                Stopwatch applyTimer = Stopwatch.StartNew();
+                applyingPoolItem = true;
+                suppressRefresh = true;
+                timer.Stop();
+                try { if (refGrid != null) refGrid.UseWaitCursor = true; } catch { }
                 try
                 {
                     int codeCol = FindColumnIndex(grid, QuotaCodeColumns());
@@ -526,11 +601,18 @@ namespace RecoQuotaRecommend
                         + " row=" + targetRow.ToString(CultureInfo.InvariantCulture)
                         + " filled=" + filled.ToString()
                         + " sfFilled=" + sfFilled.ToString()
+                        + " elapsedMs=" + applyTimer.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture)
                         + " data=" + DescribeInputRow(targetRow));
                 }
                 catch (Exception ex)
                 {
                     QuotaRecommendPanel.Log("Reference quota apply failed: " + ex.Message);
+                }
+                finally
+                {
+                    try { if (refGrid != null) refGrid.UseWaitCursor = false; } catch { }
+                    suppressRefresh = false;
+                    applyingPoolItem = false;
                 }
             }
 
@@ -626,7 +708,6 @@ namespace RecoQuotaRecommend
                     ed.SelectionLength = 0;
                     grid.NotifyCurrentCellDirty(true);
                     SendKeys.SendWait("{ENTER}");
-                    Application.DoEvents();
                     return RowLooksFilled(targetRow, codeCol);
                 }
                 catch (Exception ex)
@@ -667,7 +748,7 @@ namespace RecoQuotaRecommend
 
             // ===== 增加 / 删除 参考定额池定额 =====
 
-            // 增加：把一条定额加入当前条目的参考池（默认取定额输入表当前行的定额编号，弹框可改），追加 source=user 行
+            // 增加：单行保留编号确认框；多行读取宿主定额输入表的 Ctrl/Shift 选择，一次物化到当前条目独立池。
             private void AddButtonClick(object sender, EventArgs e)
             {
                 try
@@ -679,71 +760,276 @@ namespace RecoQuotaRecommend
                         return;
                     }
                     string effectiveEntryName = ResolveEffectiveEntryName(scope);
-                    string initial = grid.CurrentRow != null && !grid.CurrentRow.IsNewRow ? GetRowValue(grid.CurrentRow, QuotaCodeColumns()) : "";
-                    string code = PromptForCode(initial);
-                    if (String.IsNullOrWhiteSpace(code))
+                    List<DataGridViewRow> selectedRows = SelectedRowsOrCurrent(grid);
+                    List<PoolItem> additions = new List<PoolItem>();
+                    if (selectedRows.Count <= 1)
                     {
-                        return;
+                        DataGridViewRow selectedRow = selectedRows.Count == 1 ? selectedRows[0] : null;
+                        string initial = selectedRow == null ? "" : GetRowValue(selectedRow, QuotaCodeColumns());
+                        string code = PromptForCode(initial);
+                        if (String.IsNullOrWhiteSpace(code))
+                        {
+                            return;
+                        }
+                        code = QuotaEntry.NormalizeCode(code.Trim());
+                        if (!IsAllowedReferencePoolItem(effectiveEntryName, "", code, quotaIndex))
+                        {
+                            ShowInvalidReferenceQuotaMessage();
+                            return;
+                        }
+                        string name, unit, price;
+                        FindQuotaDisplay(code, out name, out unit, out price);
+                        additions.Add(new PoolItem { Kind = "quota", Code = code, Name = name, Unit = unit, Price = price, Source = "user" });
                     }
-                    code = QuotaEntry.NormalizeCode(code.Trim());
-                    if (!IsAllowedReferencePoolItem(effectiveEntryName, "", code, quotaIndex))
+                    else
                     {
-                        MessageBox.Show(mainForm,
-                            "\u53c2\u8003\u5b9a\u989d\u6c60\u53ea\u80fd\u6dfb\u52a0\u5168\u91cf\u5b9a\u989d\u5e93\u4e2d\u7684\u539f\u5b9a\u989d\u7f16\u53f7\uff1b\u8bbe\u5907\u8d2d\u7f6e\u8d39\u6761\u76ee\u4ec5\u5141\u8bb8 SF\u3002",
+                        List<string> invalidCodes = new List<string>();
+                        foreach (DataGridViewRow selectedRow in selectedRows)
+                        {
+                            string code = QuotaEntry.NormalizeCode(GetRowValue(selectedRow, QuotaCodeColumns()));
+                            if (String.IsNullOrWhiteSpace(code) || !IsAllowedReferencePoolItem(effectiveEntryName, "", code, quotaIndex))
+                            {
+                                invalidCodes.Add(String.IsNullOrWhiteSpace(code) ? "<empty>" : code);
+                                continue;
+                            }
+                            additions.Add(new PoolItem
+                            {
+                                Kind = "quota",
+                                Code = code,
+                                Name = GetRowValue(selectedRow, QuotaNameColumns()),
+                                Unit = GetRowValue(selectedRow, QuotaUnitColumns()),
+                                Price = GetRowValue(selectedRow, UnitPriceColumns()),
+                                Source = "user"
+                            });
+                        }
+                        if (invalidCodes.Count > 0)
+                        {
+                            ShowInvalidReferenceQuotaMessage();
+                            return;
+                        }
+                        additions = MergePoolItems(new List<PoolItem>(), additions);
+                        if (MessageBox.Show(mainForm,
+                            "\u786e\u8ba4\u628a\u9009\u4e2d\u7684 " + additions.Count.ToString(CultureInfo.InvariantCulture) + " \u6761\u5b9a\u989d\u52a0\u5165\u5f53\u524d\u6761\u76ee\u53c2\u8003\u6c60\uff1f",
                             "\u589e\u52a0\u53c2\u8003\u5b9a\u989d",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Information);
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Question) != DialogResult.Yes)
+                        {
+                            return;
+                        }
+                    }
+                    if (additions.Count == 0)
+                    {
                         return;
                     }
-                    string name, unit, price;
-                    FindQuotaDisplay(code, out name, out unit, out price);
-                    chapterLibrary.AddUserQuota(scope.MethodNo, UserEntryCode(scope), effectiveEntryName, "", code, name, unit, price);
+                    List<PoolItem> desiredItems = MergePoolItems(GetPoolItemsForScope(scope, effectiveEntryName), additions);
+                    string saveError;
+                    if (!TrySaveCurrentPool(scope, effectiveEntryName, desiredItems, out saveError))
+                    {
+                        ShowPoolSaveError("\u589e\u52a0\u53c2\u8003\u5b9a\u989d\u5931\u8d25", saveError);
+                        return;
+                    }
                     ReloadPool();
                     currentKey = null;
                     RefreshSafe();
-                    QuotaRecommendPanel.Log("Reference quota pool user add: entry=" + scope.MatchedEntryCode + " code=" + code);
+                    QuotaRecommendPanel.Log("Reference quota pool user add: entry=" + UserEntryCode(scope) + " count=" + additions.Count.ToString(CultureInfo.InvariantCulture));
                 }
                 catch (Exception ex)
                 {
                     QuotaRecommendPanel.Log("Reference quota pool add failed: " + ex.Message);
+                    ShowPoolSaveError("\u589e\u52a0\u53c2\u8003\u5b9a\u989d\u5931\u8d25", ex.Message);
                 }
             }
 
-            // 删除：把参考框选中的定额从当前条目参考池移除（追加 deleted=1 墓碑行，软删除可恢复）
+            // 删除：参考框支持 Ctrl/Shift 多选；当前条目完整池原子重写，所选记录物理移除且不写墓碑。
             private void DeleteButtonClick(object sender, EventArgs e)
             {
                 try
                 {
-                    if (refGrid == null || refGrid.CurrentRow == null)
+                    if (refGrid == null)
                     {
                         return;
                     }
-                    int idx = refGrid.CurrentRow.Index;
-                    if (idx < 0 || idx >= displayedItems.Count)
+                    List<DataGridViewRow> selectedRows = SelectedRowsOrCurrent(refGrid);
+                    List<PoolItem> selectedItems = new List<PoolItem>();
+                    foreach (DataGridViewRow selectedRow in selectedRows)
+                    {
+                        int idx = selectedRow.Index;
+                        if (idx >= 0 && idx < displayedItems.Count)
+                        {
+                            selectedItems.Add(displayedItems[idx]);
+                        }
+                    }
+                    selectedItems = MergePoolItems(new List<PoolItem>(), selectedItems);
+                    if (selectedItems.Count == 0)
                     {
                         return;
                     }
-                    PoolItem item = displayedItems[idx];
                     EntryScope scope = ResolveCurrentScope();
                     if (scope == null || String.IsNullOrEmpty(scope.MatchedEntryCode))
                     {
                         return;
                     }
                     string effectiveEntryName = ResolveEffectiveEntryName(scope);
-                    if (MessageBox.Show(mainForm, "\u786e\u8ba4\u4ece\u5f53\u524d\u6761\u76ee\u7684\u53c2\u8003\u5b9a\u989d\u6c60\u5220\u9664\uff1a" + item.Code + " \uff1f", "\u5220\u9664\u53c2\u8003\u5b9a\u989d", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                    if (MessageBox.Show(mainForm,
+                        "\u786e\u8ba4\u4ece\u5f53\u524d\u6761\u76ee\u53c2\u8003\u6c60\u4e2d\u7269\u7406\u5220\u9664\u9009\u4e2d\u7684 " + selectedItems.Count.ToString(CultureInfo.InvariantCulture) + " \u6761\u5b9a\u989d\uff1f",
+                        "\u5220\u9664\u53c2\u8003\u5b9a\u989d",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Question) != DialogResult.Yes)
                     {
                         return;
                     }
-                    chapterLibrary.RemoveUserQuota(scope.MethodNo, scope.MatchedEntryCode, effectiveEntryName, item.Kind, item.Code, item.Name, item.Unit, item.Price);
+                    HashSet<string> removedKeys = new HashSet<string>(selectedItems.Select(PoolItemKey), StringComparer.Ordinal);
+                    List<PoolItem> desiredItems = GetPoolItemsForScope(scope, effectiveEntryName)
+                        .Where(poolItem => !removedKeys.Contains(PoolItemKey(poolItem)))
+                        .ToList();
+                    string saveError;
+                    if (!TrySaveCurrentPool(scope, effectiveEntryName, desiredItems, out saveError))
+                    {
+                        ShowPoolSaveError("\u5220\u9664\u53c2\u8003\u5b9a\u989d\u5931\u8d25", saveError);
+                        return;
+                    }
                     ReloadPool();
                     currentKey = null;
                     RefreshSafe();
-                    QuotaRecommendPanel.Log("Reference quota pool user delete: entry=" + scope.MatchedEntryCode + " code=" + item.Code);
+                    QuotaRecommendPanel.Log("Reference quota pool user hard delete: entry=" + UserEntryCode(scope) + " count=" + selectedItems.Count.ToString(CultureInfo.InvariantCulture));
                 }
                 catch (Exception ex)
                 {
                     QuotaRecommendPanel.Log("Reference quota pool delete failed: " + ex.Message);
+                    ShowPoolSaveError("\u5220\u9664\u53c2\u8003\u5b9a\u989d\u5931\u8d25", ex.Message);
                 }
+            }
+
+            private static List<DataGridViewRow> SelectedRowsOrCurrent(DataGridView sourceGrid)
+            {
+                Dictionary<int, DataGridViewRow> selected = new Dictionary<int, DataGridViewRow>();
+                if (sourceGrid != null)
+                {
+                    foreach (DataGridViewRow selectedRow in sourceGrid.SelectedRows)
+                    {
+                        if (selectedRow != null && selectedRow.Index >= 0 && !selectedRow.IsNewRow)
+                        {
+                            selected[selectedRow.Index] = selectedRow;
+                        }
+                    }
+                    foreach (DataGridViewCell selectedCell in sourceGrid.SelectedCells)
+                    {
+                        if (selectedCell != null && selectedCell.RowIndex >= 0 && selectedCell.RowIndex < sourceGrid.Rows.Count)
+                        {
+                            DataGridViewRow selectedRow = sourceGrid.Rows[selectedCell.RowIndex];
+                            if (!selectedRow.IsNewRow)
+                            {
+                                selected[selectedRow.Index] = selectedRow;
+                            }
+                        }
+                    }
+                    if (selected.Count == 0 && sourceGrid.CurrentRow != null && !sourceGrid.CurrentRow.IsNewRow)
+                    {
+                        selected[sourceGrid.CurrentRow.Index] = sourceGrid.CurrentRow;
+                    }
+                }
+                return selected.OrderBy(pair => pair.Key).Select(pair => pair.Value).ToList();
+            }
+
+            private List<PoolItem> GetPoolItemsForScope(EntryScope scope, string effectiveEntryName)
+            {
+                if (scope == null)
+                {
+                    return new List<PoolItem>();
+                }
+                List<PoolItem> items;
+                if (!poolByEntry.TryGetValue(ReferencePoolEntryKey(scope.MethodNo, scope.MatchedEntryCode), out items) || items == null)
+                {
+                    return new List<PoolItem>();
+                }
+                return items
+                    .Where(poolItem => IsAllowedReferencePoolItem(effectiveEntryName, poolItem.Kind, poolItem.Code, quotaIndex))
+                    .Select(ClonePoolItem)
+                    .ToList();
+            }
+
+            private static List<PoolItem> MergePoolItems(IEnumerable<PoolItem> existingItems, IEnumerable<PoolItem> changedItems)
+            {
+                List<PoolItem> result = new List<PoolItem>();
+                Dictionary<string, int> positions = new Dictionary<string, int>(StringComparer.Ordinal);
+                foreach (PoolItem poolItem in (existingItems ?? new List<PoolItem>()).Concat(changedItems ?? new List<PoolItem>()))
+                {
+                    if (poolItem == null || String.IsNullOrWhiteSpace(poolItem.Code))
+                    {
+                        continue;
+                    }
+                    string itemKey = PoolItemKey(poolItem);
+                    int position;
+                    if (positions.TryGetValue(itemKey, out position))
+                    {
+                        result[position] = ClonePoolItem(poolItem);
+                    }
+                    else
+                    {
+                        positions[itemKey] = result.Count;
+                        result.Add(ClonePoolItem(poolItem));
+                    }
+                }
+                return result;
+            }
+
+            private static PoolItem ClonePoolItem(PoolItem sourceItem)
+            {
+                return new PoolItem
+                {
+                    Code = sourceItem.Code,
+                    Name = sourceItem.Name,
+                    Unit = sourceItem.Unit,
+                    Price = sourceItem.Price,
+                    Kind = sourceItem.Kind,
+                    Source = sourceItem.Source,
+                    ProjectCount = sourceItem.ProjectCount
+                };
+            }
+
+            private static string PoolItemKey(PoolItem poolItem)
+            {
+                return ReferencePoolItemKey(poolItem == null ? "" : poolItem.Kind,
+                    poolItem == null ? "" : poolItem.Code,
+                    poolItem == null ? "" : poolItem.Name,
+                    poolItem == null ? "" : poolItem.Unit,
+                    poolItem == null ? "" : poolItem.Price);
+            }
+
+            private bool TrySaveCurrentPool(EntryScope scope, string entryName, IEnumerable<PoolItem> items, out string error)
+            {
+                List<ReferencePoolMutationItem> records = new List<ReferencePoolMutationItem>();
+                foreach (PoolItem poolItem in items ?? new List<PoolItem>())
+                {
+                    records.Add(new ReferencePoolMutationItem
+                    {
+                        Kind = poolItem.Kind,
+                        Code = poolItem.Code,
+                        Name = poolItem.Name,
+                        Unit = poolItem.Unit,
+                        Price = poolItem.Price,
+                        ProjectCount = poolItem.ProjectCount
+                    });
+                }
+                return chapterLibrary.ReplaceUserQuotaPool(scope.MethodNo, UserEntryCode(scope), entryName, records, out error);
+            }
+
+            private void ShowInvalidReferenceQuotaMessage()
+            {
+                MessageBox.Show(mainForm,
+                    "\u6240\u9009\u884c\u4e2d\u5b58\u5728\u7a7a\u767d\u6216\u4e0d\u5141\u8bb8\u7684\u5b9a\u989d\u3002\u53c2\u8003\u5b9a\u989d\u6c60\u53ea\u80fd\u6dfb\u52a0\u5168\u91cf\u5b9a\u989d\u5e93\u4e2d\u7684\u539f\u5b9a\u989d\u7f16\u53f7\uff1b\u8bbe\u5907\u8d2d\u7f6e\u8d39\u6761\u76ee\u4ec5\u5141\u8bb8 SF\u3002",
+                    "\u589e\u52a0\u53c2\u8003\u5b9a\u989d",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+
+            private void ShowPoolSaveError(string title, string error)
+            {
+                MessageBox.Show(mainForm,
+                    title + "\uff1a" + (String.IsNullOrWhiteSpace(error) ? "\u672a\u77e5\u9519\u8bef" : error),
+                    "\u53c2\u8003\u5b9a\u989d",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
             }
 
             // 重新从 chapter-quota-library.jsonl 装载富字段池（增删后保持显示与文件一致）
@@ -1157,8 +1443,9 @@ namespace RecoQuotaRecommend
         private static Dictionary<string, List<PoolItem>> LoadPoolUncached(string path, string methodKey, Dictionary<string, QuotaInfo> quotaIndex)
         {
             Dictionary<string, List<PoolItem>> map = new Dictionary<string, List<PoolItem>>(StringComparer.Ordinal);
-            // entry -> (kind:CODE -> PoolItem)，按文件顺序后写覆盖先写；deleted=1 即移除该 code（软删除）
+            // entry -> (kind:CODE -> PoolItem)，兼容历史 deleted=1；新编辑使用显式池标记和硬删除快照。
             Dictionary<string, Dictionary<string, PoolItem>> tmp = new Dictionary<string, Dictionary<string, PoolItem>>(StringComparer.Ordinal);
+            HashSet<string> explicitPoolKeys = new HashSet<string>(StringComparer.Ordinal);
             try
             {
                 if (!File.Exists(path))
@@ -1175,7 +1462,23 @@ namespace RecoQuotaRecommend
                     string entry = LearningStore.Get(values, "entry_code").Trim();
                     string methodNo = LearningStore.Get(values, "method_no").Trim();
                     string code = QuotaEntry.NormalizeCode(LearningStore.Get(values, "quota_code").Trim());
-                    if (entry.Length == 0 || code.Length == 0)
+                    if (entry.Length == 0)
+                    {
+                        continue;
+                    }
+                    string entryKey = ReferencePoolEntryKey(methodNo, entry);
+                    Dictionary<string, PoolItem> inner;
+                    if (!tmp.TryGetValue(entryKey, out inner))
+                    {
+                        inner = new Dictionary<string, PoolItem>(StringComparer.Ordinal);
+                        tmp[entryKey] = inner;
+                    }
+                    if (String.Equals(LearningStore.Get(values, "record_type").Trim(), "entry_quota_pool", StringComparison.OrdinalIgnoreCase)
+                        && LearningStore.Get(values, "override").Trim() == "1")
+                    {
+                        explicitPoolKeys.Add(entryKey);
+                    }
+                    if (code.Length == 0)
                     {
                         continue;
                     }
@@ -1194,14 +1497,6 @@ namespace RecoQuotaRecommend
                     string quotaUnit = LearningStore.Get(values, "quota_unit").Trim();
                     string quotaPrice = FirstNonEmpty(values, "base_price", "price", "unit_price", "quota_price", "current_price");
                     string itemKey = ReferencePoolItemKey(kind, code, quotaName, quotaUnit, quotaPrice);
-
-                    string entryKey = ReferencePoolEntryKey(methodNo, entry);
-                    Dictionary<string, PoolItem> inner;
-                    if (!tmp.TryGetValue(entryKey, out inner))
-                    {
-                        inner = new Dictionary<string, PoolItem>(StringComparer.Ordinal);
-                        tmp[entryKey] = inner;
-                    }
 
                     if (LearningStore.Get(values, "deleted").Trim() == "1")
                     {
@@ -1231,7 +1526,7 @@ namespace RecoQuotaRecommend
                 }
                 foreach (KeyValuePair<string, Dictionary<string, PoolItem>> pair in tmp)
                 {
-                    if (pair.Value.Count == 0)
+                    if (pair.Value.Count == 0 && !explicitPoolKeys.Contains(pair.Key))
                     {
                         continue;
                     }

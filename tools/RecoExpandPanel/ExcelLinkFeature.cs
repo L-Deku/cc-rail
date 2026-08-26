@@ -2424,11 +2424,13 @@ namespace RecoNet
             RecordMappingGroupsToLearningDb(BuildBindingFeedbackGroups(fullNames), "excel-bind-batch");
         }
 
-        // 一个原始绑定表达式是一套独立关系：同式多条定额组成完整组件框；
-        // 式内正向相加单元格各自形成别名，不按定额号跨行或跨表合并数量。
+        // 顶层正向相加按来源单元格拆成别名；同一次绑定中，同一来源单元格的目标组成完整组件框，
+        // 不因 m/hm 等目标单位换算导致表达式不同而拆散，也不生成跨行共享公式。
         private static List<MappingFeedbackGroup> BuildBindingFeedbackGroups(Dictionary<ExcelQuotaLink, string> fullNames)
         {
             List<MappingFeedbackGroup> groups = new List<MappingFeedbackGroup>();
+            Dictionary<string, MappingFeedbackGroup> reusableAliasGroups =
+                new Dictionary<string, MappingFeedbackGroup>(StringComparer.OrdinalIgnoreCase);
             List<BindingFeedbackSource> sources = new List<BindingFeedbackSource>();
             foreach (IGrouping<string, KeyValuePair<ExcelQuotaLink, string>> sourceGroup in
                 (fullNames ?? new Dictionary<ExcelQuotaLink, string>())
@@ -2563,7 +2565,32 @@ namespace RecoNet
                             UnitPrice = FilterLearningTargetUnitPrice(target.QuotaCode, target.UnitPrice)
                         });
                     }
-                    if (group.Targets.Count > 0) groups.Add(group);
+                    if (group.Targets.Count == 0) continue;
+                    if (source.IsCompositeFormula)
+                    {
+                        groups.Add(group);
+                        continue;
+                    }
+
+                    string aliasKey = BuildBindingFeedbackAliasKey(source.Link, address);
+                    MappingFeedbackGroup existing;
+                    if (!reusableAliasGroups.TryGetValue(aliasKey, out existing))
+                    {
+                        reusableAliasGroups[aliasKey] = group;
+                        groups.Add(group);
+                        continue;
+                    }
+
+                    // 组件已经按来源单元格落位；各目标的换算保留在 FormulaTemplate 或推荐时的单位换算中。
+                    existing.Expression = existing.SourceCell;
+                    HashSet<string> existingTargets = new HashSet<string>(existing.Targets
+                        .Select(target => BuildLearningTargetIdentityKey(target.Kind, target.Code, target.Name, target.Unit)),
+                        StringComparer.OrdinalIgnoreCase);
+                    foreach (MappingFeedbackTarget target in group.Targets)
+                    {
+                        string targetKey = BuildLearningTargetIdentityKey(target.Kind, target.Code, target.Name, target.Unit);
+                        if (existingTargets.Add(targetKey)) existing.Targets.Add(target);
+                    }
                 }
             }
             return groups;
@@ -2575,6 +2602,14 @@ namespace RecoNet
             string expression = String.IsNullOrWhiteSpace(link.Expression) ? link.CellAddress : link.Expression;
             return NormalizeExcelLinkCachePath(link.ExcelPath) + "|" + (link.WorksheetName ?? "").Trim() + "|" +
                 NormalizeExpressionOperators(expression) + "|" + (link.Method ?? "").Trim() + "|" +
+                (link.ProjectId ?? "").Trim();
+        }
+
+        private static string BuildBindingFeedbackAliasKey(ExcelQuotaLink link, string sourceCell)
+        {
+            if (link == null) return "";
+            return NormalizeExcelLinkCachePath(link.ExcelPath) + "|" + (link.WorksheetName ?? "").Trim() + "|" +
+                NormalizeExpressionOperators(sourceCell) + "|" + (link.Method ?? "").Trim() + "|" +
                 (link.ProjectId ?? "").Trim();
         }
 
