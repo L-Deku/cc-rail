@@ -22,6 +22,8 @@ Assert-Contains $excelLink 'BuildBindingFeedbackGroups' '缺少按原始表达�
 Assert-Contains $excelLink 'BuildAutomaticRebindFeedbackGroups' '自动重新绑定没有把完整组件扶正并否定旧缺项组件。'
 Assert-Contains $learningDb 'LoadPriorAutomaticBindingGroups(conn, transaction, groups)' '自动重新绑定没有在同一 SQL 事务内读取旧绑定组件。'
 Assert-Contains $learningDb "source IN ('plugin:excel-bind-batch','plugin:template-right-click')" '自动重新绑定没有识别此前右键扶正形成的旧缺项组件。'
+Assert-Contains $learningDb 'BuildPriorAutomaticBindingQueryKey' '旧组件读取缺少完整 SQL 查询身份。'
+Assert-Contains $learningDb 'queriedKeys.Add(BuildPriorAutomaticBindingQueryKey(desired))' '同一查询身份仍会重复读取旧组件。'
 $transactionStart = $learningDb.IndexOf('using (SqlTransaction transaction = conn.BeginTransaction())', [StringComparison]::Ordinal)
 $priorLoadPosition = $learningDb.IndexOf('LoadPriorAutomaticBindingGroups(conn, transaction, groups)', $transactionStart, [StringComparison]::Ordinal)
 $writeLoopPosition = $learningDb.IndexOf('groupIndex < writeGroups.Count', $priorLoadPosition, [StringComparison]::Ordinal)
@@ -29,6 +31,18 @@ $transactionCommit = $learningDb.IndexOf('transaction.Commit();', $writeLoopPosi
 if ($transactionStart -lt 0 -or $priorLoadPosition -le $transactionStart -or
     $writeLoopPosition -le $priorLoadPosition -or $transactionCommit -le $writeLoopPosition) {
     throw '旧组件读取、扶正/否定流水和聚合更新没有处于同一个 SQL 事务边界。'
+}
+$priorMethodStart = $learningDb.IndexOf('private static List<MappingFeedbackGroup> LoadPriorAutomaticBindingGroups', [StringComparison]::Ordinal)
+$priorMethodEnd = $learningDb.IndexOf('private static bool IsPositiveAutomaticBindingAggregate', $priorMethodStart, [StringComparison]::Ordinal)
+$priorMethodBody = if ($priorMethodStart -ge 0 -and $priorMethodEnd -gt $priorMethodStart) {
+    $learningDb.Substring($priorMethodStart, $priorMethodEnd - $priorMethodStart)
+} else { '' }
+$priorGatePosition = $priorMethodBody.IndexOf('(desired.ExcelRow <= 0 && String.IsNullOrWhiteSpace(desired.SourceCell))) continue;', [StringComparison]::Ordinal)
+$priorQueryKeyPosition = $priorMethodBody.IndexOf('queriedKeys.Add(BuildPriorAutomaticBindingQueryKey(desired))', [StringComparison]::Ordinal)
+$priorCommandPosition = $priorMethodBody.IndexOf('using (SqlCommand cmd = conn.CreateCommand())', [StringComparison]::Ordinal)
+if ($priorGatePosition -lt 0 -or $priorQueryKeyPosition -le $priorGatePosition -or
+    $priorCommandPosition -le $priorQueryKeyPosition) {
+    throw '旧组件查询去重必须位于有效 desired 门禁之后、SQL 查询之前。'
 }
 if ($excelLink.Contains('(entryScope ?? "").Trim()')) { throw '绑定组件仍按组级条目拆分，跨条目目标无法组成完整组件。' }
 Assert-Contains $excelLink 'string targetEntryCode = LearningPartitionIdentity.NormalizeLearningEntryCode(' 'SQL 学习组件没有规范化目标条目上下文。'
@@ -308,6 +322,49 @@ try {
         }
         return $group
     }
+
+    $buildPriorQueryKey = $type.GetMethod('BuildPriorAutomaticBindingQueryKey', $flags)
+    if ($null -eq $buildPriorQueryKey) { throw '编译结果缺少旧组件完整查询身份入口。' }
+    $queryKeyBase = New-AutomaticRebindGroup 'F1' @('DY-310')
+    $queryKeySame = New-AutomaticRebindGroup 'F2' @('DY-478')
+    $feedbackGroupType.GetField('Method', $flags).SetValue($queryKeyBase, 'TB10801-2024')
+    $feedbackGroupType.GetField('Method', $flags).SetValue($queryKeySame, '2024')
+    $feedbackGroupType.GetField('Workbook', $flags).SetValue($queryKeySame, 'another-binding.xlsx')
+    $feedbackGroupType.GetField('Worksheet', $flags).SetValue($queryKeySame, 'AnotherSheet')
+    $baseQueryKey = [string]$buildPriorQueryKey.Invoke($null, @($queryKeyBase))
+    $sameQueryKey = [string]$buildPriorQueryKey.Invoke($null, @($queryKeySame))
+    if ([String]::IsNullOrEmpty($baseQueryKey) -or $sameQueryKey -ne $baseQueryKey) {
+        throw '仅工作簿/工作表/来源行不同的组应复用同一次旧组件查询。'
+    }
+
+    $queryKeyMethodAlias = New-AutomaticRebindGroup 'F1' @('DY-310')
+    $feedbackGroupType.GetField('Method', $flags).SetValue($queryKeyMethodAlias, '2024 新办法')
+    if ([string]$buildPriorQueryKey.Invoke($null, @($queryKeyMethodAlias)) -ne $baseQueryKey) {
+        throw '查询身份没有使用归一化后的 method。'
+    }
+
+    foreach ($variation in @(
+        [pscustomobject]@{ Field = 'SoftwarePartition'; Value = '2020' },
+        [pscustomobject]@{ Field = 'Method'; Value = '2020' },
+        [pscustomobject]@{ Field = 'MethodNo'; Value = '30号文' },
+        [pscustomobject]@{ Field = 'ProjectId'; Value = 'project-b' },
+        [pscustomobject]@{ Field = 'ProjectId'; Value = ' project-a' },
+        [pscustomobject]@{ Field = 'QuantityName'; Value = '另一工程量' }
+    )) {
+        $changed = New-AutomaticRebindGroup 'F1' @('DY-310')
+        $feedbackGroupType.GetField('Method', $flags).SetValue($changed, 'TB10801-2024')
+        $feedbackGroupType.GetField($variation.Field, $flags).SetValue($changed, $variation.Value)
+        $changedKey = [string]$buildPriorQueryKey.Invoke($null, @($changed))
+        if ($changedKey -eq $baseQueryKey) {
+            throw "查询身份遗漏字段或改变了原始值：$($variation.Field)=$($variation.Value)"
+        }
+    }
+    $nullQueryArgs = [object[]]::new(1)
+    $nullQueryArgs[0] = $null
+    if ([string]$buildPriorQueryKey.Invoke($null, $nullQueryArgs.PSObject.BaseObject) -ne '') {
+        throw '空 desired 的旧组件查询身份应为空。'
+    }
+    Write-Host 'PASS 旧组件查询按五项完整身份去重且不合并不同项目原始值'
 
     $desiredRebinds = [Activator]::CreateInstance($feedbackGroupListType)
     $desiredRebinds.Add((New-AutomaticRebindGroup 'F1' @('DY-310', 'DY-478', '7015473*1.01')))

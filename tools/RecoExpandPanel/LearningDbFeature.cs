@@ -272,16 +272,40 @@ namespace RecoNet
             }
         }
 
+        private static string BuildPriorAutomaticBindingQueryKey(MappingFeedbackGroup desired)
+        {
+            if (desired == null) return "";
+            string[] parts =
+            {
+                desired.SoftwarePartition ?? "",
+                NormalizeLearningDbMethod(desired.Method),
+                NormalizeLearningMethodNo(desired.MethodNo),
+                desired.ProjectId ?? "",
+                desired.QuantityName ?? ""
+            };
+            StringBuilder key = new StringBuilder();
+            foreach (string part in parts)
+            {
+                string value = part ?? "";
+                key.Append(value.Length.ToString(CultureInfo.InvariantCulture));
+                key.Append(':');
+                key.Append(value);
+            }
+            return key.ToString();
+        }
+
         private static List<MappingFeedbackGroup> LoadPriorAutomaticBindingGroups(SqlConnection conn,
             SqlTransaction transaction, List<MappingFeedbackGroup> desiredGroups)
         {
             Dictionary<string, MappingFeedbackGroup> byGroupKey =
                 new Dictionary<string, MappingFeedbackGroup>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> queriedKeys = new HashSet<string>(StringComparer.Ordinal);
             foreach (MappingFeedbackGroup desired in desiredGroups ?? new List<MappingFeedbackGroup>())
             {
                 if (desired == null || String.IsNullOrWhiteSpace(desired.QuantityName) ||
                     String.IsNullOrWhiteSpace(desired.Workbook) || String.IsNullOrWhiteSpace(desired.Worksheet) ||
                     (desired.ExcelRow <= 0 && String.IsNullOrWhiteSpace(desired.SourceCell))) continue;
+                if (!queriedKeys.Add(BuildPriorAutomaticBindingQueryKey(desired))) continue;
                 using (SqlCommand cmd = conn.CreateCommand())
                 {
                     cmd.Transaction = transaction;
