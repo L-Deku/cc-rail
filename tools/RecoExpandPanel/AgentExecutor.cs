@@ -812,6 +812,19 @@ namespace RecoNet
                 }
             }
 
+            // 按表里的自然顺序排好再返回。键来自 DataGridView.SelectedRows，
+            // 而那个集合是按索引倒序给的，直接用会让复制过去的定额整体颠倒。
+            rows.Sort(delegate(AgentTargetRow a, AgentTargetRow b)
+            {
+                int byUnit = a.UnitId.CompareTo(b.UnitId);
+                if (byUnit != 0)
+                {
+                    return byUnit;
+                }
+
+                int byItem = a.ItemSequence.CompareTo(b.ItemSequence);
+                return byItem != 0 ? byItem : a.OrderNo.CompareTo(b.OrderNo);
+            });
             return rows;
         }
 
