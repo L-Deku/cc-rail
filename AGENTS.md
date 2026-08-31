@@ -8,7 +8,9 @@
 - 核心插件源码位于 `RecoQuotaRecommend/`。
 - 主要源码文件是 `RecoQuotaRecommend/QuotaRecommendPanel.cs`。
 - 构建脚本是 `RecoQuotaRecommend/build.ps1`。
-- 插件部署目标目录是 `铁路基本建设工程投资控制系统2020网络版V0503021201/`。
+- 本项目后续源码修改、构建、运行验证和插件部署，统一以 `D:\AI文件\自动预算\2024铁路工程云计价系统网络版V1.0\铁路工程云计价系统网络版V1.0` 这套软件实例为正式目标；插件部署目标目录就是该目录。
+- 正式使用的宿主程序只有上述目录内的 `ReJJGSNet2024.exe` 和 `RejjNet2020.exe`。部署或实机验收前必须同时检查这两个进程，并用进程路径或本次启动时间对应的 `RecoPluginLoader.log` / `RecoExpandPanel.log` 再确认实际运行目录；不得只凭进程名或窗口标题推断部署目标。
+- `铁路基本建设工程投资控制系统2020网络版V0503021201/` 不再是默认运行或部署目标，只能作为历史参考；除非用户再次明确指定，不得向该目录部署或以其日志、DLL 哈希代替正式目录的实机证据。
 - 本地定额与学习数据缓存放在软件目录下的 `RecoQuotaData/`。
 - 插件构建、工作区运行目录同步和同事发布包更新时，只允许以当前仓库 `main` 的 `RecoQuotaRecommend/bin/` 为插件 DLL 源头；不要从任何运行目录或发布包反向覆盖当前仓库输出。
 - `D:\AI文件\同事模拟目录`（2026-07-20 由 `D:\AI文件\铁路工程云计价系统网络版V1.0` 改名而来）是“同事电脑模拟目录”，必须保持为最近一次实际发给同事的版本；日常构建、工作区部署、发布包刷新和提交均不得自动同步该目录，也不得把它写进 `build.ps1` 的部署目标。
@@ -19,7 +21,7 @@
 - 修改插件后优先运行：
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File "C:\Users\谢刚\Desktop\自动预算\RecoQuotaRecommend\build.ps1"
+powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\RecoQuotaRecommend\build.ps1"
 ```
 
 - 构建成功后，脚本会生成并部署 `RecoQuotaRecommend.dll` 到软件目录。
@@ -70,6 +72,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 当前 .NET Framework `csc.exe` 构建不是确定性编译，两次独立编译即使源码完全相同，DLL SHA256 也可能因程序集标识变化而不同；应用 BuildOnly 的 `source_commit`、`source_file_hashes`和回归结果证明源与行为一致，然后对实际部署的同一候选 DLL 做全链路哈希一致性核对，不得要求跨编译 DLL 哈希相等。
 - `build.ps1 -BuildOnly` 的构建清单文件名是 `artifact-manifest.json`；构建后校验提交、dirty 标记和 DLL 哈希时应读取该文件，不要猜成 `build-manifest.json`。
 - 从独立 Git worktree 做干净 `BuildOnly` 时，Git 不会带出被忽略的本地编译依赖；开始构建前应从当前工作区只读复制 NPOI 运行依赖和 `RecoQuotaRecommend/packages/Lib.Harmony.2.3.3/package/lib/net452/0Harmony.dll` 到隔离 worktree，并用一个隔离的软件 EXE 标记目录供构建脚本发现引用。当前 `build.ps1` 会排除 `artifacts` 目录，标记目录应放在被 Git 忽略且仍参与扫描的 `RecoQuotaRecommend/bin/build-reference`，不得因此把依赖写入运行目录或提交仓库。
+- 复制独立 worktree 的 EXE 构建标记前必须先枚举并验证源文件；不要假设当前工作区已有 `RecoQuotaRecommend/bin/build-reference/RejjNet2020.exe`。该标记缺失时，只读使用正式软件目录中已核实的 `RejjNet2020.exe` 或 `ReJJGSNet2024.exe`，目标仍只能是 worktree 内的 `build-reference`。
 - `tools/RecoExpandPanel/tests/Test-TemplateFillNameMatch.ps1` 在非交互 WinForms 环境可能卡在“定额候选下拉与组件组界面确认”之后的滚动视口用例；连续停在该位置时应按“综合回归未完成”报告，终止并核对本次测试启动的精确进程，不得把前半段 PASS 当作全部通过，也不要反复无上限重跑。
 - 读取 UTF-8 附件或中文文本时，如 PowerShell `Get-Content` 输出乱码，先设置 `[Console]::OutputEncoding`，并优先用 `[System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes(...))` 按字节解码验证内容。
 - PowerShell 部署/验证脚本需要格式化多段 `foreach` 输出时，优先先收集到数组或 `List[object]` 再统一 `Format-Table`；不要把脚本块闭合后直接接管道，容易触发 `An empty pipe element is not allowed` 解析错误。
@@ -103,6 +106,8 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - `SF` 只能写入名称含“设备购置费”的条目，名称含“设备购置费”的条目也只接受 `SF`；任一方向违反时必须阻断整组，禁止自动写入和手工确认，不产生 accepted。推荐定额写入的条目名一律取当前项目 `章节表` 真实名称；SF 自动改道只接受段数相同、父前缀相同且名称含“设备购置费”的唯一同级条目，零个或多个时整组阻断。SF 只允许完整源行复制或按学习字段构造，禁止原生粘贴，禁止为写入导航宿主树。绑定回流的条目名补齐仍按“当前项目真实条目名 > 精确 `(LibraryMethod, MethodNo)` 分区的 `ChapterEntry` > 目标级历史名称”，不得跨办法回退。
 - 组件框中的条目证据必须保存到每个目标；条目证据来自写入时用户选定的当前项目真实条目，`SF` 使用自动改道后的设备购置费条目。推荐预览中右键绑定宿主定额行时，每个目标的条目编号和名称必须取该定额行在项目 `章节表` 中的真实条目，不得受窗口上方“推荐学习库”过滤范围影响。所有普通、材料和纯辅助目标都按自身持久化的目标级条目证据形成 `EngineeringTemplate` 专业范围，不再用主定额跟随或工程前缀投票扩展范围。推荐学习库“未归类”只由持久化 `EngineeringTemplate` 是否存在决定，本机临时上下文不得把框移出“未归类”。
 - 绑定学习的聚合签名只使用归一化工程量名称（兼容 `名称|`），Excel 工程量单位仅作流水审计；推荐数量必须用当前 Excel 单位和当前运行版本定额单位现场换算，不得学习或复用原绑定表达式中的 `/1000`、`*1.05` 等运算。多单元格正向加项只拆工程量别名，各别名指向原表达式的完整组件框；组件内目标共用同一套编制办法，但稳定条目必须按目标分别保存，同一原始表达式不得因目标条目不同而拆散组件。
+- 推荐数量的默认单位族必须保留这些业务别名：`延米/延长米/双延米/横延米/单侧米/双侧米/延米桥长` 归入 `m`；`顶平米/投影面积m2/处理面积m2/单层10m2` 归入 `m2`（其中 `单层10m2` 自带 10 倍量级）；`m3湿土/m3土/m3混凝土/m3空间` 归入 `m3`；`个/件/台/套/组/座/孔` 归入离散计数维度并保留 `10/100/1000` 等前缀量级；`亩/公顷` 与 `m2` 使用精确面积比例（`1亩=2000/3m2`、`1公顷=10000m2`）。`天然密实方/压实方` 等不同方态仍视为不同业务量纲，未经人工绑定不得静默换算。
+- 推荐定额窗口中，只有用户实际修改某行数量并右键选择“绑定当前数量为单位关系系数”时，才允许把本次比例保存为 `V0` 系数公式；作用域严格为“同一归一化工程量名称 + 同一定额完整身份（目标类型、完整编号、规范化名称、规范化单位）”，并继续受当前软件分区、办法文号和条目专业范围约束。人工系数仅在该完整身份命中时优先于普通历史公式和默认单位换算，不得跨名称或跨定额身份复用；部署读取该能力的 DLL 前必须先幂等增加 `QuantityFormulaRule.target_name` 与 `manual_override` 字段。
 - 跨量纲业务换算不得简化成历史单元格地址或一次性结果；应保存 `V0/V1...` 参数公式及每个参数的名称、单位和名称级签名。推荐时只用当前表同章节、邻近行内精确且唯一的参数重新计算；缺参数、同名歧义或单位不兼容时必须取消自动勾选。公式读取先按当前推荐学习库专业范围过滤原始条目分片，再按公式内容合并样本数；条目编号仍只作范围与审计依据。`F10/1000+F11/1000` 仍按独立正向别名学习，不得因此生成共享公式或跨行合计。
 - C# 5 代码中不要在 `||`/`&&` 短路条件里依赖 `out` 参数一定赋值；用于错误文案的 `out` 变量先给默认值，避免 `CS0165`。
 - C# 5 中 lambda 参数名与同一外层代码块后续局部变量也不得同名；新增 `FindIndex`/`Where` 等 lambda 后再定义局部变量时先检查名称，避免 `CS0136`。

@@ -381,6 +381,8 @@ namespace RecoNet
                     ? "替换/补充软件选中的定额到此行"
                     : "绑定软件选中的定额到此行");
                 gridMenu.Items.Add(miBindSelected);
+                ToolStripMenuItem miBindUnitFactor = new ToolStripMenuItem("绑定当前数量为单位关系系数");
+                if (smartOnly) gridMenu.Items.Add(miBindUnitFactor);
                 grid.ContextMenuStrip = gridMenu;
                 grid.MouseDown += delegate(object sender, MouseEventArgs e)
                 {
@@ -390,10 +392,17 @@ namespace RecoNet
                 };
                 gridMenu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e)
                 {
+                    grid.EndEdit();
                     FillPreviewItem cur = grid.SelectedRows.Count > 0 ? grid.SelectedRows[0].Tag as FillPreviewItem : null;
                     miBindSelected.Enabled = cur != null && cur.IsNameDriven;
+                    string ignoredFormula;
+                    List<QuantityFormulaOperandInfo> ignoredOperands;
+                    string ignoredError;
+                    miBindUnitFactor.Enabled = smartOnly && TryBuildManualQuantityFactor(cur,
+                        out ignoredFormula, out ignoredOperands, out ignoredError);
                 };
                 miBindSelected.Click += delegate { OnBindSelectedQuotaToRow(); };
+                miBindUnitFactor.Click += delegate { OnBindEditedQuantityFactor(); };
 
                 split.Panel1.Controls.Add(itemTree);
                 split.Panel2.Controls.Add(grid);
@@ -1718,6 +1727,7 @@ namespace RecoNet
                     editedText = editedText.Replace("原数量", "(" + quantityBase + ")");
                 }
                 item.QuantityText = editedText;
+                item.QuantityEditedByUser = true;
                 if (String.IsNullOrWhiteSpace(item.Status)) return false;
 
                 List<string> statusParts = SplitNameQuotaStatus(item.Status);
@@ -1732,6 +1742,128 @@ namespace RecoNet
                     !String.Equals(part, "公式参数缺失或歧义", StringComparison.Ordinal)).ToArray());
                 item.AlignNote = AppendPreviewNote(item.AlignNote, "数量已人工确认");
                 return true;
+            }
+
+            private static bool TryBuildManualQuantityFactor(FillPreviewItem item, out string formulaTemplate,
+                out List<QuantityFormulaOperandInfo> operands, out string error)
+            {
+                formulaTemplate = "";
+                operands = new List<QuantityFormulaOperandInfo>();
+                error = "";
+                if (item == null || !item.IsNameDriven || !item.QuantityEditedByUser)
+                {
+                    error = "请先修改该行数量。";
+                    return false;
+                }
+                string quantityName = String.IsNullOrWhiteSpace(item.TargetFullName)
+                    ? (item.TargetName ?? "").Trim()
+                    : item.TargetFullName.Trim();
+                if (quantityName.Length == 0 || String.IsNullOrWhiteSpace(item.TargetUnit) ||
+                    String.IsNullOrWhiteSpace(item.QuotaCode) || String.IsNullOrWhiteSpace(item.SourceName) ||
+                    String.IsNullOrWhiteSpace(item.Unit))
+                {
+                    error = "工程量名称、Excel单位或定额完整身份不全，不能保存系数。";
+                    return false;
+                }
+                decimal sourceQuantity;
+                decimal editedQuantity;
+                string evaluateError;
+                if (!TryEvaluateDecimal(item.TargetQuantityText, out sourceQuantity, out evaluateError) || sourceQuantity <= 0m)
+                {
+                    error = "原工程量不是有效正数，不能推导系数。";
+                    return false;
+                }
+                if (!TryEvaluateDecimal(item.QuantityText, out editedQuantity, out evaluateError) || editedQuantity <= 0m)
+                {
+                    error = "修改后的数量不是有效正数。";
+                    return false;
+                }
+                decimal factor = editedQuantity / sourceQuantity;
+                if (factor == 1m)
+                {
+                    error = "修改后的数量与原数量相同，不需要绑定系数。";
+                    return false;
+                }
+                formulaTemplate = "V0" + FormatExcelLinkScaleSuffix(factor);
+                string signature = NormalizeForSignature(quantityName) + "|";
+                if (signature.Length > 450) signature = signature.Substring(0, 450);
+                operands.Add(new QuantityFormulaOperandInfo
+                {
+                    Name = quantityName,
+                    Unit = item.TargetUnit,
+                    Signature = signature
+                });
+                return true;
+            }
+
+            private void OnBindEditedQuantityFactor()
+            {
+                try
+                {
+                    grid.EndEdit();
+                    if (!smartOnly || grid.SelectedRows.Count == 0) return;
+                    DataGridViewRow selectedRow = grid.SelectedRows[0];
+                    FillPreviewItem item = selectedRow.Tag as FillPreviewItem;
+                    if (item == null) return;
+                    ApplyEditedNameQuotaQuantity(item, Convert.ToString(selectedRow.Cells["qty"].Value).Trim());
+
+                    string formulaTemplate;
+                    List<QuantityFormulaOperandInfo> operands;
+                    string error;
+                    if (!TryBuildManualQuantityFactor(item, out formulaTemplate, out operands, out error))
+                    {
+                        MessageBox.Show(this, error, "绑定单位关系系数", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    string oldTemplate = item.FormulaTemplate;
+                    List<QuantityFormulaOperandInfo> oldOperands = item.FormulaOperands;
+                    bool oldManualOverride = item.ManualFormulaOverride;
+                    item.FormulaTemplate = formulaTemplate;
+                    item.FormulaOperands = operands;
+                    item.ManualFormulaOverride = true;
+
+                    SqlConnection projectConn = GetProjectConnection(mainForm);
+                    List<FillPreviewItem> currentGroup = preview.Where(candidate => candidate != null &&
+                        candidate.IsNameDriven && candidate.TargetRow == item.TargetRow)
+                        .OrderBy(candidate => candidate.GroupOrder).ToList();
+                    MappingFeedbackGroup feedback = BuildTemplateRightClickFeedbackGroup(currentGroup,
+                        smartPreviewWorkbookPath, cmbTargetSheet.Text.Trim(), projectConn,
+                        0, 1, 0, "unit-factor-bind");
+                    if (feedback == null)
+                    {
+                        item.FormulaTemplate = oldTemplate;
+                        item.FormulaOperands = oldOperands;
+                        item.ManualFormulaOverride = oldManualOverride;
+                        MessageBox.Show(this, "当前行缺少可持久化的工程量名称或定额身份。", "绑定单位关系系数",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    List<MappingFeedbackGroup> groups = new List<MappingFeedbackGroup> { feedback };
+                    RecordMappingGroupsToLearningDb(groups, "unit-factor-bind");
+                    if (!ConsumeLearningDbDurableResult(groups))
+                    {
+                        item.FormulaTemplate = oldTemplate;
+                        item.FormulaOperands = oldOperands;
+                        item.ManualFormulaOverride = oldManualOverride;
+                        MessageBox.Show(this, "系数未能写入学习库，本次预览数量保持不变，但不会用于以后推荐。",
+                            "绑定单位关系系数", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    item.QuantityEditedByUser = false;
+                    item.AlignNote = AppendPreviewNote(item.AlignNote, "人工单位关系已绑定：" + formulaTemplate);
+                    RefreshTargetGroupInGrid(item.TargetRow);
+                    MessageBox.Show(this, "已按“同一工程量名称＋同一定额完整身份”保存：" + formulaTemplate,
+                        "绑定单位关系系数", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    Log("Bind edited quantity factor failed: " + ex.Message);
+                    MessageBox.Show(this, "绑定失败：" + ex.Message, "绑定单位关系系数",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
             }
 
             private void RefreshNameQuotaRiskStateInGrid(int targetRow)

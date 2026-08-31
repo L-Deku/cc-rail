@@ -101,12 +101,14 @@ namespace RecoNet
         private sealed class SmartFormulaRule
         {
             public string RuleHash;
+            public string TargetName;
             public string TargetUnit;
             public string Template;
             public string Method;
             public string EntryCode;
             public HashSet<string> EntryCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             public int SampleCount;
+            public bool ManualOverride;
             public DateTime LastSeen;
             public List<SmartFormulaOperand> Operands = new List<SmartFormulaOperand>();
         }
@@ -235,11 +237,34 @@ namespace RecoNet
                 (String.IsNullOrWhiteSpace(kind) ? "quota" : kind.Trim().ToLowerInvariant()) + ":" + (code ?? "").Trim().ToUpperInvariant();
         }
 
+        private static string BuildSmartFormulaIdentityKey(string signature, string kind, string code,
+            string name, string unit)
+        {
+            return BuildSmartFormulaKey(signature, kind, code) + "|" +
+                NormalizeForSignature(name) + "|" + NormalizeExcelLinkUnit(unit).ToUpperInvariant();
+        }
+
+        private static List<SmartFormulaRule> GetSmartFormulaRules(SmartLearningSnapshot snapshot, string signature,
+            SmartBoxTarget target, string targetName, string targetUnit)
+        {
+            if (snapshot == null || target == null) return new List<SmartFormulaRule>();
+            List<SmartFormulaRule> rules;
+            string identityKey = BuildSmartFormulaIdentityKey(signature, target.Kind, target.Code, targetName, targetUnit);
+            if (snapshot.FormulaByKey.TryGetValue(identityKey, out rules) && rules.Count > 0) return rules;
+            string legacyKey = BuildSmartFormulaKey(signature, target.Kind, target.Code);
+            return snapshot.FormulaByKey.TryGetValue(legacyKey, out rules)
+                ? rules
+                : new List<SmartFormulaRule>();
+        }
+
         private static SmartFormulaRule AddSmartFormulaRule(SmartLearningSnapshot snapshot, string ruleHash, string signature,
-            string kind, string code, string targetUnit, string formulaTemplate, string method, string entryCode, int sampleCount, DateTime lastSeen)
+            string kind, string code, string targetName, string targetUnit, string formulaTemplate, bool manualOverride,
+            string method, string entryCode, int sampleCount, DateTime lastSeen)
         {
             if (snapshot == null || String.IsNullOrWhiteSpace(code) || String.IsNullOrWhiteSpace(formulaTemplate)) return null;
-            string key = BuildSmartFormulaKey(signature, kind, code);
+            string key = String.IsNullOrWhiteSpace(targetName)
+                ? BuildSmartFormulaKey(signature, kind, code)
+                : BuildSmartFormulaIdentityKey(signature, kind, code, targetName, targetUnit);
             List<SmartFormulaRule> rules;
             if (!snapshot.FormulaByKey.TryGetValue(key, out rules))
             {
@@ -252,8 +277,10 @@ namespace RecoNet
                 existing = new SmartFormulaRule
                 {
                     RuleHash = ruleHash ?? "",
+                    TargetName = targetName ?? "",
                     TargetUnit = targetUnit ?? "",
                     Template = formulaTemplate ?? "",
+                    ManualOverride = manualOverride,
                     Method = NormalizeSmartProjectMethod(method),
                     EntryCode = entryCode ?? "",
                     SampleCount = Math.Max(1, sampleCount),
@@ -265,6 +292,7 @@ namespace RecoNet
             }
             existing.SampleCount = Math.Max(existing.SampleCount, Math.Max(1, sampleCount));
             if (lastSeen > existing.LastSeen) existing.LastSeen = lastSeen;
+            if (manualOverride) existing.ManualOverride = true;
             if (!String.IsNullOrWhiteSpace(entryCode)) existing.EntryCodes.Add(entryCode.Trim());
             return existing;
         }
@@ -291,8 +319,10 @@ namespace RecoNet
                 SmartFormulaRule combined = new SmartFormulaRule
                 {
                     RuleHash = BuildSmartFormulaContentIdentity(first),
+                    TargetName = first.TargetName,
                     TargetUnit = first.TargetUnit,
                     Template = first.Template,
+                    ManualOverride = group.Any(rule => rule.ManualOverride),
                     Method = first.Method,
                     EntryCode = first.EntryCode,
                     SampleCount = group.Sum(rule => Math.Max(1, rule.SampleCount)),
@@ -691,7 +721,7 @@ namespace RecoNet
                             {
                                 cmd.CommandTimeout = 15;
                                 cmd.CommandText =
-                                    "SELECT rule_hash,anchor_signature,target_kind,target_code,target_unit,formula_template,method,entry_code,sample_count,last_seen " +
+                                    "SELECT rule_hash,anchor_signature,target_kind,target_code,target_name,target_unit,formula_template,manual_override,method,entry_code,sample_count,last_seen " +
                                     "FROM dbo.QuantityFormulaRule WHERE software_partition=@software_partition AND method_no=@method_no";
                                 cmd.Parameters.AddWithValue("@software_partition", snapshot.SoftwarePartition);
                                 cmd.Parameters.AddWithValue("@method_no", snapshot.MethodNo);
@@ -700,8 +730,9 @@ namespace RecoNet
                                     while (reader.Read())
                                     {
                                         SmartFormulaRule rule = AddSmartFormulaRule(snapshot, reader.GetString(0), ResolveSmartSqlSignature(reader.GetString(1), legacySignatureAliases), reader.GetString(2),
-                                            reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7),
-                                            reader.GetInt32(8), reader.IsDBNull(9) ? DateTime.MinValue : reader.GetDateTime(9));
+                                            reader.GetString(3), reader.IsDBNull(4) ? "" : reader.GetString(4), reader.GetString(5), reader.GetString(6),
+                                            !reader.IsDBNull(7) && reader.GetBoolean(7), reader.GetString(8), reader.GetString(9),
+                                            reader.GetInt32(10), reader.IsDBNull(11) ? DateTime.MinValue : reader.GetDateTime(11));
                                         if (rule != null) formulaByHash[reader.GetString(0)] = rule;
                                     }
                                 }
@@ -1393,7 +1424,7 @@ namespace RecoNet
             string outputSuffix;
             if (!TryBuildExcelLinkUnitScaleSuffix(rule.TargetUnit, currentTargetUnit, out outputSuffix)) return false;
 
-            string expression = rule.Template;
+            string expression = NormalizeSmartFormulaScaleDisplay(rule.Template);
             foreach (SmartFormulaOperand operand in rule.Operands.OrderByDescending(item => item.Index))
             {
                 TargetQtyRow row = null;
@@ -1434,6 +1465,27 @@ namespace RecoNet
             if (result <= 0m) return false;
             quantityText = finalExpression;
             return true;
+        }
+
+        // 旧的单参数学习规则把 /10、/100、/1000 规范化成了小数乘法。
+        // 只调整预览表达式，不改变 SQL 规则和计算结果。
+        private static string NormalizeSmartFormulaScaleDisplay(string template)
+        {
+            string value = (template ?? "").Trim();
+            System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(
+                value, "^V0\\*([0-9]+(?:\\.[0-9]+)?)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!match.Success) return template ?? "";
+
+            decimal factor;
+            if (!Decimal.TryParse(match.Groups[1].Value, NumberStyles.Number, CultureInfo.InvariantCulture, out factor) ||
+                factor <= 0m || factor >= 1m)
+            {
+                return template ?? "";
+            }
+            decimal divisor = 1m / factor;
+            decimal roundedDivisor = Decimal.Round(divisor, 0, MidpointRounding.AwayFromZero);
+            if (roundedDivisor < 10m || divisor != roundedDivisor) return template ?? "";
+            return "V0/" + FormatExcelLinkFactor(roundedDivisor);
         }
 
         private static string FormatSmartFormulaOperandForInsertion(string template, int tokenStart, int tokenLength,
@@ -1553,7 +1605,15 @@ namespace RecoNet
             string signature, out SmartFormulaRule selectedRule, out string quantityText, out string issue)
         {
             return TryResolveSmartFormulaCore(snapshot, targetRows, anchorRow, target, currentTargetUnit,
-                signature, false, out selectedRule, out quantityText, out issue);
+                target == null ? "" : target.Name, signature, false, out selectedRule, out quantityText, out issue);
+        }
+
+        private static bool TryResolveSmartFormulaForIdentity(SmartLearningSnapshot snapshot, List<TargetQtyRow> targetRows,
+            TargetQtyRow anchorRow, SmartBoxTarget target, string currentTargetName, string currentTargetUnit,
+            string signature, out SmartFormulaRule selectedRule, out string quantityText, out string issue)
+        {
+            return TryResolveSmartFormulaCore(snapshot, targetRows, anchorRow, target, currentTargetUnit,
+                currentTargetName, signature, false, out selectedRule, out quantityText, out issue);
         }
 
         private static bool TryResolveDerivedSmartFormula(SmartLearningSnapshot snapshot, List<TargetQtyRow> targetRows,
@@ -1561,18 +1621,20 @@ namespace RecoNet
             string signature, out SmartFormulaRule selectedRule, out string quantityText, out string issue)
         {
             return TryResolveSmartFormulaCore(snapshot, targetRows, anchorRow, target, currentTargetUnit,
-                signature, true, out selectedRule, out quantityText, out issue);
+                target == null ? "" : target.Name, signature, true, out selectedRule, out quantityText, out issue);
         }
 
         private static bool TryResolveSmartFormulaCore(SmartLearningSnapshot snapshot, List<TargetQtyRow> targetRows,
             TargetQtyRow anchorRow, SmartBoxTarget target, string currentTargetUnit,
-            string signature, bool derivedOnly, out SmartFormulaRule selectedRule, out string quantityText, out string issue)
+            string currentTargetName, string signature, bool derivedOnly, out SmartFormulaRule selectedRule,
+            out string quantityText, out string issue)
         {
             selectedRule = null;
             quantityText = "";
             issue = "";
             List<SmartFormulaRule> rules;
-            if (!snapshot.FormulaByKey.TryGetValue(BuildSmartFormulaKey(signature, target.Kind, target.Code), out rules) || rules.Count == 0)
+            rules = GetSmartFormulaRules(snapshot, signature, target, currentTargetName, currentTargetUnit);
+            if (rules.Count == 0)
             {
                 issue = "单位 " + anchorRow.Unit + "→" + currentTargetUnit + " 无可靠换算公式";
                 return false;
@@ -1599,8 +1661,16 @@ namespace RecoNet
                     valid.Add(new SmartFormulaEvaluation { Rule = rule, QuantityText = evaluated });
                 }
             }
-            valid = valid.OrderByDescending(item => String.Equals(item.Rule.Method ?? "", snapshot.Method ?? "", StringComparison.OrdinalIgnoreCase))
-                .ThenByDescending(item => item.Rule.SampleCount).ThenByDescending(item => item.Rule.LastSeen).ToList();
+            if (valid.Any(item => item.Rule.ManualOverride))
+            {
+                valid = valid.Where(item => item.Rule.ManualOverride)
+                    .OrderByDescending(item => item.Rule.LastSeen).ToList();
+            }
+            else
+            {
+                valid = valid.OrderByDescending(item => String.Equals(item.Rule.Method ?? "", snapshot.Method ?? "", StringComparison.OrdinalIgnoreCase))
+                    .ThenByDescending(item => item.Rule.SampleCount).ThenByDescending(item => item.Rule.LastSeen).ToList();
+            }
             if (valid.Count == 0)
             {
                 issue = "换算公式参数未找齐、单位不符或存在重名歧义";
@@ -1672,20 +1742,22 @@ namespace RecoNet
                 }
                 else
                 {
-                    string formulaKey = BuildSmartFormulaKey(signature, target.Kind, target.Code);
-                    List<SmartFormulaRule> formulaRules;
-                    bool hasFormula = snapshot.FormulaByKey.TryGetValue(formulaKey, out formulaRules) &&
-                        SelectContextualSmartFormulaRules(snapshot, formulaRules).Count > 0;
+                    List<SmartFormulaRule> formulaRules = GetSmartFormulaRules(snapshot, signature, target,
+                        item.SourceName, currentQuotaUnit);
+                    List<SmartFormulaRule> contextualFormulaRules = SelectContextualSmartFormulaRules(snapshot, formulaRules);
+                    bool hasFormula = contextualFormulaRules.Count > 0;
+                    bool hasManualFormula = contextualFormulaRules.Any(rule => rule != null && rule.ManualOverride);
+                    bool hasDerivedFormula = contextualFormulaRules.Any(rule => rule != null && rule.Operands.Count > 1);
                     SmartFormulaRule formulaRule = null;
                     string formulaQuantity = "";
                     string formulaIssue = "";
                     string standardSuffix;
                     bool formulaResolved = false;
                     bool standardResolved = false;
-                    if (hasFormula)
+                    if (hasManualFormula || hasDerivedFormula)
                     {
-                        formulaResolved = TryResolveSmartFormula(snapshot, targetRows, row, target, currentQuotaUnit,
-                            signature, out formulaRule, out formulaQuantity, out formulaIssue);
+                        formulaResolved = TryResolveSmartFormulaForIdentity(snapshot, targetRows, row, target,
+                            item.SourceName, currentQuotaUnit, signature, out formulaRule, out formulaQuantity, out formulaIssue);
                     }
                     else if (TryBuildExcelLinkUnitScaleSuffix(row.Unit, currentQuotaUnit, out standardSuffix))
                     {
@@ -1694,11 +1766,17 @@ namespace RecoNet
                             "\u6807\u51c6\u6362\u7b97 " + (String.IsNullOrEmpty(standardSuffix) ? "1:1" : standardSuffix));
                         standardResolved = true;
                     }
+                    else if (hasFormula)
+                    {
+                        formulaResolved = TryResolveSmartFormulaForIdentity(snapshot, targetRows, row, target,
+                            item.SourceName, currentQuotaUnit, signature, out formulaRule, out formulaQuantity, out formulaIssue);
+                    }
 
                     if (formulaResolved)
                     {
                         item.QuantityText = formulaQuantity;
                         item.FormulaTemplate = formulaRule.Template;
+                        item.ManualFormulaOverride = formulaRule.ManualOverride;
                         item.FormulaOperands = formulaRule.Operands.OrderBy(operand => operand.Index).Select(operand => new QuantityFormulaOperandInfo
                         {
                             Name = operand.Name,

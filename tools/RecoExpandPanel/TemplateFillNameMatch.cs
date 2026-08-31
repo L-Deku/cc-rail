@@ -1427,6 +1427,7 @@ namespace RecoNet
                     EntryCode = !String.IsNullOrWhiteSpace(item.ChosenItemNo) ? item.ChosenItemNo : item.ItemNo,
                     EntryName = !String.IsNullOrWhiteSpace(item.ChosenItemName) ? item.ChosenItemName : mappingGroup.EntryName,
                     FormulaTemplate = acceptedCount + correctedCount > 0 ? item.FormulaTemplate : "",
+                    ManualFormulaOverride = acceptedCount + correctedCount > 0 && item.ManualFormulaOverride,
                     QuotaSequence = item.WrittenQuotaSequence > 0 ? item.WrittenQuotaSequence : item.ChosenQuotaSeq,
                     SourceEndpointIdentity = item.WrittenQuotaSequence > 0
                         ? GetProjectConnectionIdentity(projectConn)

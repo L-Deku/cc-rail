@@ -240,6 +240,8 @@ namespace RecoNet
                                         flat["formula_rule_hash"] = BuildLearningFormulaRuleHash(group, target);
                                         flat["formula_template"] = target.FormulaTemplate;
                                         flat["formula_target_unit"] = target.Unit ?? "";
+                                        flat["formula_target_name"] = target.Name ?? "";
+                                        if (target.ManualFormulaOverride) flat["formula_manual_override"] = "1";
                                         flat["formula_software_partition"] = group.SoftwarePartition ?? "";
                                         flat["formula_method_no"] = group.MethodNo ?? "";
                                         flat["formula_entry_code"] = formulaEntryCode;
@@ -858,6 +860,7 @@ namespace RecoNet
                     row[targetPrefix + "entry_code"] = target.EntryCode ?? "";
                     row[targetPrefix + "entry_name"] = target.EntryName ?? "";
                     row[targetPrefix + "formula"] = target.FormulaTemplate ?? "";
+                    row[targetPrefix + "manual_formula_override"] = target.ManualFormulaOverride ? "1" : "0";
                     row[targetPrefix + "quota_sequence"] = target.QuotaSequence.ToString(CultureInfo.InvariantCulture);
                     row[targetPrefix + "source_endpoint_identity"] = target.SourceEndpointIdentity ?? "";
                     if (IsContextSensitiveLearningCode(target.Code))
@@ -948,6 +951,7 @@ namespace RecoNet
                         EntryCode = GetFlat(row, targetPrefix + "entry_code"),
                         EntryName = GetFlat(row, targetPrefix + "entry_name"),
                         FormulaTemplate = GetFlat(row, targetPrefix + "formula"),
+                        ManualFormulaOverride = ReadFlatInt(row, targetPrefix + "manual_formula_override", 0) == 1,
                         QuotaSequence = ReadFlatLong(row, targetPrefix + "quota_sequence", 0),
                         SourceEndpointIdentity = GetFlat(row, targetPrefix + "source_endpoint_identity"),
                         UnitPrice = ReadFlatDecimal(row, targetPrefix + "unit_price", 0m),
@@ -1308,15 +1312,19 @@ namespace RecoNet
                         cmd.Transaction = transaction;
                         cmd.CommandTimeout = 5;
                         cmd.CommandText =
-                            "UPDATE dbo.QuantityFormulaRule WITH (UPDLOCK,HOLDLOCK) SET sample_count=sample_count+1,last_seen=SYSDATETIME() WHERE rule_hash=@hash; " +
-                            "IF @@ROWCOUNT=0 INSERT INTO dbo.QuantityFormulaRule(rule_hash,anchor_signature,target_kind,target_code,target_unit,formula_template,method,software_partition,method_no,entry_code,sample_count,first_seen,last_seen) " +
-                            "VALUES(@hash,@s,@kind,@code,@unit,@formula,@method,@software_partition,@method_no,@entry,1,SYSDATETIME(),SYSDATETIME());";
+                            "UPDATE dbo.QuantityFormulaRule WITH (UPDLOCK,HOLDLOCK) SET sample_count=sample_count+1,last_seen=SYSDATETIME()," +
+                            "target_name=CASE WHEN @name='' THEN target_name ELSE @name END," +
+                            "manual_override=CASE WHEN @manual=1 THEN 1 ELSE manual_override END WHERE rule_hash=@hash; " +
+                            "IF @@ROWCOUNT=0 INSERT INTO dbo.QuantityFormulaRule(rule_hash,anchor_signature,target_kind,target_code,target_name,target_unit,formula_template,manual_override,method,software_partition,method_no,entry_code,sample_count,first_seen,last_seen) " +
+                            "VALUES(@hash,@s,@kind,@code,@name,@unit,@formula,@manual,@method,@software_partition,@method_no,@entry,1,SYSDATETIME(),SYSDATETIME());";
                         cmd.Parameters.AddWithValue("@hash", ruleHash);
                         cmd.Parameters.AddWithValue("@s", signature);
                         cmd.Parameters.AddWithValue("@kind", targetKind);
                         cmd.Parameters.AddWithValue("@code", targetCode);
+                        cmd.Parameters.AddWithValue("@name", TrimLearningText(target.Name, 1000));
                         cmd.Parameters.AddWithValue("@unit", targetUnit);
                         cmd.Parameters.AddWithValue("@formula", formulaTemplate);
+                        cmd.Parameters.AddWithValue("@manual", target.ManualFormulaOverride ? 1 : 0);
                         cmd.Parameters.AddWithValue("@method", method);
                         cmd.Parameters.AddWithValue("@software_partition", group.SoftwarePartition);
                         cmd.Parameters.AddWithValue("@method_no", group.MethodNo);
@@ -1439,6 +1447,7 @@ namespace RecoNet
             string entryCode = LearningPartitionIdentity.NormalizeLearningEntryCode(
                 GetMappingFeedbackTargetEntryCode(group, target));
             string raw = signature + "|" + kind + ":" + (target == null ? "" : target.Code ?? "").Trim().ToUpperInvariant() + "|" +
+                NormalizeForSignature(target == null ? "" : target.Name) + "|" +
                 NormalizeExcelLinkUnit(target == null ? "" : target.Unit) + "|" + (target == null ? "" : target.FormulaTemplate ?? "") + "|" +
                 (group == null ? "" : group.SoftwarePartition ?? "") + "|" +
                 (group == null ? "" : NormalizeLearningMethodNo(group.MethodNo)) + "|" + entryCode;

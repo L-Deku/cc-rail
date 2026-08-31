@@ -112,8 +112,10 @@ CREATE TABLE dbo.QuantityFormulaRule (
   anchor_signature NVARCHAR(450) NOT NULL,
   target_kind      NVARCHAR(20) NOT NULL,
   target_code      NVARCHAR(100) NOT NULL,
+  target_name      NVARCHAR(1000) NOT NULL DEFAULT(''),
   target_unit      NVARCHAR(50) NOT NULL,
   formula_template NVARCHAR(2000) NOT NULL,
+  manual_override  BIT NOT NULL DEFAULT(0),
   method           NVARCHAR(50) NOT NULL DEFAULT(''),
   software_partition NVARCHAR(10) NOT NULL,
   method_no        NVARCHAR(100) NOT NULL,
@@ -126,6 +128,10 @@ IF COL_LENGTH('dbo.QuantityFormulaRule','software_partition') IS NULL
   ALTER TABLE dbo.QuantityFormulaRule ADD software_partition NVARCHAR(10) NULL;
 IF COL_LENGTH('dbo.QuantityFormulaRule','method_no') IS NULL
   ALTER TABLE dbo.QuantityFormulaRule ADD method_no NVARCHAR(100) NULL;
+IF COL_LENGTH('dbo.QuantityFormulaRule','target_name') IS NULL
+  ALTER TABLE dbo.QuantityFormulaRule ADD target_name NVARCHAR(1000) NOT NULL CONSTRAINT DF_QuantityFormulaRule_target_name DEFAULT('');
+IF COL_LENGTH('dbo.QuantityFormulaRule','manual_override') IS NULL
+  ALTER TABLE dbo.QuantityFormulaRule ADD manual_override BIT NOT NULL CONSTRAINT DF_QuantityFormulaRule_manual_override DEFAULT(0);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='IX_QuantityFormulaRule_lookup')
   CREATE INDEX IX_QuantityFormulaRule_lookup
     ON dbo.QuantityFormulaRule(anchor_signature, target_code, target_unit, method);

@@ -26,6 +26,10 @@ foreach ($table in 'BindingLog','SignatureBoxMap','QuantityFormulaRule','Signatu
 foreach ($table in 'BindingLog','QuantityFormulaRule','SignatureEntryMap','EngineeringTemplate') {
   Assert-Match ("COL_LENGTH\('dbo\." + [regex]::Escape($table) + "','method_no'\) IS NULL\s+ALTER TABLE dbo\." + [regex]::Escape($table) + " ADD method_no NVARCHAR\(100\) NULL") ("旧库没有为 " + $table + ' 以可空方式增加 method_no。')
 }
+Assert-Match "target_name\s+NVARCHAR\(1000\) NOT NULL DEFAULT\(''\)" '新库 QuantityFormulaRule 缺少目标名称身份字段。'
+Assert-Match 'manual_override\s+BIT NOT NULL DEFAULT\(0\)' '新库 QuantityFormulaRule 缺少人工系数优先标记。'
+Assert-Match "COL_LENGTH\('dbo\.QuantityFormulaRule','target_name'\) IS NULL\s+ALTER TABLE dbo\.QuantityFormulaRule ADD target_name NVARCHAR\(1000\) NOT NULL CONSTRAINT DF_QuantityFormulaRule_target_name DEFAULT\(''\)" '旧库没有安全增加 QuantityFormulaRule.target_name。'
+Assert-Match "COL_LENGTH\('dbo\.QuantityFormulaRule','manual_override'\) IS NULL\s+ALTER TABLE dbo\.QuantityFormulaRule ADD manual_override BIT NOT NULL CONSTRAINT DF_QuantityFormulaRule_manual_override DEFAULT\(0\)" '旧库没有安全增加 QuantityFormulaRule.manual_override。'
 
 Assert-Match 'PK_SignatureBoxMap PRIMARY KEY \(software_partition, signature, box_id\)' '新库 SignatureBoxMap 目标主键错误。'
 Assert-Match 'PK_SignatureEntryMap PRIMARY KEY \(software_partition, method_no, signature, target_code, entry_code\)' '新库 SignatureEntryMap 目标主键错误。'

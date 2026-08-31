@@ -106,6 +106,8 @@ namespace RecoNet
             public string QuantityText;
             public string FormulaTemplate;    // V0/V1... 占位的已确认跨单位数量公式
             public List<QuantityFormulaOperandInfo> FormulaOperands;
+            public bool QuantityEditedByUser; // 推荐窗口数量列确由用户修改，才允许右键学习系数
+            public bool ManualFormulaOverride;// 人工绑定系数优先于该完整身份的默认/历史公式
             public string Status;
             public int OrderInItem;
             public long SourceQuotaSeq;  // 源定额序号（写入时直接复制该行）

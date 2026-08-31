@@ -140,10 +140,15 @@ IF OBJECT_ID('dbo.QuantityFormulaRule','U') IS NULL
 CREATE TABLE dbo.QuantityFormulaRule (
   rule_hash CHAR(32) PRIMARY KEY, anchor_signature NVARCHAR(450) NOT NULL,
   target_kind NVARCHAR(20) NOT NULL, target_code NVARCHAR(100) NOT NULL,
-  target_unit NVARCHAR(50) NOT NULL, formula_template NVARCHAR(2000) NOT NULL,
+  target_name NVARCHAR(1000) NOT NULL DEFAULT(''), target_unit NVARCHAR(50) NOT NULL,
+  formula_template NVARCHAR(2000) NOT NULL, manual_override BIT NOT NULL DEFAULT(0),
   method NVARCHAR(50) NOT NULL DEFAULT(''), entry_code NVARCHAR(100) NOT NULL DEFAULT(''),
   sample_count INT NOT NULL DEFAULT(0), first_seen DATETIME2(0) NULL, last_seen DATETIME2(0) NULL
 );
+IF COL_LENGTH('dbo.QuantityFormulaRule','target_name') IS NULL
+  ALTER TABLE dbo.QuantityFormulaRule ADD target_name NVARCHAR(1000) NOT NULL DEFAULT('');
+IF COL_LENGTH('dbo.QuantityFormulaRule','manual_override') IS NULL
+  ALTER TABLE dbo.QuantityFormulaRule ADD manual_override BIT NOT NULL DEFAULT(0);
 IF OBJECT_ID('dbo.QuantityFormulaOperand','U') IS NULL
 CREATE TABLE dbo.QuantityFormulaOperand (
   rule_hash CHAR(32) NOT NULL, operand_index INT NOT NULL,

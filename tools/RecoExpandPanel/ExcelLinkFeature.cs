@@ -606,6 +606,14 @@ namespace RecoNet
             {
                 return true;
             }
+            if (TryBuildExcelLinkLandAreaScaleSuffix(excelUnitText, quotaUnitText, out suffix))
+            {
+                return true;
+            }
+            if (TryBuildConfirmedCountUnitScaleSuffix(excelUnitText, quotaUnitText, out suffix))
+            {
+                return true;
+            }
             // 压实方/天然密实方等语义单位只在文本完全相同时按 1:1；
             // 不得剥成 m3 后静默换算，必须使用已确认的业务系数。
             if (!IsExcelLinkPureScaleUnit(excelUnitText) || !IsExcelLinkPureScaleUnit(quotaUnitText))
@@ -656,7 +664,7 @@ namespace RecoNet
                 case "\u5904": case "\u5ea7": case "\u7ec4": case "\u6839": case "\u9879":
                 case "\u53f0": case "\u5b54": case "\u5957": case "\u4e2a": case "\u5757":
                 case "\u7247": case "\u5f20": case "\u6bb5": case "\u773c": case "\u53e3": case "\u69fd":
-                case "\u6a18": case "\u95f4": case "\u68f5": case "\u682a":
+                case "\u6a18": case "\u95f4": case "\u68f5": case "\u682a": case "\u4ef6":
                     return true;
                 default:
                     return false;
@@ -665,27 +673,12 @@ namespace RecoNet
 
         private static bool IsExcelLinkPureScaleUnit(string unitText)
         {
-            string unit = NormalizeExcelLinkUnit(unitText);
-            if (String.IsNullOrEmpty(unit)) return false;
-            if (unit[0] == '\u4e07') unit = unit.Substring(1);
-            else
-            {
-                int index = 0;
-                bool hasDot = false;
-                while (index < unit.Length)
-                {
-                    char ch = unit[index];
-                    if (Char.IsDigit(ch)) { index++; continue; }
-                    if (ch == '.' && !hasDot) { hasDot = true; index++; continue; }
-                    break;
-                }
-                if (index > 0) unit = unit.Substring(index);
-            }
-            if (unit == "m" || unit == "m2" || unit == "m3" || unit == "kg" || unit == "km" || unit == "hm" || unit == "t")
-            {
-                return true;
-            }
-            return IsExcelLinkCountUnit(unit);
+            decimal prefix;
+            string unit;
+            if (!TryParseExcelLinkUnitPrefix(unitText, out prefix, out unit) || prefix <= 0m) return false;
+            decimal unitScale;
+            string baseUnit;
+            return TryNormalizeExcelLinkMetricBaseUnit(unit, out baseUnit, out unitScale);
         }
 
         private static bool TryBuildQuotaUnitFallbackSuffix(string quotaUnitText, out string suffix)
@@ -713,8 +706,6 @@ namespace RecoNet
             {
                 return false;
             }
-
-            unit = StripExcelLinkCubicUnitQualifier(unit);
 
             if (unit[0] == '\u4e07')
             {
@@ -797,10 +788,19 @@ namespace RecoNet
 
         private static string StripExcelLinkMetricUnitModifier(string unit)
         {
-            unit = StripExcelLinkCubicUnitQualifier(unit);
+            unit = NormalizeExcelLinkUnit(unit);
             if (String.IsNullOrEmpty(unit))
             {
                 return "";
+            }
+
+            // 方态是业务量纲而不是普通文字修饰，必须保留给人工系数判断。
+            foreach (string semanticPrefix in new string[]
+            {
+                "\u538b\u5b9e\u65b9", "\u5929\u7136\u5bc6\u5b9e\u65b9", "\u81ea\u7136\u65b9", "\u677e\u65b9"
+            })
+            {
+                if (unit.StartsWith(semanticPrefix, StringComparison.Ordinal)) return unit;
             }
 
             string[] units = new string[] { "m3", "m2", "km", "hm", "kg", "m", "t" };
@@ -944,7 +944,36 @@ namespace RecoNet
         {
             baseUnit = "";
             unitScale = 1m;
-            unit = StripExcelLinkMetricUnitModifier(NormalizeExcelLinkUnit(unit));
+            unit = StripExcelLinkMetricUnitModifier(unit);
+            if (unit == "\u5ef6m" || unit == "\u5ef6\u957fm" || unit == "\u53cc\u5ef6m" ||
+                unit == "\u6a2a\u5ef6m" || unit == "\u5355\u4fa7m" || unit == "\u53cc\u4fa7m" ||
+                unit == "\u5ef6m\u6865\u957f" || unit == "m\u5355\u8fb9")
+            {
+                unit = "m";
+            }
+            else if (unit == "\u9876m2" || unit == "\u9876m2m2" ||
+                unit == "\u6295\u5f71\u9762\u79efm2" || unit == "m2\u6295\u5f71\u9762\u79ef" ||
+                unit == "\u5904\u7406\u9762\u79efm2" || unit == "m2\u5904\u7406\u9762\u79ef")
+            {
+                unit = "m2";
+            }
+            else if (unit == "m3\u6e7f\u571f" || unit == "m3\u571f" ||
+                unit == "m3\u6df7\u51dd\u571f" || unit == "m3\u7a7a\u95f4")
+            {
+                unit = "m3";
+            }
+            else
+            {
+                System.Text.RegularExpressions.Match layeredArea =
+                    System.Text.RegularExpressions.Regex.Match(unit, "^\u5355\u5c42([0-9]+(?:\\.[0-9]+)?)m2$");
+                decimal layeredScale;
+                if (layeredArea.Success && Decimal.TryParse(layeredArea.Groups[1].Value,
+                    NumberStyles.Float, CultureInfo.InvariantCulture, out layeredScale) && layeredScale > 0m)
+                {
+                    unitScale = layeredScale;
+                    unit = "m2";
+                }
+            }
             if (unit == "km")
             {
                 unitScale = 1000m;
@@ -1151,7 +1180,7 @@ namespace RecoNet
             {
                 "\u5904", "\u5ea7", "\u7ec4", "\u6839", "\u9879", "\u53f0", "\u5b54", "\u5957",
                 "\u4e2a", "\u5757", "\u7247", "\u6bb5", "\u773c", "\u53e3", "\u69c0", "\u6a18", "\u95f4",
-                "\u68f5", "\u682a", "\u4ea9", "\u516c\u9877"
+                "\u68f5", "\u682a", "\u4ef6"
             };
         }
 
@@ -2154,6 +2183,102 @@ namespace RecoNet
             return false;
         }
 
+        private static bool TryBuildExcelLinkLandAreaScaleSuffix(string excelUnitText, string quotaUnitText,
+            out string suffix)
+        {
+            suffix = "";
+            decimal excelNumerator;
+            decimal excelDenominator;
+            decimal quotaNumerator;
+            decimal quotaDenominator;
+            if (!TryParseExcelLinkLandAreaScale(excelUnitText, out excelNumerator, out excelDenominator) ||
+                !TryParseExcelLinkLandAreaScale(quotaUnitText, out quotaNumerator, out quotaDenominator))
+            {
+                return false;
+            }
+            suffix = FormatExcelLinkRationalScaleSuffix(
+                excelNumerator * quotaDenominator,
+                excelDenominator * quotaNumerator);
+            return true;
+        }
+
+        private static bool TryParseExcelLinkLandAreaScale(string unitText, out decimal numerator,
+            out decimal denominator)
+        {
+            numerator = 0m;
+            denominator = 1m;
+            decimal prefix;
+            string rawBaseUnit;
+            if (!TryParseExcelLinkUnitPrefix(unitText, out prefix, out rawBaseUnit) || prefix <= 0m)
+            {
+                return false;
+            }
+            string normalized = NormalizeExcelLinkUnit(rawBaseUnit);
+            if (normalized == "\u4ea9")
+            {
+                numerator = prefix * 2000m;
+                denominator = 3m;
+                return true;
+            }
+            if (normalized == "\u516c\u9877")
+            {
+                numerator = prefix * 10000m;
+                return true;
+            }
+            string metricBase;
+            decimal metricScale;
+            if (TryNormalizeExcelLinkMetricBaseUnit(normalized, out metricBase, out metricScale) &&
+                String.Equals(metricBase, "m2", StringComparison.Ordinal))
+            {
+                numerator = prefix * metricScale;
+                return true;
+            }
+            return false;
+        }
+
+        private static string FormatExcelLinkRationalScaleSuffix(decimal numerator, decimal denominator)
+        {
+            if (numerator <= 0m || denominator <= 0m) return "";
+            long integerNumerator;
+            long integerDenominator;
+            if (TryConvertExcelLinkScaleInteger(numerator, out integerNumerator) &&
+                TryConvertExcelLinkScaleInteger(denominator, out integerDenominator))
+            {
+                long divisor = GreatestCommonExcelLinkDivisor(integerNumerator, integerDenominator);
+                integerNumerator /= divisor;
+                integerDenominator /= divisor;
+                if (integerNumerator == integerDenominator) return "";
+                if (integerNumerator == 1L)
+                    return "/" + integerDenominator.ToString(CultureInfo.InvariantCulture);
+                if (integerDenominator == 1L)
+                    return "*" + integerNumerator.ToString(CultureInfo.InvariantCulture);
+                return "*" + integerNumerator.ToString(CultureInfo.InvariantCulture) + "/" +
+                    integerDenominator.ToString(CultureInfo.InvariantCulture);
+            }
+            return FormatExcelLinkScaleSuffix(numerator / denominator);
+        }
+
+        private static bool TryConvertExcelLinkScaleInteger(decimal value, out long result)
+        {
+            result = 0L;
+            if (value != Decimal.Truncate(value) || value <= 0m || value > Int64.MaxValue) return false;
+            result = Decimal.ToInt64(value);
+            return true;
+        }
+
+        private static long GreatestCommonExcelLinkDivisor(long left, long right)
+        {
+            left = Math.Abs(left);
+            right = Math.Abs(right);
+            while (right != 0L)
+            {
+                long next = left % right;
+                left = right;
+                right = next;
+            }
+            return left == 0L ? 1L : left;
+        }
+
         // 从一个只含单个来源单元格的正向加项中提取线性乘数。
         // 例如 F10*0.2+F11/4 分别得到 0.2 和 0.25；F10*F11 或含函数的复杂式不学习。
         private static bool TryExtractPositiveCellScaleFactor(string expression, string sourceCell, out decimal factor)
@@ -2384,6 +2509,7 @@ namespace RecoNet
             public string EntryCode;
             public string EntryName;
             public string FormulaTemplate; // V0/V1... 占位的已确认跨单位数量公式
+            public bool ManualFormulaOverride;
             public long QuotaSequence;
             public string SourceEndpointIdentity;
             public decimal UnitPrice;

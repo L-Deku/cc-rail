@@ -312,15 +312,17 @@ foreach ($row in $log.Rows) {
   $sig = Get-QuantitySignature ([string]$row.quantity_name) ([string]$row.quantity_unit) $knownUnits
   $kind = ([string]$row.target_kind).Trim().ToLowerInvariant(); if ($kind -eq '') { $kind = 'quota' }
   $code = [string]$row.target_code
+  $targetName = [string]$row.target_name
   $targetUnit = Get-ExtraText $extra 'formula_target_unit'; if ($targetUnit -eq '') { $targetUnit = [string]$row.target_unit }
   $targetUnit = Get-NormalizedLearningFormulaUnit $targetUnit
+  $manualOverride = (Get-ExtraInt $extra 'formula_manual_override' 0) -eq 1
   $operands = @()
   $formulaMethod = Get-LearningMethodPartition ([string]$row.method)
   $formulaPartition = Get-NormalizedLearningSoftwarePartition ([string]$row.software_partition)
   $formulaMethodNo = Get-NormalizedLearningMethodNo ([string]$row.method_no)
   $formulaEntryCode = Get-NormalizedLearningEntryCode ([string]$row.entry_code)
   if ($formulaPartition -eq '' -or $formulaMethodNo -eq '' -or $formulaEntryCode -eq '') { continue }
-  $ruleRaw = $sig + '|' + $kind + ':' + $code.ToUpperInvariant() + '|' + $targetUnit + '|' + $template + '|' + $formulaPartition + '|' + $formulaMethodNo + '|' + $formulaEntryCode
+  $ruleRaw = $sig + '|' + $kind + ':' + $code.ToUpperInvariant() + '|' + (Get-NormalizedPart $targetName) + '|' + $targetUnit + '|' + $template + '|' + $formulaPartition + '|' + $formulaMethodNo + '|' + $formulaEntryCode
   $valid = $true
   for ($i = 0; $i -lt $operandCount; $i++) {
     $prefix = 'formula_operand_' + $i + '_'
@@ -339,9 +341,10 @@ foreach ($row in $log.Rows) {
   # 旧 extra.formula_rule_hash 不含分区与办法号，切换时必须无条件按新布局重算。
   $ruleHash = Get-Md5Hex $ruleRaw
   if (-not $formulas.ContainsKey($ruleHash)) {
-    $formulas[$ruleHash] = @{ Hash = $ruleHash; Sig = $sig; Kind = $kind; Code = $code; Unit = $targetUnit; Template = $template; Method = $formulaMethod; Partition = $formulaPartition; MethodNo = $formulaMethodNo; Entry = $formulaEntryCode; Count = 0; First = $row.occurred_at; Last = $row.occurred_at; Operands = $operands }
+    $formulas[$ruleHash] = @{ Hash = $ruleHash; Sig = $sig; Kind = $kind; Code = $code; Name = $targetName; Unit = $targetUnit; Template = $template; Manual = $manualOverride; Method = $formulaMethod; Partition = $formulaPartition; MethodNo = $formulaMethodNo; Entry = $formulaEntryCode; Count = 0; First = $row.occurred_at; Last = $row.occurred_at; Operands = $operands }
   }
   $f = $formulas[$ruleHash]; $f.Count++
+  if ($manualOverride) { $f.Manual = $true }
   if ($row.occurred_at -lt $f.First) { $f.First = $row.occurred_at }
   if ($row.occurred_at -gt $f.Last) { $f.Last = $row.occurred_at }
 }
@@ -381,13 +384,15 @@ foreach ($m in $maps.Values) {
 Invoke-RecoBulkCopyInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Table $dtMap -TargetTable 'dbo.SignatureBoxMap'
 
 $dtFormula = New-Object System.Data.DataTable
-foreach ($c in 'rule_hash','anchor_signature','target_kind','target_code','target_unit','formula_template','method','software_partition','method_no','entry_code') { [void]$dtFormula.Columns.Add($c, [string]) }
+foreach ($c in 'rule_hash','anchor_signature','target_kind','target_code','target_name','target_unit','formula_template') { [void]$dtFormula.Columns.Add($c, [string]) }
+[void]$dtFormula.Columns.Add('manual_override', [bool])
+foreach ($c in 'method','software_partition','method_no','entry_code') { [void]$dtFormula.Columns.Add($c, [string]) }
 [void]$dtFormula.Columns.Add('sample_count', [int]); [void]$dtFormula.Columns.Add('first_seen', [datetime]); [void]$dtFormula.Columns.Add('last_seen', [datetime])
 $dtOperand = New-Object System.Data.DataTable
 [void]$dtOperand.Columns.Add('rule_hash', [string]); [void]$dtOperand.Columns.Add('operand_index', [int])
 foreach ($c in 'operand_signature','operand_name','operand_unit') { [void]$dtOperand.Columns.Add($c, [string]) }
 foreach ($f in $formulas.Values) {
-  [void]$dtFormula.Rows.Add($f.Hash, $f.Sig, $f.Kind, $f.Code, $f.Unit, $f.Template, $f.Method, $f.Partition, $f.MethodNo, $f.Entry, $f.Count, $f.First, $f.Last)
+  [void]$dtFormula.Rows.Add($f.Hash, $f.Sig, $f.Kind, $f.Code, $f.Name, $f.Unit, $f.Template, [bool]$f.Manual, $f.Method, $f.Partition, $f.MethodNo, $f.Entry, $f.Count, $f.First, $f.Last)
   foreach ($o in $f.Operands) { [void]$dtOperand.Rows.Add($f.Hash, $o.Index, $o.Sig, $o.Name, $o.Unit) }
 }
 [void](Invoke-RecoNonQueryInTransaction -Connection $rebuildConnection -Transaction $rebuildTransaction -Sql "TRUNCATE TABLE dbo.QuantityFormulaOperand; TRUNCATE TABLE dbo.QuantityFormulaRule")

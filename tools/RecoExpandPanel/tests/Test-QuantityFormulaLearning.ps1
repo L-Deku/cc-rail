@@ -24,10 +24,17 @@ function Assert-Unit([string]$From, [string]$To, [bool]$ExpectedOk, [string]$Exp
 }
 Assert-Unit 'm3' '10m3' $true '/10'
 Assert-Unit 'kg' 't' $true '/1000'
+Assert-Unit '顶平米' 'm2' $true ''
+Assert-Unit '100延长米' 'm' $true '*100'
+Assert-Unit 'm3混凝土' '100m3' $true '/100'
+Assert-Unit '混凝土m3' '100m3' $true '/100'
+Assert-Unit '件' '10套' $true '/10'
+Assert-Unit '亩' '公顷' $true '/15'
 Assert-Unit 'm2' 'm3' $false ''
 Assert-Unit '天然密实方' '压实方' $false ''
+Assert-Unit '压实方100m3' 'm3' $false ''
 Assert-Unit '天然密实方' '天然密实方' $true ''
-Write-Host 'PASS 标准同量纲实时换算，跨量纲和不同方态不静默换算'
+Write-Host 'PASS 已确认单位族实时换算，跨量纲和不同方态不静默换算'
 
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('reco-formula-learning-' + [Guid]::NewGuid().ToString('N') + '.xlsx')
 $book = $null
@@ -96,6 +103,11 @@ try {
     $hashB = [string]$formulaHash.Invoke($null, $hashArgs)
     $targetType.GetField('EntryCode', $flags).SetValue($compositeTargets[0], '0101-01')
     if ($hashA -eq $hashB) { throw 'Formula rule hash still uses the legacy group entry instead of the target entry' }
+    $originalTargetName = [string]$targetType.GetField('Name', $flags).GetValue($compositeTargets[0])
+    $targetType.GetField('Name', $flags).SetValue($compositeTargets[0], '另一完整定额身份')
+    $hashByOtherName = [string]$formulaHash.Invoke($null, $hashArgs)
+    $targetType.GetField('Name', $flags).SetValue($compositeTargets[0], $originalTargetName)
+    if ($hashA -eq $hashByOtherName) { throw 'Formula rule hash must isolate the complete target name identity' }
     Write-Host 'PASS 单系数和根数×长度×半径²×3.14统一保存为变量公式'
 
     $readRows = $type.GetMethod('ReadTargetQtyRowsWithChapters', $flags)
@@ -212,6 +224,49 @@ try {
     $exactResult = Invoke-ResolveFormula
     if (-not $exactResult.Ok) { throw "当前办法+专业范围公式未命中：$($exactResult.Args[8])" }
     Write-Host 'PASS 公式按当前办法和专业范围选择，不回退范围外或空条目公式'
+
+    # 人工绑定系数只按“同一工程量名称 + 同一定额完整身份”命中，并优先于普通历史样本。
+    $identitySnapshot = [Activator]::CreateInstance($snapshotType, $true).PSObject.BaseObject
+    $snapshotType.GetField('Method', $flags).SetValue($identitySnapshot, '2024')
+    $snapshotType.GetField('SelectedScope', $flags).SetValue($identitySnapshot, $selectedScope)
+    $identityTarget = [Activator]::CreateInstance($smartTargetType, $true).PSObject.BaseObject
+    foreach ($pair in @{ Kind='quota'; Code='TEST-PILE'; Name='桩身混凝土' }.GetEnumerator()) {
+        $smartTargetType.GetField($pair.Key, $flags).SetValue($identityTarget, $pair.Value)
+    }
+    $identityRules = [Activator]::CreateInstance($ruleListType)
+    foreach ($definition in @(
+        [pscustomobject]@{ Hash='normal-many'; Template='V0*2'; Manual=$false; Samples=100; Seen=[datetime]'2026-01-01' },
+        [pscustomobject]@{ Hash='manual-bound'; Template='V0/100'; Manual=$true; Samples=1; Seen=[datetime]'2026-08-31' }
+    )) {
+        $identityRule = [Activator]::CreateInstance($formulaRuleType, $true).PSObject.BaseObject
+        foreach ($pair in @{
+            RuleHash=$definition.Hash; TargetName='桩身混凝土'; TargetUnit='m3'; Template=$definition.Template;
+            Method='2024'; EntryCode='0101-01'; SampleCount=[int]$definition.Samples;
+            ManualOverride=[bool]$definition.Manual; LastSeen=[datetime]$definition.Seen
+        }.GetEnumerator()) { $formulaRuleType.GetField($pair.Key, $flags).SetValue($identityRule, $pair.Value) }
+        $identityOperand = [Activator]::CreateInstance($formulaOperandType, $true).PSObject.BaseObject
+        foreach ($pair in @{ Index=0; Signature=$anchorSignature; Name='桩根数'; Unit='根' }.GetEnumerator()) {
+            $formulaOperandType.GetField($pair.Key, $flags).SetValue($identityOperand, $pair.Value)
+        }
+        [void]$formulaRuleType.GetField('Operands', $flags).GetValue($identityRule).Add($identityOperand)
+        [void]$identityRules.Add($identityRule)
+    }
+    $identityKeyMethod = $type.GetMethod('BuildSmartFormulaIdentityKey', $flags)
+    $identityKey = [string]$identityKeyMethod.Invoke($null, [object[]]@($anchorSignature, 'quota', 'TEST-PILE', '桩身混凝土', 'm3'))
+    $snapshotType.GetField('FormulaByKey', $flags).GetValue($identitySnapshot).Add($identityKey, $identityRules)
+    $resolveIdentity = $type.GetMethod('TryResolveSmartFormulaForIdentity', $flags)
+    $identityArgs = [object[]]::new(10)
+    $identityArgs[0] = $identitySnapshot; $identityArgs[1] = $targetRows; $identityArgs[2] = $targetRows[0]
+    $identityArgs[3] = $identityTarget; $identityArgs[4] = '桩身混凝土'; $identityArgs[5] = 'm3'
+    $identityArgs[6] = $anchorSignature; $identityArgs[7] = $null; $identityArgs[8] = $null; $identityArgs[9] = $null
+    if (-not [bool]$resolveIdentity.Invoke($null, $identityArgs) -or
+        [string]$identityArgs[8] -ne '10/100' -or
+        -not [bool]$formulaRuleType.GetField('ManualOverride', $flags).GetValue($identityArgs[7])) {
+        throw "人工绑定系数未按完整身份优先命中：quantity='$($identityArgs[8])' issue='$($identityArgs[9])'"
+    }
+    $identityArgs[4] = '另一完整定额身份'; $identityArgs[7] = $null; $identityArgs[8] = $null; $identityArgs[9] = $null
+    if ([bool]$resolveIdentity.Invoke($null, $identityArgs)) { throw '人工绑定系数错误跨定额名称身份复用' }
+    Write-Host 'PASS 人工系数按同一工程量名称和同一定额完整身份隔离，并优先于普通历史样本'
 
     # 原始分片必须先按范围过滤，再在副本上按公式内容合并样本数。
     $fragmentRules = [Activator]::CreateInstance($ruleListType)
@@ -339,15 +394,26 @@ try {
     }
     Write-Host 'PASS 多参数派生公式优先完整求值，缺参数时整组待确认'
 
-    # 当前分区、办法和条目精确命中的可信 SQL 公式优先于标准同量纲换算。
+    # 单参数历史系数不得压过当前 Excel/定额单位的同量纲实时换算。
     $formulaRuleType.GetField('RuleHash', $flags).SetValue($derivedRule, 'linear-rule')
     $formulaRuleType.GetField('Template', $flags).SetValue($derivedRule, 'V0*0.2')
     $derivedOperands.RemoveAt(1)
     $linearPreview = Invoke-DerivedPreview $sameUnitRows
-    if ([string]$linearPreview[0].QuantityText -ne '10*0.2' -or [string]$linearPreview[0].FormulaTemplate -ne 'V0*0.2') {
-        throw '当前办法和条目精确命中的可信 SQL 公式未优先采用。'
+    if ([string]$linearPreview[0].QuantityText -ne '10' -or -not [String]::IsNullOrWhiteSpace([string]$linearPreview[0].FormulaTemplate)) {
+        throw '单参数历史系数仍压过了同量纲实时换算。'
     }
-    Write-Host 'PASS 当前办法和条目精确命中的可信 SQL 公式优先采用'
+    Write-Host 'PASS 同量纲实时换算优先于单参数历史系数'
+
+    # 旧规则已保存为 V0*0.01 时，界面仍按数量级习惯显示 V0/100。
+    $formulaRuleType.GetField('TargetUnit', $flags).SetValue($derivedRule, '100m3')
+    $formulaRuleType.GetField('Template', $flags).SetValue($derivedRule, 'V0*0.01')
+    $formulaOperandType.GetField('Unit', $flags).SetValue($derivedOperands[0], 'm2')
+    $targetRowType.GetField('Unit', $flags).SetValue($sameUnitRows[0], 'm2')
+    $displayArgs = [object[]]::new(5); $displayArgs[0] = $derivedRule; $displayArgs[1] = $sameUnitRows; $displayArgs[2] = $sameUnitRows[0]; $displayArgs[3] = '100m3'; $displayArgs[4] = $null
+    if (-not [bool]$evaluateFormula.Invoke($null, $displayArgs) -or [string]$displayArgs[4] -ne '10/100') {
+        throw "0.01 数量级未按 /100 显示：'$($displayArgs[4])'"
+    }
+    Write-Host 'PASS 旧式 *0.01 在预览中按 /100 显示'
 
     $candidateScoreType = $type.GetNestedType('SmartMapCandidateScore', $nestedFlags)
     $mapEntryType = $type.GetNestedType('SmartMapEntry', $nestedFlags)

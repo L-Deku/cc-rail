@@ -32,9 +32,17 @@ function Assert-Scale([System.Reflection.MethodInfo]$Method, [string]$From, [str
 
 foreach ($case in @(
     @('m', 'km', '/1000'), @('m', 'hm', '/100'), @('km', 'm', '*1000'),
-    @('kg', 't', '/1000'), @('t', 'kg', '*1000'), @('m', '100m', '/100')
+    @('kg', 't', '/1000'), @('t', 'kg', '*1000'), @('m', '100m', '/100'),
+    @('m', '100延长米', '/100'), @('双延米', 'm', ''), @('横延米', 'm', ''),
+    @('单侧米', 'm', ''), @('双侧米', 'm', ''), @('100延米桥长', 'm', '*100'),
+    @('顶平米', 'm2', ''), @('10m2投影面积', 'm2', '*10'),
+    @('m2', '100m2处理面积', '/100'), @('单层10m2', 'm2', '*10'),
+    @('m3湿土', '100m3', '/100'), @('m3土', 'm3', ''), @('混凝土m3', '100m3', '/100'),
+    @('1000m3混凝土', 'm3', '*1000'), @('m3空间', 'm3', ''),
+    @('件', '10套', '/10'), @('亩', 'm2', '*2000/3'), @('m2', '亩', '*3/2000'),
+    @('亩', '公顷', '/15'), @('公顷', '亩', '*15')
 )) { Assert-Scale $standardScale $case[0] $case[1] $true $case[2] }
-foreach ($case in @(@('个', '台'), @('项', '10套'), @('m', 'm2'), @('m', 'kg'))) {
+foreach ($case in @(@('m', 'm2'), @('m', 'kg'), @('压实方', 'm3'), @('压实方100m3', 'm3'), @('天然密实方', 'm3'))) {
     Assert-Scale $standardScale $case[0] $case[1] $false ''
 }
 Write-Host 'PASS 标准同量纲换算自动完成，跨基础单位不静默按1:1'
@@ -95,12 +103,13 @@ function Invoke-SmartUnitPreview([string]$SourceUnit, [string]$QuotaUnit) {
 }
 
 $countPreview = Invoke-SmartUnitPreview '个' '台'
-if ([string]$countPreview.Status -ne '待确认计数单位1:1' -or $countPreview.Selected) {
-    throw "Count-unit preview must start as soft confirmation: '$($countPreview.Status)'"
+if (-not [String]::IsNullOrWhiteSpace([string]$countPreview.Status) -or -not $countPreview.Selected -or
+    [string]$countPreview.QuantityText -ne '100') {
+    throw "Count-unit preview must use the confirmed default family: '$($countPreview.Status)'"
 }
 $sheetPreview = Invoke-SmartUnitPreview '张' '个'
-if ([string]$sheetPreview.Status -ne '待确认计数单位1:1' -or $sheetPreview.Selected) {
-    throw "Sheet-to-piece preview must start as soft confirmation: '$($sheetPreview.Status)'"
+if (-not [String]::IsNullOrWhiteSpace([string]$sheetPreview.Status) -or -not $sheetPreview.Selected) {
+    throw "Sheet-to-piece preview must use the confirmed default family: '$($sheetPreview.Status)'"
 }
 $metricPreview = Invoke-SmartUnitPreview 'm' 'km'
 if ([string]$metricPreview.QuantityText -ne '100/1000' -or -not [String]::IsNullOrWhiteSpace([string]$metricPreview.Status)) {
@@ -111,8 +120,10 @@ if ([string]$crossPreview.Status -ne '缺跨量纲换算系数' -or $crossPrevie
     throw 'Cross-dimension preview without SQL formula must be a hard block'
 }
 $areaPreview = Invoke-SmartUnitPreview '亩' '公顷'
-if ([string]$areaPreview.Status -ne '缺跨量纲换算系数') { throw 'Area units must not enter count-unit 1:1 confirmation' }
-Write-Host 'PASS SmartFill按标准换算、计数软确认和跨量纲硬阻断分流'
+if ([string]$areaPreview.QuantityText -ne '100/15' -or -not [String]::IsNullOrWhiteSpace([string]$areaPreview.Status)) {
+    throw 'Land area units must use the exact default ratio'
+}
+Write-Host 'PASS SmartFill按标准单位族和土地面积精确换算，真正跨量纲仍硬阻断'
 
 function New-PreviewItem([string]$SourceUnit, [string]$QuotaUnit, [string]$Quantity,
     [string]$Status, [bool]$Selected, [int]$Order) {
@@ -120,6 +131,7 @@ function New-PreviewItem([string]$SourceUnit, [string]$QuotaUnit, [string]$Quant
     foreach ($pair in @{
         IsNameDriven=$true; TargetRow=7; GroupOrder=$Order; TargetUnit=$SourceUnit; Unit=$QuotaUnit;
         TargetQuantityText=$Quantity; QuantityText=$Quantity; Status=$Status; Selected=$Selected;
+        TargetFullName='测试工程量'; TargetName='测试工程量';
         QuotaCode=('TEST-' + $Order); SourceName=('测试定额' + $Order);
         ChosenQuotaSeq=[long]1; NeighborSourceQuotaSeq=[long]1; ChosenItemSeq=[long]1
     }.GetEnumerator()) { $previewType.GetField($pair.Key, $flags).SetValue($item, $pair.Value) }
@@ -144,10 +156,22 @@ if (-not [bool]$applyEdited.Invoke($null, @($crossItem, '原数量*0.35'))) {
 }
 if ([string]$crossItem.QuantityText -match '原数量' -or
     [string]$crossItem.Status -ne '缺条目' -or
-    [string]$crossItem.AlignNote -notmatch '数量已人工确认') {
+    [string]$crossItem.AlignNote -notmatch '数量已人工确认' -or -not $crossItem.QuantityEditedByUser) {
     throw "Manual quantity confirmation cleared the wrong state or was not normalized: quantity='$($crossItem.QuantityText)' status='$($crossItem.Status)'"
 }
 Write-Host 'PASS 数量人工兜底只在文本真实变化且结果大于0时解除换算阻断'
+
+$buildManualFactor = Require-Method $panelType 'TryBuildManualQuantityFactor'
+$manualItem = New-PreviewItem 'm3' '100m3' '47200' '' $true 0
+$manualItem.QuantityText = '472'
+$manualItem.QuantityEditedByUser = $true
+$manualArgs = [object[]]::new(4); $manualArgs[0] = $manualItem; $manualArgs[1] = $null; $manualArgs[2] = $null; $manualArgs[3] = $null
+if (-not [bool]$buildManualFactor.Invoke($null, $manualArgs) -or
+    [string]$manualArgs[1] -ne 'V0/100' -or $manualArgs[2].Count -ne 1 -or
+    [string]$manualArgs[2][0].Name -ne '测试工程量' -or [string]$manualArgs[2][0].Unit -ne 'm3') {
+    throw "Manual quantity factor was not bound as V0/100: '$($manualArgs[1])' / '$($manualArgs[3])'"
+}
+Write-Host 'PASS 用户修改数量后可按工程量名称和定额身份推导 V0/100'
 
 $isHard = Require-Method $panelType 'IsNameQuotaHardStatus'
 if ([bool]$isHard.Invoke($null, @('待确认计数单位1:1'))) { throw 'Soft count confirmation was classified as a hard block' }
@@ -231,6 +255,10 @@ Write-Host 'PASS 写入前按组件整组全成或整组不成'
 $panelSource = [IO.File]::ReadAllText((Join-Path $repoRoot 'tools\RecoExpandPanel\TemplateFillPanel.cs'), [Text.Encoding]::UTF8)
 $featureSource = [IO.File]::ReadAllText((Join-Path $repoRoot 'tools\RecoExpandPanel\TemplateFillFeature.cs'), [Text.Encoding]::UTF8)
 if ($panelSource -notmatch 'Cells\["qty"\]\.ReadOnly\s*=\s*false') { throw 'Each component quantity cell must be explicitly editable' }
+if ($panelSource -notmatch '绑定当前数量为单位关系系数' -or
+    $panelSource -notmatch 'RecordMappingGroupsToLearningDb\(groups, "unit-factor-bind"\)') {
+    throw '推荐定额窗口缺少人工单位关系右键入口或SQL学习回流'
+}
 if ($featureSource -notmatch 'IsNameQuotaGroupSafeForWrite') { throw 'ApplyFill is not wired to the component-level safety gate' }
 
 Write-Host 'Test-SmartFillComponentConversion: PASS'
