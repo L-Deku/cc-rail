@@ -309,8 +309,8 @@ namespace RecoNet
             return new ExcelSyncReadContext(readLinks);
         }
 
-        // 名字模式模版生成：与 BuildFillTemplateFromBindings 同源，额外为每行读 Excel 工程量全名；
-        // 表达式(E1+E2)拆操作数各读全名存 Operands，套用时按名字定位、不再绑坐标。
+        // 名字模式模版生成：与 BuildFillTemplateFromBindings 同源，额外为每行读 Excel 工程量主名称；
+        // 表达式(E1+E2)拆操作数各读主名称存 Operands，套用时按名字定位、不再绑坐标。
         private static FillTemplate BuildNameFillTemplateFromBindings(
             Form mainForm, SqlConnection conn, string templateName, string unitNo, string sourceSheet)
         {
@@ -396,27 +396,31 @@ namespace RecoNet
             }
         }
 
-        // 读某表达式首格所在行的【全名】(不截断)。复用绑定阶段的不截断 ReadRowNameAt 重载。
+        // 读某表达式首格所在行的工程量主名称；模板侧与目标侧共用同一拆字段口径。
         private static string ReadFullNameForCell(string workbook, string sheet, string expr,
             Dictionary<string, HashSet<int>> hiddenCache, Dictionary<string, List<ExcelMergedRegion>> mergedCache,
             ExcelSyncReadContext readContext)
         {
-            return ReadRowNameAt(workbook, sheet, expr, hiddenCache, mergedCache, readContext, true);
+            RowNameParts parts;
+            return TryReadRowNamePartsAt(workbook, sheet, expr, hiddenCache, mergedCache, readContext, out parts)
+                ? parts.MainName
+                : "";
         }
 
         private sealed class TargetQtyRow
         {
             public int Row;
-            public string RawName;    // 数量列左侧全名(不截断，供匹配)
+            public string RawName;    // 数量列左侧主名称(不截断，供匹配)
             public string DisplayName;// 数量列左侧截断显示名(3段/15字)，供 UI 显示
             public string NormName;   // 归一化
             public string Chapter;    // 预留：二期章节内就近约束
+            public string ContextLabel; // 本行拆出的章节/段落上文标签，只作审计
             public string Unit;       // 数量列左邻格的单位文本(供单位换算)，读不到为空
             public decimal Quantity;
             public string QuantityText;
         }
 
-        // 读目标 sheet：数量列(qtyColumn) 有数字的行=工程量行；行全名取数量列左侧不截断文本；
+        // 读目标 sheet：数量列(qtyColumn) 有数字的行=工程量行；主名称由左侧结构化片段拆出；
         // 章节锚点行用于给每个工程量行标 Chapter(取其上方最近锚点)。
         private static List<TargetQtyRow> ReadTargetQtyRows(string workbook, string sheet, int qtyColumn)
         {
@@ -425,7 +429,8 @@ namespace RecoNet
         }
 
         private static string ReadTargetUnitNearQuantity(string workbook, string sheet, int row, int qtyColumn,
-            Dictionary<string, HashSet<int>> hiddenCache, ExcelSyncReadContext ctx)
+            Dictionary<string, HashSet<int>> hiddenCache, ExcelSyncReadContext ctx,
+            List<ExcelMergedRegion> mergedRegions)
         {
             if (ctx == null || row <= 0 || qtyColumn <= 1) return "";
 
@@ -436,10 +441,11 @@ namespace RecoNet
                 if (hiddenColumns.Contains(col)) continue;
                 visibleChecked++;
 
-                string address = BuildExcelCellAddress(col, row);
-                string text;
-                string error;
-                if (!ctx.TryReadWorkbookCellValue(workbook, sheet, address, out text, out error)) continue;
+                string sourceKey;
+                int fragmentColumn;
+                bool isVerticalMerge;
+                string text = ReadRowNameCellText(workbook, sheet, col, row, ctx, mergedRegions,
+                    out sourceKey, out fragmentColumn, out isVerticalMerge);
                 if (LooksLikeExcelLinkUnit(text)) return (text ?? "").Trim();
             }
             return "";
@@ -469,26 +475,38 @@ namespace RecoNet
             for (int r = firstRow; r <= lastRow; r++)
             {
                 string qtyAddr = qtyColName + r.ToString(CultureInfo.InvariantCulture);
-                string name = ReadRowNameAt(workbook, sheet, qtyAddr, hiddenCache, mergedCache, ctx, true);
-                if (IsChapterAnchorRaw(name)) { currentChapter = name; continue; }
-                chapterByRow[r] = currentChapter;
-
                 string disp; decimal qty; string err;
                 bool hasQty = TryEvaluateWorkbookExpression(ctx, workbook, sheet, qtyAddr, out disp, out qty, out err, true) && qty != 0m;
-                if (!hasQty || String.IsNullOrWhiteSpace(name)) continue;
+                if (!hasQty)
+                {
+                    string name = ReadRowNameAt(workbook, sheet, qtyAddr, hiddenCache, mergedCache, ctx, true);
+                    if (IsChapterAnchorRaw(name)) { currentChapter = name; continue; }
+                    chapterByRow[r] = currentChapter;
+                    continue;
+                }
 
-                string targetUnit = ReadTargetUnitNearQuantity(workbook, sheet, r, qtyColumn, hiddenCache, ctx);
-                string machineName = StripTrailingQuantityUnit(name, targetUnit);
-                string displayName = StripTrailingQuantityUnit(ReadRowNameAt(workbook, sheet, qtyAddr, hiddenCache, mergedCache, ctx, false), targetUnit);
+                RowNameParts parts;
+                string displayName;
+                if (!TryReadRowNamePartsAt(workbook, sheet, qtyAddr, hiddenCache, mergedCache, ctx,
+                    out parts, out displayName))
+                {
+                    chapterByRow[r] = currentChapter;
+                    continue;
+                }
+                string rowChapter = String.IsNullOrWhiteSpace(parts.ContextLabel) ? currentChapter : parts.ContextLabel;
+                chapterByRow[r] = rowChapter;
+                if (String.IsNullOrWhiteSpace(parts.MainName)) continue;
+                displayName = StripTrailingQuantityUnit(displayName, parts.Unit);
                 TargetQtyRow row = new TargetQtyRow();
                 row.Row = r;
-                row.RawName = machineName;
+                row.RawName = parts.MainName;
                 row.DisplayName = displayName;
-                row.NormName = NormalizeQuantityMatchName(machineName);
-                row.Chapter = currentChapter;
+                row.NormName = NormalizeQuantityMatchName(parts.MainName);
+                row.Chapter = rowChapter;
+                row.ContextLabel = parts.ContextLabel;
                 row.Quantity = qty;
                 row.QuantityText = disp;
-                row.Unit = targetUnit;
+                row.Unit = parts.Unit;
                 result.Add(row);
             }
             return result;
@@ -655,7 +673,7 @@ namespace RecoNet
             return result;
         }
 
-        // 为一个工程量全名返回对应框候选；返回完整目标组，不拆散组件框。
+        // 为一个工程量主名称返回对应框候选；返回完整目标组，不拆散组件框。
         private static List<BoxCandidate> LookupMappingBox(string queryFullName, List<BoxCandidate> boxIndex)
         {
             List<BoxCandidate> result = new List<BoxCandidate>();
@@ -805,6 +823,7 @@ namespace RecoNet
                 item.Unit = trow.Unit;
                 item.TargetName = groupOrder == 0 ? target.DisplayName : "";
                 item.TargetFullName = target.RawName;
+                item.TargetContextLabel = target.ContextLabel;
                 item.TargetChapter = target.Chapter;
                 item.TargetUnit = target.Unit;
                 item.TargetQuantityText = target.QuantityText;
@@ -924,6 +943,7 @@ namespace RecoNet
                     operandOnly.TargetRow = targetRow;
                     operandOnly.TargetName = target.DisplayName;
                     operandOnly.TargetFullName = target.RawName;
+                    operandOnly.TargetContextLabel = target.ContextLabel;
                     operandOnly.TargetChapter = target.Chapter;
                     operandOnly.TargetUnit = target.Unit;
                     operandOnly.TargetQuantityText = target.QuantityText;
@@ -1037,6 +1057,7 @@ namespace RecoNet
                 item.SourceName = "";
                 item.TargetName = tr.DisplayName;
                 item.TargetFullName = tr.RawName;
+                item.TargetContextLabel = tr.ContextLabel;
                 item.TargetChapter = tr.Chapter;
                 item.TargetUnit = tr.Unit;
                 item.TargetQuantityText = tr.QuantityText;
@@ -1355,16 +1376,22 @@ namespace RecoNet
                 .Where(item => item != null && item.IsNameDriven && !String.IsNullOrWhiteSpace(item.QuotaCode))
                 .ToList();
             if (valid.Count == 0) return null;
-            string name = valid.Select(item => String.IsNullOrWhiteSpace(item.TargetFullName) ? item.TargetName : item.TargetFullName)
-                .FirstOrDefault(value => !String.IsNullOrWhiteSpace(value));
+            FillPreviewItem quantityItem = valid.FirstOrDefault(item => !String.IsNullOrWhiteSpace(item.TargetFullName));
+            string name = quantityItem == null ? "" : quantityItem.TargetFullName;
             if (String.IsNullOrWhiteSpace(name)) return null;
             string quantityUnit = valid.Select(item => item.TargetUnit)
                 .FirstOrDefault(unit => !String.IsNullOrWhiteSpace(unit)) ?? "";
-            name = StripTrailingQuantityUnit(name, quantityUnit);
+            string contextLabel = valid.Select(item => item.TargetContextLabel)
+                .FirstOrDefault(value => !String.IsNullOrWhiteSpace(value)) ?? "";
+            if (String.IsNullOrWhiteSpace(contextLabel) && quantityItem != null)
+            {
+                contextLabel = quantityItem.TargetChapter ?? "";
+            }
             MappingFeedbackGroup mappingGroup = new MappingFeedbackGroup
             {
                 QuantityName = name,
                 QuantityUnit = quantityUnit,
+                QuantityContext = contextLabel,
                 EntryCode = valid.Select(item => item.ItemNo).FirstOrDefault(no => !String.IsNullOrWhiteSpace(no)) ?? "",
                 Workbook = sourceWorkbook ?? "",
                 Worksheet = sourceSheet ?? "",

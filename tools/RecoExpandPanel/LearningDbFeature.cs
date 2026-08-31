@@ -219,6 +219,7 @@ namespace RecoNet
                                     if (!String.IsNullOrEmpty(group.BoxId)) flat["box_id"] = group.BoxId;
                                     if (!String.IsNullOrEmpty(group.Expression)) flat["expression"] = group.Expression;
                                     if (!String.IsNullOrEmpty(group.SourceCell)) flat["source_cell"] = group.SourceCell;
+                                    flat["quantity_context"] = group.QuantityContext ?? "";
                                     flat["accepted_count"] = Math.Max(0, group.AcceptedCount).ToString(CultureInfo.InvariantCulture);
                                     flat["corrected_count"] = Math.Max(0, group.CorrectedCount).ToString(CultureInfo.InvariantCulture);
                                     flat["rejected_count"] = Math.Max(0, group.RejectedCount).ToString(CultureInfo.InvariantCulture);
@@ -340,6 +341,7 @@ namespace RecoNet
                                 {
                                     QuantityName = reader.IsDBNull(1) ? "" : reader.GetString(1),
                                     QuantityUnit = reader.IsDBNull(2) ? "" : reader.GetString(2),
+                                    QuantityContext = GetFlat(extra, "quantity_context"),
                                     Method = reader.IsDBNull(3) ? "" : reader.GetString(3),
                                     SoftwarePartition = reader.IsDBNull(4) ? "" : reader.GetString(4),
                                     MethodNo = reader.IsDBNull(5) ? "" : reader.GetString(5),
@@ -827,6 +829,7 @@ namespace RecoNet
                 string prefix = "g" + groupIndex.ToString(CultureInfo.InvariantCulture) + "_";
                 row[prefix + "quantity_name"] = group.QuantityName ?? "";
                 row[prefix + "quantity_unit"] = group.QuantityUnit ?? "";
+                row[prefix + "quantity_context"] = group.QuantityContext ?? "";
                 row[prefix + "method"] = NormalizeLearningDbMethod(group.Method);
                 row[prefix + "software_partition"] = group.SoftwarePartition ?? "";
                 row[prefix + "method_no"] = group.MethodNo ?? "";
@@ -912,6 +915,7 @@ namespace RecoNet
                 {
                     QuantityName = GetFlat(row, prefix + "quantity_name"),
                     QuantityUnit = GetFlat(row, prefix + "quantity_unit"),
+                    QuantityContext = GetFlat(row, prefix + "quantity_context"),
                     Method = NormalizeLearningDbMethod(GetFlat(row, prefix + "method")),
                     SoftwarePartition = GetFlat(row, prefix + "software_partition").Trim(),
                     MethodNo = NormalizeLearningMethodNo(GetFlat(row, prefix + "method_no")),

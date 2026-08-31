@@ -223,7 +223,8 @@ namespace RecoNet
                 }
 
                 int saved = 0;
-                Dictionary<ExcelQuotaLink, string> savedQuantityNames = new Dictionary<ExcelQuotaLink, string>();
+                List<ExcelQuotaLink> pendingLinks = new List<ExcelQuotaLink>();
+                Dictionary<ExcelQuotaLink, string> displayFallbackNames = new Dictionary<ExcelQuotaLink, string>();
                 ExcelLinkStore store = LoadStore(conn);
                 foreach (AiMatchPreviewItem item in accepted)
                 {
@@ -241,11 +242,22 @@ namespace RecoNet
                     if (!String.IsNullOrWhiteSpace(item.QuotaUnit)) item.Link.QuotaUnit = item.QuotaUnit;
                     item.Link.LastStatus = "\u81ea\u52a8\u5339\u914d\u7ed1\u5b9a\uff0c\u7b49\u5f85\u540c\u6b65";
                     item.Link.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
-                    store.Upsert(item.Link);
-                    savedQuantityNames[item.Link] = item.QuantityName ?? "";
+                    pendingLinks.Add(item.Link);
+                    displayFallbackNames[item.Link] = item.QuantityName ?? "";
                     saved++;
                 }
 
+                Dictionary<ExcelQuotaLink, string> savedQuantityNames = FinalizeBoundLinkNames(pendingLinks, false);
+                foreach (ExcelQuotaLink link in pendingLinks)
+                {
+                    string displayFallback;
+                    if (String.IsNullOrWhiteSpace(link.QuantityName) &&
+                        displayFallbackNames.TryGetValue(link, out displayFallback))
+                    {
+                        link.QuantityName = displayFallback;
+                    }
+                    store.Upsert(link);
+                }
                 SaveStore(conn, store);
                 RecordBindingsToLearningDb(savedQuantityNames);
                 EnsureExcelLinkRuntime(mainForm);
@@ -2260,8 +2272,9 @@ namespace RecoNet
             foreach (ExcelQuotaLink link in links ?? new List<ExcelQuotaLink>())
             {
                 if (link == null) continue;
+                string expression = String.IsNullOrWhiteSpace(link.Expression) ? link.CellAddress : link.Expression;
                 readLinks.Add(link);
-                AddQuantityNameReadLinks(readLinks, link.ExcelPath, link.WorksheetName, link.Expression, hiddenColumnCache, mergedRegionCache);
+                AddQuantityNameReadLinks(readLinks, link.ExcelPath, link.WorksheetName, expression, hiddenColumnCache, mergedRegionCache);
             }
             ExcelSyncReadContext readContext = new ExcelSyncReadContext(readLinks);
             foreach (ExcelQuotaLink link in links ?? new List<ExcelQuotaLink>())
@@ -2275,8 +2288,13 @@ namespace RecoNet
                         link.LastSyncValue = displayValue ?? "";
                     }
                 }
-                link.QuantityName = ReadRowNameAt(link.ExcelPath, link.WorksheetName, link.Expression, hiddenColumnCache, mergedRegionCache, readContext);
-                result[link] = ReadRowNameAt(link.ExcelPath, link.WorksheetName, link.Expression, hiddenColumnCache, mergedRegionCache, readContext, true);
+                string expression = String.IsNullOrWhiteSpace(link.Expression) ? link.CellAddress : link.Expression;
+                RowNameParts parts;
+                string displayName;
+                bool read = TryReadRowNamePartsAt(link.ExcelPath, link.WorksheetName, expression,
+                    hiddenColumnCache, mergedRegionCache, readContext, out parts, out displayName);
+                link.QuantityName = displayName;
+                result[link] = read ? parts.MainName : "";
             }
             return result;
         }
@@ -2376,6 +2394,7 @@ namespace RecoNet
         {
             public string QuantityName;
             public string QuantityUnit;   // Excel 侧单位(只作审计/观察，不参与推荐关系主键)
+            public string QuantityContext; // 章节/段落上文标签，只写审计信息，不参与匹配
             public string Method;         // 当前项目编制办法(条目定位)
             public string MethodNo;       // 保留 30号文/101号文估算/2024 的精确办法身份
             public string SoftwarePartition; // 只由当前运行进程决定
@@ -2405,7 +2424,7 @@ namespace RecoNet
             public bool IsCompositeFormula;
         }
 
-        // 绑定Excel工程量成功后，只把“工程量全名 -> 定额编号”写入 RecoLearning。
+        // 绑定Excel工程量成功后，只把“工程量主名称 -> 定额编号”写入 RecoLearning。
         // SQL 学习失败不得影响已经完成的业务绑定，但不会落入任何本地学习文件或队列。
         private static void RecordBindingToLearningDb(ExcelQuotaLink link, string fullQuantityName)
         {
@@ -2471,27 +2490,29 @@ namespace RecoNet
             foreach (BindingFeedbackSource source in sources)
             {
                 List<QuantityFormulaOperandInfo> operands = new List<QuantityFormulaOperandInfo>();
+                List<string> operandContexts = new List<string>();
                 for (int addressIndex = 0; addressIndex < source.Addresses.Count; addressIndex++)
                 {
                     string address = source.Addresses[addressIndex];
-                    CellRef cell;
-                    if (!TryParseCellAddress(address, out cell))
+                    RowNameParts parts;
+                    TryReadRowNamePartsAt(source.Link.ExcelPath, source.Link.WorksheetName, address,
+                        hiddenColumnCache, mergedRegionCache, readContext, out parts);
+                    string name = parts.MainName;
+                    string contextLabel = parts.ContextLabel;
+                    if (String.IsNullOrWhiteSpace(name) && addressIndex == 0)
                     {
-                        operands.Add(null);
-                        continue;
+                        name = (source.FallbackName ?? "").Trim();
                     }
-                    string fullName = ReadRowNameAt(source.Link.ExcelPath, source.Link.WorksheetName, address, hiddenColumnCache, mergedRegionCache, readContext, true);
-                    string unit = ReadTargetUnitNearQuantity(source.Link.ExcelPath, source.Link.WorksheetName, cell.Row, cell.Column, hiddenColumnCache, readContext);
-                    if (String.IsNullOrWhiteSpace(fullName) && addressIndex == 0) fullName = source.FallbackName;
-                    string name = StripTrailingQuantityUnit(fullName, unit);
                     if (String.IsNullOrWhiteSpace(name))
                     {
                         operands.Add(null);
+                        operandContexts.Add(contextLabel ?? "");
                         continue;
                     }
                     string operandSignature = NormalizeForSignature(name) + "|";
                     if (operandSignature.Length > 450) operandSignature = operandSignature.Substring(0, 450);
-                    operands.Add(new QuantityFormulaOperandInfo { Name = name, Unit = unit ?? "", Signature = operandSignature });
+                    operands.Add(new QuantityFormulaOperandInfo { Name = name, Unit = parts.Unit ?? "", Signature = operandSignature });
+                    operandContexts.Add(contextLabel ?? "");
                 }
                 if (operands.Count == 0 ||
                     (source.IsCompositeFormula && operands.Any(operand => operand == null)) ||
@@ -2517,6 +2538,7 @@ namespace RecoNet
                     {
                         QuantityName = anchor.Name,
                         QuantityUnit = anchor.Unit,
+                        QuantityContext = operandIndex < operandContexts.Count ? operandContexts[operandIndex] : "",
                         Method = source.Link.Method ?? "",
                         ProjectId = source.Link.ProjectId ?? "",
                         EntryCode = source.Link.EntryCode ?? "",

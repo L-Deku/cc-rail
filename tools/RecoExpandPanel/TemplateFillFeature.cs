@@ -32,14 +32,14 @@ namespace RecoNet
             public string SourceName;    // 源行项目名（供预览核对）
             public string MatchChapter;  // 名字模式：源 Excel 行所属章节（用于章节内优先匹配）
             public long SourceQuotaSeq;  // 源定额序号（写入时直接复制该行）
-            public string MatchName;      // 名字模式：该定额对应的 Excel 工程量【全名】(不截断)
+            public string MatchName;      // 名字模式：该定额对应的 Excel 工程量主名称(不截断)
             public List<FillOperand> Operands;  // 名字模式且为表达式(如 E1+E2)时的操作数；否则 null
             public string Origin;         // generated=源单元生成；manual=名字驱动右键新增/重绑
         }
 
         public sealed class FillOperand
         {
-            public string Name;     // 该操作数所在行的工程量全名
+            public string Name;     // 该操作数所在行的工程量主名称
             public string Op;       // 与前一操作数的连接符："+" / "-" / "*" / "/"；首个为 "+"
             public string Literal;  // 该操作数是纯字面量(如 *1.5 的 1.5)时填此，Name 为空
         }
@@ -98,7 +98,8 @@ namespace RecoNet
             public string Adjust;
             public string SourceName;
             public string TargetName;
-            public string TargetFullName;  // 目标行工程量全名(不截断)，供手挂候选排序
+            public string TargetFullName;  // 目标行工程量主名称，作为匹配键并供手挂候选排序
+            public string TargetContextLabel; // 目标行章节/段落上文标签，只作审计
             public string TargetChapter;   // 目标 Excel 行所属章节（名字驱动回写模板）
             public string TargetUnit;         // 目标行 Excel 侧单位文本(数量列左邻格)，供单位换算
             public string TargetQuantityText; // 目标行原始数量文本(未加换算后缀)，重绑时的换算基数
@@ -688,6 +689,172 @@ namespace RecoNet
         private const int RowNameMinFragments = 3;
         private const int RowNameMaxFragments = 4;
 
+        private sealed class RowNameFragment
+        {
+            public int Column;
+            public string Text;
+            public bool IsVerticalMerge;
+        }
+
+        private sealed class RowNameParts
+        {
+            public string MainName;
+            public string ContextLabel;
+            public string Unit;
+        }
+
+        private static bool TryResolveRowNameAnchor(string workbook, string sheet, string expr,
+            Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache,
+            out CellRef anchor, out List<ExcelMergedRegion> mergedRegions)
+        {
+            anchor = new CellRef();
+            mergedRegions = GetSavedMergedRegionsCached(workbook, sheet, mergedRegionCache);
+            string normalizedExpression = NormalizeExpressionMergedAnchors(expr, mergedRegions);
+            string first = ExtractFirstCellAddress(normalizedExpression);
+            return !String.IsNullOrEmpty(first) && TryParseCellAddress(first, out anchor);
+        }
+
+        private static List<RowNameFragment> CollectRowNameFragmentsCore(string workbook, string sheet, CellRef anchor,
+            Dictionary<string, HashSet<int>> hiddenColumnCache,
+            List<ExcelMergedRegion> mergedRegions,
+            ExcelSyncReadContext readContext)
+        {
+            HashSet<int> hiddenColumns = GetSavedHiddenColumns(workbook, sheet, hiddenColumnCache);
+            List<RowNameFragment> fragments = new List<RowNameFragment>();
+            HashSet<string> sourceKeys = new HashSet<string>(StringComparer.Ordinal);
+            for (int col = 1; col < anchor.Column; col++)
+            {
+                if (hiddenColumns.Contains(col)) continue;
+
+                string sourceKey;
+                int fragmentColumn;
+                bool isVerticalMerge;
+                string text = ReadRowNameCellText(workbook, sheet, col, anchor.Row, readContext, mergedRegions,
+                    out sourceKey, out fragmentColumn, out isVerticalMerge);
+                if (String.IsNullOrWhiteSpace(text) || !sourceKeys.Add(sourceKey)) continue;
+
+                fragments.Add(new RowNameFragment
+                {
+                    Column = fragmentColumn,
+                    Text = text.Trim(),
+                    IsVerticalMerge = isVerticalMerge
+                });
+            }
+            return fragments.OrderBy(fragment => fragment.Column).ToList();
+        }
+
+        // 收集数量列左侧全部可见非数字片段；取舍由调用方决定。
+        private static List<RowNameFragment> CollectRowNameFragments(string workbook, string sheet, string expr,
+            Dictionary<string, HashSet<int>> hiddenColumnCache,
+            Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache,
+            ExcelSyncReadContext readContext)
+        {
+            try
+            {
+                CellRef cr;
+                List<ExcelMergedRegion> mergedRegions;
+                if (!TryResolveRowNameAnchor(workbook, sheet, expr, mergedRegionCache, out cr, out mergedRegions))
+                    return new List<RowNameFragment>();
+                return CollectRowNameFragmentsCore(workbook, sheet, cr, hiddenColumnCache, mergedRegions, readContext);
+            }
+            catch
+            {
+                return new List<RowNameFragment>();
+            }
+        }
+
+        private static RowNameParts SplitRowNameParts(List<RowNameFragment> fragments, string unit)
+        {
+            RowNameParts result = new RowNameParts { MainName = "", ContextLabel = "", Unit = "" };
+            List<RowNameFragment> ordered = (fragments ?? new List<RowNameFragment>())
+                .Where(fragment => fragment != null && !String.IsNullOrWhiteSpace(fragment.Text))
+                .OrderBy(fragment => fragment.Column)
+                .ToList();
+            if (ordered.Count == 0) return result;
+
+            result.Unit = unit ?? "";
+            if (!String.IsNullOrWhiteSpace(unit) &&
+                String.Equals(ordered[ordered.Count - 1].Text.Trim(), unit.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                ordered.RemoveAt(ordered.Count - 1);
+            }
+
+            List<RowNameFragment> context = ordered
+                .Where(fragment => fragment.IsVerticalMerge || IsChapterAnchorRaw(fragment.Text))
+                .ToList();
+            List<RowNameFragment> main = ordered
+                .Where(fragment => !fragment.IsVerticalMerge && !IsChapterAnchorRaw(fragment.Text))
+                .ToList();
+            if (main.Count == 0 && context.Count > 0)
+            {
+                RowNameFragment rescued = context.OrderByDescending(fragment => fragment.Column).First();
+                context.Remove(rescued);
+                main.Add(rescued);
+            }
+
+            result.MainName = String.Join(" ", main.OrderBy(fragment => fragment.Column)
+                .Select(fragment => fragment.Text.Trim()).ToArray()).Trim();
+            result.ContextLabel = String.Join(" ", context.OrderBy(fragment => fragment.Column)
+                .Select(fragment => fragment.Text.Trim()).ToArray()).Trim();
+            return result;
+        }
+
+        private static bool TryReadRowNamePartsAt(string workbook, string sheet, string expr,
+            Dictionary<string, HashSet<int>> hiddenColumnCache,
+            Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache,
+            ExcelSyncReadContext readContext,
+            out RowNameParts parts)
+        {
+            string ignoredDisplayName;
+            return TryReadRowNamePartsAt(workbook, sheet, expr, hiddenColumnCache, mergedRegionCache,
+                readContext, out parts, out ignoredDisplayName);
+        }
+
+        private static bool TryReadRowNamePartsAt(string workbook, string sheet, string expr,
+            Dictionary<string, HashSet<int>> hiddenColumnCache,
+            Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache,
+            ExcelSyncReadContext readContext,
+            out RowNameParts parts,
+            out string displayName)
+        {
+            parts = new RowNameParts { MainName = "", ContextLabel = "", Unit = "" };
+            displayName = "";
+            try
+            {
+                CellRef anchor;
+                List<ExcelMergedRegion> mergedRegions;
+                if (!TryResolveRowNameAnchor(workbook, sheet, expr, mergedRegionCache, out anchor, out mergedRegions))
+                    return false;
+                string unit = ReadTargetUnitNearQuantity(workbook, sheet, anchor.Row, anchor.Column,
+                    hiddenColumnCache, readContext, mergedRegions);
+                List<RowNameFragment> fragments = CollectRowNameFragmentsCore(workbook, sheet, anchor,
+                    hiddenColumnCache, mergedRegions, readContext);
+                parts = SplitRowNameParts(fragments, unit);
+                displayName = JoinRowNameFragments(fragments, anchor.Column, false);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string JoinRowNameFragments(List<RowNameFragment> fragments, int quantityColumn, bool fullText)
+        {
+            List<RowNameFragment> kept = new List<RowNameFragment>();
+            int totalLength = 0;
+            foreach (RowNameFragment fragment in (fragments ?? new List<RowNameFragment>())
+                .OrderBy(f => Math.Abs(f.Column - quantityColumn))
+                .ThenBy(f => f.Column))
+            {
+                if (!fullText && kept.Count >= RowNameMaxFragments) break;
+                kept.Add(fragment);
+                totalLength += fragment.Text.Length;
+                if (!fullText && kept.Count >= RowNameMinFragments && totalLength >= RowNameMinLength) break;
+            }
+            return String.Join(" ", kept.OrderBy(f => f.Column).Select(f => f.Text).ToArray()).Trim();
+        }
+
         // 读某表达式首个单元格所在行的名称（该格列前的非数字文本拼接），仅供人工核对。
         // 空格只从包含它的真实合并区域锚点回填；就近优先默认取3段，不足3段时有几段取几段；
         // 取满3段仍不足15字时再补1段，同一合并区域只拼一次。
@@ -701,65 +868,24 @@ namespace RecoNet
         {
             try
             {
-                HashSet<int> hiddenColumns = GetSavedHiddenColumns(workbook, sheet, hiddenColumnCache);
-                List<ExcelMergedRegion> mergedRegions = GetSavedMergedRegionsCached(workbook, sheet, mergedRegionCache);
-                expr = NormalizeExpressionMergedAnchors(expr, mergedRegions);
-                string first = ExtractFirstCellAddress(expr);
                 CellRef cr;
-                if (String.IsNullOrEmpty(first) || !TryParseCellAddress(first, out cr)) return "";
-                List<KeyValuePair<int, string>> fragments = new List<KeyValuePair<int, string>>();
-                HashSet<string> sourceKeys = new HashSet<string>(StringComparer.Ordinal);
-                for (int col = 1; col < cr.Column; col++)
-                {
-                    if (hiddenColumns.Contains(col))
-                    {
-                        continue;
-                    }
-
-                    string sourceKey;
-                    int fragmentColumn;
-                    string text = ReadRowNameCellText(workbook, sheet, col, cr.Row, readContext, mergedRegions, out sourceKey, out fragmentColumn);
-                    if (String.IsNullOrWhiteSpace(text))
-                    {
-                        continue;
-                    }
-
-                    if (sourceKeys.Add(sourceKey))
-                    {
-                        fragments.Add(new KeyValuePair<int, string>(fragmentColumn, text.Trim()));
-                    }
-                }
-
-                List<KeyValuePair<int, string>> kept = new List<KeyValuePair<int, string>>();
-                int totalLength = 0;
-                foreach (KeyValuePair<int, string> fragment in fragments
-                    .OrderBy(f => Math.Abs(f.Key - cr.Column))
-                    .ThenBy(f => f.Key))
-                {
-                    if (!fullText && kept.Count >= RowNameMaxFragments)
-                    {
-                        break;
-                    }
-
-                    kept.Add(fragment);
-                    totalLength += fragment.Value.Length;
-                    if (!fullText && kept.Count >= RowNameMinFragments && totalLength >= RowNameMinLength)
-                    {
-                        break;
-                    }
-                }
-
-                return String.Join(" ", kept.OrderBy(f => f.Key).Select(f => f.Value).ToArray()).Trim();
+                List<ExcelMergedRegion> mergedRegions;
+                if (!TryResolveRowNameAnchor(workbook, sheet, expr, mergedRegionCache, out cr, out mergedRegions))
+                    return "";
+                List<RowNameFragment> fragments = CollectRowNameFragmentsCore(workbook, sheet, cr,
+                    hiddenColumnCache, mergedRegions, readContext);
+                return JoinRowNameFragments(fragments, cr.Column, fullText);
             }
             catch { return ""; }
         }
 
         // 本格文字；空格时只从包含它的真实合并区域锚点回填，数字不算名称。
         // fragmentColumn 统一取合并区域锚点列，保证名称取舍顺序稳定。
-        private static string ReadRowNameCellText(string workbook, string sheet, int col, int row, ExcelSyncReadContext readContext, List<ExcelMergedRegion> mergedRegions, out string sourceKey, out int fragmentColumn)
+        private static string ReadRowNameCellText(string workbook, string sheet, int col, int row, ExcelSyncReadContext readContext, List<ExcelMergedRegion> mergedRegions, out string sourceKey, out int fragmentColumn, out bool isVerticalMerge)
         {
             sourceKey = col.ToString(CultureInfo.InvariantCulture) + "|" + row.ToString(CultureInfo.InvariantCulture);
             fragmentColumn = col;
+            isVerticalMerge = false;
             if (readContext == null)
             {
                 return "";
@@ -782,6 +908,7 @@ namespace RecoNet
                 {
                     sourceKey = BuildExcelMergedRegionKey(region);
                     fragmentColumn = region.FirstColumn;
+                    isVerticalMerge = region.LastRow > region.FirstRow;
                 }
 
                 return val;
@@ -807,6 +934,7 @@ namespace RecoNet
 
             sourceKey = BuildExcelMergedRegionKey(region);
             fragmentColumn = region.FirstColumn;
+            isVerticalMerge = region.LastRow > region.FirstRow;
             return val;
         }
 
