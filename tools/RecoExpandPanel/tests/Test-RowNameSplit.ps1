@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ExpandDll = $env:RECO_EXPAND_DLL
 )
 
@@ -62,6 +62,7 @@ $cases = @(
     [pscustomobject]@{ Name='single'; Unit=''; Defs=@([pscustomobject]@{C=1;T='Independent';V=$false}); Main='Independent'; Context=''; ExpectedUnit='' },
     [pscustomobject]@{ Name='all-vertical'; Unit=''; Defs=@([pscustomobject]@{C=1;T='Left';V=$true},[pscustomobject]@{C=3;T='Right';V=$true},[pscustomobject]@{C=2;T='Middle';V=$true}); Main='Right'; Context='Left Middle'; ExpectedUnit='' },
     [pscustomobject]@{ Name='blank-filter'; Unit='kg'; Defs=@([pscustomobject]@{C=1;T='  ';V=$false},[pscustomobject]@{C=2;T='Steel';V=$false},[pscustomobject]@{C=3;T='kg';V=$false}); Main='Steel'; Context=''; ExpectedUnit='kg' },
+    [pscustomobject]@{ Name='top-times'; Unit='顶次'; Defs=@([pscustomobject]@{C=1;T='铺设顶进导轨及抱枕';V=$false},[pscustomobject]@{C=2;T='顶次';V=$false}); Main='铺设顶进导轨及抱枕'; Context=''; ExpectedUnit='顶次' },
     [pscustomobject]@{ Name='empty'; Unit='m'; Defs=@(); Main=''; Context=''; ExpectedUnit='' }
 )
 foreach ($case in $cases) {

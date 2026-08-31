@@ -48,7 +48,7 @@ foreach ($case in @(@('m', 'm2'), @('m', 'kg'), @('压实方', 'm3'), @('压实�
 Write-Host 'PASS 标准同量纲换算自动完成，跨基础单位不静默按1:1'
 
 foreach ($case in @(
-    @('个', '台', ''), @('张', '个', ''), @('项', '10套', '/10'), @('10处', '台', '*10'), @('100个', '10套', '*10')
+    @('个', '台', ''), @('张', '个', ''), @('顶次', '件', ''), @('项', '10套', '/10'), @('10处', '台', '*10'), @('100个', '10套', '*10')
 )) { Assert-Scale $countScale $case[0] $case[1] $true $case[2] }
 foreach ($case in @(@('m', 'kg'), @('m', 'm2'), @('亩', '公顷'))) {
     Assert-Scale $countScale $case[0] $case[1] $false ''
@@ -173,6 +173,17 @@ if (-not [bool]$buildManualFactor.Invoke($null, $manualArgs) -or
 }
 Write-Host 'PASS 用户修改数量后可按工程量名称和定额身份推导 V0/100'
 
+$oneToOneItem = New-PreviewItem '顶次' '单孔每处' '1' '' $true 0
+$oneToOneItem.QuantityText = '1*1'
+$oneToOneItem.QuantityEditedByUser = $true
+$oneToOneArgs = [object[]]::new(4); $oneToOneArgs[0] = $oneToOneItem; $oneToOneArgs[1] = $null; $oneToOneArgs[2] = $null; $oneToOneArgs[3] = $null
+if (-not [bool]$buildManualFactor.Invoke($null, $oneToOneArgs) -or
+    [string]$oneToOneArgs[1] -ne 'V0' -or $oneToOneArgs[2].Count -ne 1 -or
+    [string]$oneToOneArgs[2][0].Unit -ne '顶次') {
+    throw "A manually confirmed 1:1 cross-unit relation must be stored as V0: '$($oneToOneArgs[1])' / '$($oneToOneArgs[3])'"
+}
+Write-Host 'PASS 用户明确修改为等值表达式时可绑定跨单位 V0 关系'
+
 $isHard = Require-Method $panelType 'IsNameQuotaHardStatus'
 if ([bool]$isHard.Invoke($null, @('待确认计数单位1:1'))) { throw 'Soft count confirmation was classified as a hard block' }
 foreach ($status in @('缺跨量纲换算系数', '缺当前定额单位', '缺条目', '公式参数缺失或歧义', '未知错误')) {
@@ -258,6 +269,9 @@ if ($panelSource -notmatch 'Cells\["qty"\]\.ReadOnly\s*=\s*false') { throw 'Each
 if ($panelSource -notmatch '绑定当前数量为单位关系系数' -or
     $panelSource -notmatch 'RecordMappingGroupsToLearningDb\(groups, "unit-factor-bind"\)') {
     throw '推荐定额窗口缺少人工单位关系右键入口或SQL学习回流'
+}
+if ($panelSource -notmatch 'gridMenu\.Opening[\s\S]*ApplyEditedNameQuotaQuantity\(cur,[\s\S]*Cells\["qty"\]\.Value') {
+    throw '右键菜单判断人工系数前没有同步数量编辑框的当前值'
 }
 if ($featureSource -notmatch 'IsNameQuotaGroupSafeForWrite') { throw 'ApplyFill is not wired to the component-level safety gate' }
 

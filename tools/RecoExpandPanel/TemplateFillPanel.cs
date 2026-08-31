@@ -393,7 +393,10 @@ namespace RecoNet
                 gridMenu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e)
                 {
                     grid.EndEdit();
-                    FillPreviewItem cur = grid.SelectedRows.Count > 0 ? grid.SelectedRows[0].Tag as FillPreviewItem : null;
+                    DataGridViewRow selectedRow = grid.SelectedRows.Count > 0 ? grid.SelectedRows[0] : null;
+                    FillPreviewItem cur = selectedRow == null ? null : selectedRow.Tag as FillPreviewItem;
+                    if (cur != null)
+                        ApplyEditedNameQuotaQuantity(cur, Convert.ToString(selectedRow.Cells["qty"].Value).Trim());
                     miBindSelected.Enabled = cur != null && cur.IsNameDriven;
                     string ignoredFormula;
                     List<QuantityFormulaOperandInfo> ignoredOperands;
@@ -1779,11 +1782,6 @@ namespace RecoNet
                     return false;
                 }
                 decimal factor = editedQuantity / sourceQuantity;
-                if (factor == 1m)
-                {
-                    error = "修改后的数量与原数量相同，不需要绑定系数。";
-                    return false;
-                }
                 formulaTemplate = "V0" + FormatExcelLinkScaleSuffix(factor);
                 string signature = NormalizeForSignature(quantityName) + "|";
                 if (signature.Length > 450) signature = signature.Substring(0, 450);
@@ -1891,15 +1889,18 @@ namespace RecoNet
             {
                 if (ownerGrid == null || columnIndex < 0 || columnIndex >= ownerGrid.Columns.Count ||
                     startRow < 0 || endRow < startRow || endRow >= ownerGrid.Rows.Count) return Rectangle.Empty;
-                Rectangle result = Rectangle.Empty;
-                for (int i = startRow; i <= endRow; i++)
-                {
-                    if (!ownerGrid.Rows[i].Displayed) continue;
-                    Rectangle cellBounds = ownerGrid.GetCellDisplayRectangle(columnIndex, i, true);
-                    if (cellBounds.Width <= 0 || cellBounds.Height <= 0) continue;
-                    result = result.IsEmpty ? cellBounds : Rectangle.Union(result, cellBounds);
-                }
-                if (result.IsEmpty) return result;
+                // All member cells must paint against the same full-group rectangle. Building the
+                // rectangle from each row's transient Displayed state makes scroll-time paint events
+                // disagree about text wrapping, leaving repeated fragments until the next click.
+                Rectangle firstBounds = ownerGrid.GetCellDisplayRectangle(columnIndex, startRow, false);
+                Rectangle lastBounds = ownerGrid.GetCellDisplayRectangle(columnIndex, endRow, false);
+                if (firstBounds.Width <= 0 || firstBounds.Height <= 0 ||
+                    lastBounds.Width <= 0 || lastBounds.Height <= 0) return Rectangle.Empty;
+                Rectangle result = Rectangle.FromLTRB(
+                    Math.Min(firstBounds.Left, lastBounds.Left),
+                    Math.Min(firstBounds.Top, lastBounds.Top),
+                    Math.Max(firstBounds.Right, lastBounds.Right),
+                    Math.Max(firstBounds.Bottom, lastBounds.Bottom));
 
                 Rectangle dataBounds = ownerGrid.ClientRectangle;
                 if (ownerGrid.ColumnHeadersVisible)

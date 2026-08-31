@@ -878,6 +878,13 @@ try {
         if (-not $panelSource.Contains('grid.InvalidateColumn(grid.Columns["tname"].Index);')) {
             throw '选择成员行后没有让合并工程量名整列失效重绘'
         }
+        $mergedBoundsSource = [regex]::Match($panelSource,
+            'private static Rectangle GetVisibleMergedTargetNameBounds[\s\S]*?\n\s*}\r?\n\r?\n\s*private static void DrawMergedTargetNameTextForCell').Value
+        if ($mergedBoundsSource -match '\.Displayed' -or
+            $mergedBoundsSource -notmatch 'GetCellDisplayRectangle\(columnIndex, startRow, false\)' -or
+            $mergedBoundsSource -notmatch 'GetCellDisplayRectangle\(columnIndex, endRow, false\)') {
+            throw '合并工程量名仍按各成员行的瞬时可见状态计算，滚动重绘会产生重叠'
+        }
         $paintBitmap = New-Object System.Drawing.Bitmap 140, 40
         $paintGraphics = [System.Drawing.Graphics]::FromImage($paintBitmap)
         try {
