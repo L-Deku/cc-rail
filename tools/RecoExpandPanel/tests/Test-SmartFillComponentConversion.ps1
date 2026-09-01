@@ -273,6 +273,45 @@ if ($panelSource -notmatch '绑定当前数量为单位关系系数' -or
 if ($panelSource -notmatch 'gridMenu\.Opening[\s\S]*ApplyEditedNameQuotaQuantity\(cur,[\s\S]*Cells\["qty"\]\.Value') {
     throw '右键菜单判断人工系数前没有同步数量编辑框的当前值'
 }
+
+$scopeType = $type.GetNestedType('SmartLearningScope', $nestedFlags)
+$resolveFactorEntry = Require-Method $panelType 'TryResolveManualQuantityFactorEntry'
+$scope = [Activator]::CreateInstance($scopeType, $true).PSObject.BaseObject
+$scopeType.GetField('Kind', $flags).SetValue($scope, 'Entry')
+$scopeType.GetField('EntryCode', $flags).SetValue($scope, '03')
+$scopeType.GetField('DisplayName', $flags).SetValue($scope, '桥涵')
+$factorItem = New-PreviewItem '项次' '单孔每处' '1' '' $true 0
+$entryArgs = [object[]]::new(5)
+$entryArgs[0] = $factorItem
+$entryArgs[1] = $scope
+$entryArgs[2] = $null
+$entryArgs[3] = $null
+$entryArgs[4] = $null
+if (-not [bool]$resolveFactorEntry.Invoke($null, $entryArgs) -or [string]$entryArgs[2] -ne '03') {
+    throw "人工系数没有使用当前推荐学习库专业范围补齐条目证据：code='$($entryArgs[2])' error='$($entryArgs[4])'"
+}
+$factorItem.ChosenItemNo = '0309-01-01-01-03-01'
+$entryArgs[2] = $null; $entryArgs[3] = $null; $entryArgs[4] = $null
+if (-not [bool]$resolveFactorEntry.Invoke($null, $entryArgs) -or
+    [string]$entryArgs[2] -ne '0309-01-01-01-03-01') {
+    throw '人工系数没有优先保留目标自身的精确条目证据'
+}
+
+$feedbackGroupType = $type.GetNestedType('MappingFeedbackGroup', $nestedFlags)
+$feedbackListType = [Collections.Generic.List``1].MakeGenericType($feedbackGroupType)
+$feedbackGroups = [Activator]::CreateInstance($feedbackListType).PSObject.BaseObject
+[void]$feedbackGroups.Add([Activator]::CreateInstance($feedbackGroupType, $true).PSObject.BaseObject)
+$rememberDurable = Require-Method $type 'RememberLearningDbDurableResult'
+$consumeDurable = Require-Method $type 'ConsumeLearningDbDurableResult'
+$rememberArgs = [object[]]::new(3)
+$rememberArgs[0] = 'unit-factor-bind'; $rememberArgs[1] = $feedbackGroups; $rememberArgs[2] = $true
+[void]$rememberDurable.Invoke($null, $rememberArgs)
+$consumeArgs = [object[]]::new(1); $consumeArgs[0] = $feedbackGroups
+if (-not [bool]$consumeDurable.Invoke($null, $consumeArgs)) {
+    throw 'unit-factor-bind 的 SQL 已提交结果没有传回推荐窗口'
+}
+Write-Host 'PASS 人工系数补齐专业条目证据并消费 SQL 持久化结果'
+
 if ($featureSource -notmatch 'IsNameQuotaGroupSafeForWrite') { throw 'ApplyFill is not wired to the component-level safety gate' }
 
 Write-Host 'Test-SmartFillComponentConversion: PASS'

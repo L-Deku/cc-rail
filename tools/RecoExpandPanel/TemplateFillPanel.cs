@@ -379,9 +379,13 @@ namespace RecoNet
                 grid.Scroll += delegate
                 {
                     // Scrolling can recycle cells before the group leader/tail becomes Displayed.
-                    // Repaint the whole name column after the viewport settles, just like selection changes.
+                    // Paint the custom-merged name column before the scroll event returns so its text
+                    // moves in the same frame as the standard cells instead of lagging one message behind.
                     if (grid.Columns.Contains("tname"))
+                    {
                         grid.InvalidateColumn(grid.Columns["tname"].Index);
+                        grid.Update();
+                    }
                 };
 
                 ContextMenuStrip gridMenu = new ContextMenuStrip();
@@ -1802,6 +1806,40 @@ namespace RecoNet
                 return true;
             }
 
+            private static bool TryResolveManualQuantityFactorEntry(FillPreviewItem item, SmartLearningScope scope,
+                out string entryCode, out string entryName, out string error)
+            {
+                entryCode = "";
+                entryName = "";
+                error = "";
+                if (item == null)
+                {
+                    error = "当前行缺少可持久化的条目证据。";
+                    return false;
+                }
+
+                string itemEntryCode = !String.IsNullOrWhiteSpace(item.ChosenItemNo)
+                    ? item.ChosenItemNo.Trim()
+                    : (item.ItemNo ?? "").Trim();
+                if (IsSmartClassifiedEntryCode(itemEntryCode))
+                {
+                    entryCode = itemEntryCode;
+                    entryName = (item.ChosenItemName ?? "").Trim();
+                    return true;
+                }
+
+                if (scope != null && String.Equals(scope.Kind, "Entry", StringComparison.OrdinalIgnoreCase) &&
+                    IsSmartClassifiedEntryCode(scope.EntryCode))
+                {
+                    entryCode = scope.EntryCode.Trim();
+                    entryName = (scope.DisplayName ?? "").Trim();
+                    return true;
+                }
+
+                error = "请先在“推荐学习库”选择具体专业范围，再保存单位关系系数。";
+                return false;
+            }
+
             private void OnBindEditedQuantityFactor()
             {
                 try
@@ -1817,6 +1855,15 @@ namespace RecoNet
                     List<QuantityFormulaOperandInfo> operands;
                     string error;
                     if (!TryBuildManualQuantityFactor(item, out formulaTemplate, out operands, out error))
+                    {
+                        MessageBox.Show(this, error, "绑定单位关系系数", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    string formulaEntryCode;
+                    string formulaEntryName;
+                    if (!TryResolveManualQuantityFactorEntry(item, selectedSmartLearningScope,
+                        out formulaEntryCode, out formulaEntryName, out error))
                     {
                         MessageBox.Show(this, error, "绑定单位关系系数", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return;
@@ -1845,6 +1892,24 @@ namespace RecoNet
                             MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return;
                     }
+
+                    string factorTargetKey = BuildLearningTargetIdentityKey(
+                        ResolveLearningTargetKind(item.TargetKind, item.QuotaCode), item.QuotaCode,
+                        item.SourceName, item.Unit);
+                    MappingFeedbackTarget factorTarget = feedback.Targets.FirstOrDefault(target => target != null &&
+                        String.Equals(BuildLearningTargetIdentityKey(target.Kind, target.Code, target.Name, target.Unit),
+                            factorTargetKey, StringComparison.OrdinalIgnoreCase));
+                    if (factorTarget == null)
+                    {
+                        item.FormulaTemplate = oldTemplate;
+                        item.FormulaOperands = oldOperands;
+                        item.ManualFormulaOverride = oldManualOverride;
+                        MessageBox.Show(this, "当前行缺少可持久化的定额完整身份。", "绑定单位关系系数",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    factorTarget.EntryCode = formulaEntryCode;
+                    if (!String.IsNullOrWhiteSpace(formulaEntryName)) factorTarget.EntryName = formulaEntryName;
 
                     List<MappingFeedbackGroup> groups = new List<MappingFeedbackGroup> { feedback };
                     RecordMappingGroupsToLearningDb(groups, "unit-factor-bind");

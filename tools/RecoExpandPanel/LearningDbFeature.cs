@@ -1104,7 +1104,8 @@ namespace RecoNet
         {
             if (!String.Equals(source ?? "", "template-right-click", StringComparison.OrdinalIgnoreCase) &&
                 !String.Equals(source ?? "", "name-match", StringComparison.OrdinalIgnoreCase) &&
-                !String.Equals(source ?? "", "apply-accept", StringComparison.OrdinalIgnoreCase)) return;
+                !String.Equals(source ?? "", "apply-accept", StringComparison.OrdinalIgnoreCase) &&
+                !String.Equals(source ?? "", "unit-factor-bind", StringComparison.OrdinalIgnoreCase)) return;
             lastLearningDbResultGroups = groups;
             lastLearningDbResultDurable = durable;
         }
