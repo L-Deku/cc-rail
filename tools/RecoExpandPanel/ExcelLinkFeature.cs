@@ -665,7 +665,7 @@ namespace RecoNet
                 case "\u53f0": case "\u5b54": case "\u5957": case "\u4e2a": case "\u5757":
                 case "\u7247": case "\u5f20": case "\u6bb5": case "\u773c": case "\u53e3": case "\u69fd":
                 case "\u6a18": case "\u95f4": case "\u68f5": case "\u682a": case "\u4ef6":
-                case "\u6b21": case "\u9876\u6b21":
+                case "\u6b21": case "\u9876\u6b21": case "\u9879\u6b21":
                     return true;
                 default:
                     return false;
@@ -1181,7 +1181,7 @@ namespace RecoNet
             {
                 "\u5904", "\u5ea7", "\u7ec4", "\u6839", "\u9879", "\u53f0", "\u5b54", "\u5957",
                 "\u4e2a", "\u5757", "\u7247", "\u6bb5", "\u773c", "\u53e3", "\u69c0", "\u6a18", "\u95f4",
-                "\u68f5", "\u682a", "\u4ef6", "\u6b21", "\u9876\u6b21"
+                "\u68f5", "\u682a", "\u4ef6", "\u6b21", "\u9876\u6b21", "\u9879\u6b21"
             };
         }
 

@@ -63,6 +63,7 @@ $cases = @(
     [pscustomobject]@{ Name='all-vertical'; Unit=''; Defs=@([pscustomobject]@{C=1;T='Left';V=$true},[pscustomobject]@{C=3;T='Right';V=$true},[pscustomobject]@{C=2;T='Middle';V=$true}); Main='Right'; Context='Left Middle'; ExpectedUnit='' },
     [pscustomobject]@{ Name='blank-filter'; Unit='kg'; Defs=@([pscustomobject]@{C=1;T='  ';V=$false},[pscustomobject]@{C=2;T='Steel';V=$false},[pscustomobject]@{C=3;T='kg';V=$false}); Main='Steel'; Context=''; ExpectedUnit='kg' },
     [pscustomobject]@{ Name='top-times'; Unit='顶次'; Defs=@([pscustomobject]@{C=1;T='铺设顶进导轨及抱枕';V=$false},[pscustomobject]@{C=2;T='顶次';V=$false}); Main='铺设顶进导轨及抱枕'; Context=''; ExpectedUnit='顶次' },
+    [pscustomobject]@{ Name='item-times'; Unit='项次'; Defs=@([pscustomobject]@{C=2;T='铺设顶进导轨及短枕';V=$false},[pscustomobject]@{C=3;T='项次';V=$false}); Main='铺设顶进导轨及短枕'; Context=''; ExpectedUnit='项次' },
     [pscustomobject]@{ Name='empty'; Unit='m'; Defs=@(); Main=''; Context=''; ExpectedUnit='' }
 )
 foreach ($case in $cases) {
@@ -98,6 +99,7 @@ try {
     $row3 = $sheet.CreateRow(2)
     $row4 = $sheet.CreateRow(3)
     $row5 = $sheet.CreateRow(4)
+    $row6 = $sheet.CreateRow(5)
     $row1.CreateCell(0).SetCellValue('Earthwork')
     $row1.CreateCell(1).SetCellValue('Pond')
     $row2.CreateCell(2).SetCellValue('Pumping')
@@ -108,6 +110,9 @@ try {
     $row4.CreateCell(2).SetCellValue('m3')
     $row5.CreateCell(1).SetCellValue('Filling')
     $row5.CreateCell(9).SetCellValue([double]47200)
+    $row6.CreateCell(1).SetCellValue('铺设顶进导轨及短枕')
+    $row6.CreateCell(2).SetCellValue('项次')
+    $row6.CreateCell(3).SetCellValue([double]1)
     [void]$sheet.AddMergedRegion([NPOI.SS.Util.CellRangeAddress]::new(0, 1, 0, 0))
     [void]$sheet.AddMergedRegion([NPOI.SS.Util.CellRangeAddress]::new(0, 1, 1, 1))
     [void]$sheet.AddMergedRegion([NPOI.SS.Util.CellRangeAddress]::new(3, 4, 2, 2))
@@ -206,6 +211,26 @@ try {
         $wideUnit = [string]$wideType.GetField('Unit', $flags).GetValue($wideTarget)
         if ($wideName -cne 'Filling' -or $wideUnit -cne 'm3') {
             Add-Failure "distant merged unit: name='$wideName' unit='$wideUnit'"
+        }
+    }
+
+    # 实机虎山表 B11/C11/D11：项次必须拆为单位，不得拼进工程量名。
+    $fixtureStage = 'read item-times unit'
+    $itemTimesArgs = [object[]]::new(4)
+    $itemTimesArgs[0] = $fixturePath.PSObject.BaseObject
+    $itemTimesArgs[1] = ([string]'Sheet1').PSObject.BaseObject
+    $itemTimesArgs[2] = 4
+    $itemTimesArgs[3] = $null
+    $itemTimesRows = $readRows.Invoke($null, $itemTimesArgs.PSObject.BaseObject)
+    if ($itemTimesRows.Count -ne 1) {
+        Add-Failure "item-times target rows: expected 1, actual $($itemTimesRows.Count)"
+    } else {
+        $itemTimesTarget = $itemTimesRows[0]
+        $itemTimesType = $itemTimesTarget.GetType()
+        $itemTimesName = [string]$itemTimesType.GetField('RawName', $flags).GetValue($itemTimesTarget)
+        $itemTimesUnit = [string]$itemTimesType.GetField('Unit', $flags).GetValue($itemTimesTarget)
+        if ($itemTimesName -cne '铺设顶进导轨及短枕' -or $itemTimesUnit -cne '项次') {
+            Add-Failure "item-times split: name='$itemTimesName' unit='$itemTimesUnit'"
         }
     }
 
@@ -411,4 +436,4 @@ if ($failures.Count -ne 0) {
     throw ("Row-name regression failures ($($failures.Count)):`n - " + ($failures -join "`n - "))
 }
 
-Write-Host "PASS: 8 split cases, $baselineChecked baseline rows, template/target parity, chapter parity, safe binding fallback, AutoMatch guard." -ForegroundColor Green
+Write-Host "PASS: $($cases.Count) split cases, $baselineChecked baseline rows, template/target parity, chapter parity, safe binding fallback, AutoMatch guard." -ForegroundColor Green

@@ -354,7 +354,8 @@ namespace RecoNet
                     if (e.RowIndex > start) e.AdvancedBorderStyle.Top = DataGridViewAdvancedCellBorderStyle.None;
                     if (e.RowIndex < end) e.AdvancedBorderStyle.Bottom = DataGridViewAdvancedCellBorderStyle.None;
                     e.PaintBackground(e.ClipBounds, true);
-                    Rectangle union = GetVisibleMergedTargetNameBounds(grid, e.ColumnIndex, start, end);
+                    Rectangle union = GetVisibleMergedTargetNameBounds(grid, e.ColumnIndex, start, end,
+                        e.RowIndex, e.CellBounds);
                     string text = Convert.ToString(grid.Rows[start].Cells[e.ColumnIndex].Value);
                     if (!union.IsEmpty && !String.IsNullOrEmpty(text))
                     {
@@ -374,6 +375,13 @@ namespace RecoNet
                     if (grid.Columns.Contains("tname"))
                         grid.InvalidateColumn(grid.Columns["tname"].Index);
                     if (!updatingNameQuotaCell) UpdateSmartWriteScope();
+                };
+                grid.Scroll += delegate
+                {
+                    // Scrolling can recycle cells before the group leader/tail becomes Displayed.
+                    // Repaint the whole name column after the viewport settles, just like selection changes.
+                    if (grid.Columns.Contains("tname"))
+                        grid.InvalidateColumn(grid.Columns["tname"].Index);
                 };
 
                 ContextMenuStrip gridMenu = new ContextMenuStrip();
@@ -1885,22 +1893,22 @@ namespace RecoNet
             }
 
             private static Rectangle GetVisibleMergedTargetNameBounds(DataGridView ownerGrid, int columnIndex,
-                int startRow, int endRow)
+                int startRow, int endRow, int anchorRow, Rectangle anchorCellBounds)
             {
                 if (ownerGrid == null || columnIndex < 0 || columnIndex >= ownerGrid.Columns.Count ||
-                    startRow < 0 || endRow < startRow || endRow >= ownerGrid.Rows.Count) return Rectangle.Empty;
-                // All member cells must paint against the same full-group rectangle. Building the
-                // rectangle from each row's transient Displayed state makes scroll-time paint events
-                // disagree about text wrapping, leaving repeated fragments until the next click.
-                Rectangle firstBounds = ownerGrid.GetCellDisplayRectangle(columnIndex, startRow, false);
-                Rectangle lastBounds = ownerGrid.GetCellDisplayRectangle(columnIndex, endRow, false);
-                if (firstBounds.Width <= 0 || firstBounds.Height <= 0 ||
-                    lastBounds.Width <= 0 || lastBounds.Height <= 0) return Rectangle.Empty;
-                Rectangle result = Rectangle.FromLTRB(
-                    Math.Min(firstBounds.Left, lastBounds.Left),
-                    Math.Min(firstBounds.Top, lastBounds.Top),
-                    Math.Max(firstBounds.Right, lastBounds.Right),
-                    Math.Max(firstBounds.Bottom, lastBounds.Bottom));
+                    startRow < 0 || endRow < startRow || endRow >= ownerGrid.Rows.Count ||
+                    anchorRow < startRow || anchorRow > endRow || anchorCellBounds.Width <= 0 ||
+                    anchorCellBounds.Height <= 0) return Rectangle.Empty;
+
+                // CellPainting always gives us the current member's bounds even while scrolling.
+                // Derive the full group from that anchor so every member paints against one rectangle,
+                // without depending on whether the off-screen group leader or tail is Displayed yet.
+                int top = anchorCellBounds.Top;
+                for (int i = anchorRow - 1; i >= startRow; i--) top -= ownerGrid.Rows[i].Height;
+                int bottom = anchorCellBounds.Bottom;
+                for (int i = anchorRow + 1; i <= endRow; i++) bottom += ownerGrid.Rows[i].Height;
+                Rectangle result = Rectangle.FromLTRB(anchorCellBounds.Left, top,
+                    anchorCellBounds.Right, bottom);
 
                 Rectangle dataBounds = ownerGrid.ClientRectangle;
                 if (ownerGrid.ColumnHeadersVisible)

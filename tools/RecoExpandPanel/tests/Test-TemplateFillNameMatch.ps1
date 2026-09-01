@@ -865,25 +865,42 @@ try {
         [System.Windows.Forms.Application]::DoEvents()
         $mergedBoundsMethod = $panelType.GetMethod('GetVisibleMergedTargetNameBounds', $flags)
         if ($null -eq $mergedBoundsMethod) { throw '缺少合并工程量名可见区域计算入口' }
+        $anchorBounds = $scrollGrid.GetCellDisplayRectangle(
+            $scrollGrid.Columns['tname'].Index, $scrollTargetRows[1].Index, $false)
         $mergedBounds = $mergedBoundsMethod.Invoke($null, @(
             $scrollGrid.PSObject.BaseObject, $scrollGrid.Columns['tname'].Index,
-            $scrollTargetRows[0].Index, $scrollTargetRows[1].Index))
+            $scrollTargetRows[0].Index, $scrollTargetRows[1].Index,
+            $scrollTargetRows[1].Index, $anchorBounds))
         if ($mergedBounds.IsEmpty -or $mergedBounds.Top -lt $scrollGrid.ColumnHeadersHeight -or
             $mergedBounds.Bottom -gt $scrollGrid.ClientSize.Height) {
             throw '合并工程量名绘制区域越过表头或可见数据区'
         }
+        $leaderCellBounds = New-Object System.Drawing.Rectangle 10, ($scrollGrid.ColumnHeadersHeight + 8), 140, $scrollTargetRows[0].Height
+        $memberCellBounds = New-Object System.Drawing.Rectangle 10, $leaderCellBounds.Bottom, 140, $scrollTargetRows[1].Height
+        $leaderAnchoredBounds = $mergedBoundsMethod.Invoke($null, @(
+            $scrollGrid.PSObject.BaseObject, $scrollGrid.Columns['tname'].Index,
+            $scrollTargetRows[0].Index, $scrollTargetRows[1].Index,
+            $scrollTargetRows[0].Index, $leaderCellBounds))
+        $memberAnchoredBounds = $mergedBoundsMethod.Invoke($null, @(
+            $scrollGrid.PSObject.BaseObject, $scrollGrid.Columns['tname'].Index,
+            $scrollTargetRows[0].Index, $scrollTargetRows[1].Index,
+            $scrollTargetRows[1].Index, $memberCellBounds))
+        if (-not $leaderAnchoredBounds.Equals($memberAnchoredBounds)) {
+            throw '同一组件从不同成员行重绘时没有得到一致的合并工程量名区域'
+        }
         $drawMerged = $panelType.GetMethod('DrawMergedTargetNameTextForCell', $flags)
         if ($null -eq $drawMerged) { throw '缺少合并工程量名逐成员行绘制入口' }
         $panelSource = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $PSScriptRoot) 'TemplateFillPanel.cs'), [System.Text.Encoding]::UTF8)
-        if (-not $panelSource.Contains('grid.InvalidateColumn(grid.Columns["tname"].Index);')) {
-            throw '选择成员行后没有让合并工程量名整列失效重绘'
+        if (-not $panelSource.Contains('grid.InvalidateColumn(grid.Columns["tname"].Index);') -or
+            $panelSource -notmatch 'grid\.Scroll\s*\+=\s*delegate[\s\S]*InvalidateColumn') {
+            throw '选择或滚动后没有让合并工程量名整列失效重绘'
         }
         $mergedBoundsSource = [regex]::Match($panelSource,
             'private static Rectangle GetVisibleMergedTargetNameBounds[\s\S]*?\n\s*}\r?\n\r?\n\s*private static void DrawMergedTargetNameTextForCell').Value
-        if ($mergedBoundsSource -match '\.Displayed' -or
-            $mergedBoundsSource -notmatch 'GetCellDisplayRectangle\(columnIndex, startRow, false\)' -or
-            $mergedBoundsSource -notmatch 'GetCellDisplayRectangle\(columnIndex, endRow, false\)') {
-            throw '合并工程量名仍按各成员行的瞬时可见状态计算，滚动重绘会产生重叠'
+        if ($mergedBoundsSource -match '\.Displayed|GetCellDisplayRectangle' -or
+            $mergedBoundsSource -notmatch 'anchorRow' -or
+            $mergedBoundsSource -notmatch 'anchorCellBounds') {
+            throw '合并工程量名没有从当前绘制成员行反推稳定整组区域'
         }
         $paintBitmap = New-Object System.Drawing.Bitmap 140, 40
         $paintGraphics = [System.Drawing.Graphics]::FromImage($paintBitmap)
