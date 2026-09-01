@@ -873,10 +873,13 @@ try {
             }
         })
         $scrollGrid.FirstDisplayedScrollingRowIndex = 10
-        if ($script:mergedNamePaintCount -eq 0) {
-            throw '滚动事件返回时目标工程量名称列尚未同步重绘'
+        if ($script:mergedNamePaintCount -ne 0) {
+            throw '滚动事件内同步绘制了目标工程量名称列，会阻塞连续滚动'
         }
         [System.Windows.Forms.Application]::DoEvents()
+        if ($script:mergedNamePaintCount -eq 0) {
+            throw '滚动后新暴露的目标工程量名称单元格未进入正常绘制'
+        }
         $scrollGrid.FirstDisplayedScrollingRowIndex = $scrollTargetRows[1].Index
         [System.Windows.Forms.Application]::DoEvents()
 
@@ -908,9 +911,10 @@ try {
         $drawMerged = $panelType.GetMethod('DrawMergedTargetNameTextForCell', $flags)
         if ($null -eq $drawMerged) { throw '缺少合并工程量名逐成员行绘制入口' }
         $panelSource = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $PSScriptRoot) 'TemplateFillPanel.cs'), [System.Text.Encoding]::UTF8)
-        if (-not $panelSource.Contains('grid.InvalidateColumn(grid.Columns["tname"].Index);') -or
-            $panelSource -notmatch 'grid\.Scroll\s*\+=\s*delegate[\s\S]*InvalidateColumn[\s\S]*grid\.Update\(\)') {
-            throw '滚动后没有同步完成合并工程量名整列重绘'
+        $scrollHandlerSource = [regex]::Match($panelSource,
+            'grid\.Scroll\s*\+=\s*delegate[\s\S]*?\n\s*};').Value
+        if ($scrollHandlerSource -match 'InvalidateColumn|\.Update\(\)|\.Refresh\(\)') {
+            throw '滚动事件不得强制失效或同步刷新目标工程量名称列'
         }
         $mergedBoundsSource = [regex]::Match($panelSource,
             'private static Rectangle GetVisibleMergedTargetNameBounds[\s\S]*?\n\s*}\r?\n\r?\n\s*private static void DrawMergedTargetNameTextForCell').Value

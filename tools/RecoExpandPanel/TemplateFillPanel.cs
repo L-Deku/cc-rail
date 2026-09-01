@@ -376,18 +376,6 @@ namespace RecoNet
                         grid.InvalidateColumn(grid.Columns["tname"].Index);
                     if (!updatingNameQuotaCell) UpdateSmartWriteScope();
                 };
-                grid.Scroll += delegate
-                {
-                    // Scrolling can recycle cells before the group leader/tail becomes Displayed.
-                    // Paint the custom-merged name column before the scroll event returns so its text
-                    // moves in the same frame as the standard cells instead of lagging one message behind.
-                    if (grid.Columns.Contains("tname"))
-                    {
-                        grid.InvalidateColumn(grid.Columns["tname"].Index);
-                        grid.Update();
-                    }
-                };
-
                 ContextMenuStrip gridMenu = new ContextMenuStrip();
                 ToolStripMenuItem miBindSelected = new ToolStripMenuItem(smartOnly
                     ? "替换/补充软件选中的定额到此行"
