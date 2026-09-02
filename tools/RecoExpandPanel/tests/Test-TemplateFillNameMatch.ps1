@@ -864,21 +864,32 @@ try {
         $scrollGrid.FirstDisplayedScrollingRowIndex = $scrollTargetRows[1].Index
         [System.Windows.Forms.Application]::DoEvents()
 
-        $script:mergedNamePaintCount = 0
+        # 合并工程量名矩形裁到可见数据区后，绘制结果依赖滚动位置；DataGridView 垂直滚动只搬移旧像素
+        # 并重绘新暴露行，所以滚动事件必须让 tname 整列异步失效（只 Invalidate，不 Update/Refresh）。
+        # 下面按“事件返回前不得同步绘制 + 消息泵跑完后当前所有可见行都被重绘过”两条结果断言钉死。
+        $script:paintedTnameRows = New-Object 'System.Collections.Generic.HashSet[int]'
         $scrollGrid.add_CellPainting({
             param($sender, $eventArgs)
             if ($eventArgs.RowIndex -ge 0 -and
                 $sender.Columns[$eventArgs.ColumnIndex].Name -eq 'tname') {
-                $script:mergedNamePaintCount++
+                [void]$script:paintedTnameRows.Add($eventArgs.RowIndex)
             }
         })
-        $scrollGrid.FirstDisplayedScrollingRowIndex = 10
-        if ($script:mergedNamePaintCount -ne 0) {
-            throw '滚动事件内同步绘制了目标工程量名称列，会阻塞连续滚动'
+        # 41 行、一屏约 17 行：首行索引超过 24 会被夹到滚动上限而不真正滚动，所以用 20 -> 18 制造真实的向上滚 2 行。
+        $scrollGrid.FirstDisplayedScrollingRowIndex = 20
+        [System.Windows.Forms.Application]::DoEvents()
+        $script:paintedTnameRows.Clear()
+        $scrollGrid.FirstDisplayedScrollingRowIndex = 18
+        if ($scrollGrid.FirstDisplayedScrollingRowIndex -ne 18) { throw '滚动测试没有真正滚动，用例失效' }
+        if ($script:paintedTnameRows.Count -ne 0) {
+            throw '滚动事件内同步绘制了目标工程量名称列（禁止 Update()/Refresh()），会阻塞连续滚动'
         }
         [System.Windows.Forms.Application]::DoEvents()
-        if ($script:mergedNamePaintCount -eq 0) {
-            throw '滚动后新暴露的目标工程量名称单元格未进入正常绘制'
+        [int[]]$displayedRows = @($scrollGrid.Rows | Where-Object { $_.Displayed } | ForEach-Object { $_.Index })
+        [int[]]$missedRows = @($displayedRows | Where-Object { -not $script:paintedTnameRows.Contains($_) })
+        if ($displayedRows.Count -eq 0) { throw '滚动测试没有可见行，用例失效' }
+        if ($missedRows.Count -gt 0) {
+            throw ('滚动后仍有可见行未重绘合并工程量名（滚动事件缺少整列失效）：' + ($missedRows -join ','))
         }
         $scrollGrid.FirstDisplayedScrollingRowIndex = $scrollTargetRows[1].Index
         [System.Windows.Forms.Application]::DoEvents()
@@ -911,11 +922,6 @@ try {
         $drawMerged = $panelType.GetMethod('DrawMergedTargetNameTextForCell', $flags)
         if ($null -eq $drawMerged) { throw '缺少合并工程量名逐成员行绘制入口' }
         $panelSource = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $PSScriptRoot) 'TemplateFillPanel.cs'), [System.Text.Encoding]::UTF8)
-        $scrollHandlerSource = [regex]::Match($panelSource,
-            'grid\.Scroll\s*\+=\s*delegate[\s\S]*?\n\s*};').Value
-        if ($scrollHandlerSource -match 'InvalidateColumn|\.Update\(\)|\.Refresh\(\)') {
-            throw '滚动事件不得强制失效或同步刷新目标工程量名称列'
-        }
         $mergedBoundsSource = [regex]::Match($panelSource,
             'private static Rectangle GetVisibleMergedTargetNameBounds[\s\S]*?\n\s*}\r?\n\r?\n\s*private static void DrawMergedTargetNameTextForCell').Value
         if ($mergedBoundsSource -match '\.Displayed|GetCellDisplayRectangle' -or

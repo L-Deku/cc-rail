@@ -368,6 +368,16 @@ namespace RecoNet
                     }
                     e.Handled = true;
                 };
+                grid.Scroll += delegate(object sender, ScrollEventArgs se)
+                {
+                    // 合并工程量名的矩形 = 整组矩形 ∩ 可见数据区（见 GetVisibleMergedTargetNameBounds），取值依赖当前滚动位置；
+                    // 而 DataGridView 垂直滚动只搬移旧像素 + 重绘新暴露行，留在屏幕上的成员行会保留按旧视口算出的
+                    // 文字位置（空白 / 半截字 / 重影）。因此这里必须让整列失效。只做异步 Invalidate，让它与滚动自身的
+                    // 重绘合并成一次 WM_PAINT；不得调用 Update()/Refresh()，那会在每条滚动消息里嵌套一次同步绘制。
+                    if (se.ScrollOrientation != ScrollOrientation.VerticalScroll) return;
+                    if (grid.Columns.Contains("tname"))
+                        grid.InvalidateColumn(grid.Columns["tname"].Index);
+                };
                 grid.SelectionChanged += delegate
                 {
                     // 选择变化时 DataGridView 往往只重绘新旧选中行；合并工程量名跨多行，
@@ -1969,6 +1979,10 @@ namespace RecoNet
                     dataBounds.Y += ownerGrid.ColumnHeadersHeight;
                     dataBounds.Height = Math.Max(0, ownerGrid.ClientRectangle.Bottom - dataBounds.Y);
                 }
+                // 裁到可见数据区，保证组跨越视口边界时名称仍完整可读。
+                // 注意：这使本函数的结果依赖当前滚动位置，位块搬移不再成立，
+                // 因此 grid.Scroll 必须配套让 "tname" 整列失效（见构造函数中的 Scroll 处理器）。
+                // 删除这一行或删除那个处理器都会立刻重现滚动空白 / 重影，两者不得单独取舍。
                 result.Intersect(dataBounds);
                 return result;
             }
