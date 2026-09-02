@@ -354,7 +354,7 @@ namespace RecoNet
                     if (e.RowIndex > start) e.AdvancedBorderStyle.Top = DataGridViewAdvancedCellBorderStyle.None;
                     if (e.RowIndex < end) e.AdvancedBorderStyle.Bottom = DataGridViewAdvancedCellBorderStyle.None;
                     e.PaintBackground(e.ClipBounds, true);
-                    Rectangle union = GetVisibleMergedTargetNameBounds(grid, e.ColumnIndex, start, end,
+                    Rectangle union = GetMergedTargetNameBounds(grid, e.ColumnIndex, start, end,
                         e.RowIndex, e.CellBounds);
                     string text = Convert.ToString(grid.Rows[start].Cells[e.ColumnIndex].Value);
                     if (!union.IsEmpty && !String.IsNullOrEmpty(text))
@@ -368,16 +368,9 @@ namespace RecoNet
                     }
                     e.Handled = true;
                 };
-                grid.Scroll += delegate(object sender, ScrollEventArgs se)
-                {
-                    // 合并工程量名的矩形 = 整组矩形 ∩ 可见数据区（见 GetVisibleMergedTargetNameBounds），取值依赖当前滚动位置；
-                    // 而 DataGridView 垂直滚动只搬移旧像素 + 重绘新暴露行，留在屏幕上的成员行会保留按旧视口算出的
-                    // 文字位置（空白 / 半截字 / 重影）。因此这里必须让整列失效。只做异步 Invalidate，让它与滚动自身的
-                    // 重绘合并成一次 WM_PAINT；不得调用 Update()/Refresh()，那会在每条滚动消息里嵌套一次同步绘制。
-                    if (se.ScrollOrientation != ScrollOrientation.VerticalScroll) return;
-                    if (grid.Columns.Contains("tname"))
-                        grid.InvalidateColumn(grid.Columns["tname"].Index);
-                };
+                // 注意：这里故意没有 grid.Scroll 处理器。合并工程量名的绘制结果与滚动位置无关
+                // （见 GetMergedTargetNameBounds），位块搬移后天然正确；任何滚动时的失效/刷新都只会让
+                // tname 列比其他列晚一拍（异步）或卡顿（同步）。
                 grid.SelectionChanged += delegate
                 {
                     // 选择变化时 DataGridView 往往只重绘新旧选中行；合并工程量名跨多行，
@@ -1955,7 +1948,13 @@ namespace RecoNet
                 }
             }
 
-            private static Rectangle GetVisibleMergedTargetNameBounds(DataGridView ownerGrid, int columnIndex,
+            // 合并工程量名的矩形只由“当前绘制的成员单元格 + 组内各行高度”反推，不裁到可见数据区。
+            // 这样每个成员行的绘制结果只取决于它在组内的位置，与滚动偏移无关：DataGridView 垂直滚动
+            // 位块搬移旧像素后内容仍然正确，tname 列与其他列在同一帧移动，既不需要在 Scroll 事件里
+            // 失效重绘（异步会晚一拍、同步会卡，2026-09-01 两种都在现场被否决），也不会出现空白 / 重影。
+            // 代价是组首滚出表头后名称随组滚出，与 Excel 合并单元格一致。
+            // 不得再加回视口裁剪或任何依赖 ownerGrid 滚动状态 / ClientRectangle 的计算。
+            private static Rectangle GetMergedTargetNameBounds(DataGridView ownerGrid, int columnIndex,
                 int startRow, int endRow, int anchorRow, Rectangle anchorCellBounds)
             {
                 if (ownerGrid == null || columnIndex < 0 || columnIndex >= ownerGrid.Columns.Count ||
@@ -1970,21 +1969,7 @@ namespace RecoNet
                 for (int i = anchorRow - 1; i >= startRow; i--) top -= ownerGrid.Rows[i].Height;
                 int bottom = anchorCellBounds.Bottom;
                 for (int i = anchorRow + 1; i <= endRow; i++) bottom += ownerGrid.Rows[i].Height;
-                Rectangle result = Rectangle.FromLTRB(anchorCellBounds.Left, top,
-                    anchorCellBounds.Right, bottom);
-
-                Rectangle dataBounds = ownerGrid.ClientRectangle;
-                if (ownerGrid.ColumnHeadersVisible)
-                {
-                    dataBounds.Y += ownerGrid.ColumnHeadersHeight;
-                    dataBounds.Height = Math.Max(0, ownerGrid.ClientRectangle.Bottom - dataBounds.Y);
-                }
-                // 裁到可见数据区，保证组跨越视口边界时名称仍完整可读。
-                // 注意：这使本函数的结果依赖当前滚动位置，位块搬移不再成立，
-                // 因此 grid.Scroll 必须配套让 "tname" 整列失效（见构造函数中的 Scroll 处理器）。
-                // 删除这一行或删除那个处理器都会立刻重现滚动空白 / 重影，两者不得单独取舍。
-                result.Intersect(dataBounds);
-                return result;
+                return Rectangle.FromLTRB(anchorCellBounds.Left, top, anchorCellBounds.Right, bottom);
             }
 
             private static void DrawMergedTargetNameTextForCell(Graphics graphics, string text, Font font,

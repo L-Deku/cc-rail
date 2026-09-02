@@ -819,6 +819,12 @@ try {
         $scrollCandidates.Add($scrollCandidateB)
         $itemType.GetField('NameQuotaCandidates', $flags).SetValue($scrollLeader, $scrollCandidates)
         $itemType.GetField('SelectedNameQuotaCandidateKey', $flags).SetValue($scrollLeader, 'group-a')
+        # 组后面再补 20 行，使“组首滚出表头、组员成为首行”的位置真实可达（否则会被夹到滚动上限）。
+        for ($rowNo = 41; $rowNo -le 60; $rowNo++) {
+            $filler = New-PreviewItem $rowNo 0 "工程量$rowNo"
+            $itemType.GetField('QuotaCode', $flags).SetValue($filler, "Q-$rowNo")
+            $scrollPreview.Add($filler)
+        }
 
         $panelType.GetMethod('FillGrid', $flags).Invoke($scrollPanel, $null)
         $scrollPanel.Show()
@@ -864,9 +870,11 @@ try {
         $scrollGrid.FirstDisplayedScrollingRowIndex = $scrollTargetRows[1].Index
         [System.Windows.Forms.Application]::DoEvents()
 
-        # 合并工程量名矩形裁到可见数据区后，绘制结果依赖滚动位置；DataGridView 垂直滚动只搬移旧像素
-        # 并重绘新暴露行，所以滚动事件必须让 tname 整列异步失效（只 Invalidate，不 Update/Refresh）。
-        # 下面按“事件返回前不得同步绘制 + 消息泵跑完后当前所有可见行都被重绘过”两条结果断言钉死。
+        # 合并工程量名的绘制结果必须与滚动位置无关：矩形只由锚点单元格和组内行高反推，不裁到可见区。
+        # 这样 DataGridView 的位块搬移天然正确，tname 列与其他列同一帧移动；既不需要滚动事件失效重绘
+        # （异步会晚一拍、同步会卡），也不会空白 / 重影。下面三条结果断言：
+        #   1) 滚动事件返回前不得有任何同步绘制；2) 滚动只重绘新暴露的行，不得整列重绘；
+        #   3) 同一组相对锚点单元格的偏移、高度不随滚动位置变化，组首滚出表头后矩形不得被裁到可见区。
         $script:paintedTnameRows = New-Object 'System.Collections.Generic.HashSet[int]'
         $scrollGrid.add_CellPainting({
             param($sender, $eventArgs)
@@ -875,9 +883,9 @@ try {
                 [void]$script:paintedTnameRows.Add($eventArgs.RowIndex)
             }
         })
-        # 41 行、一屏约 17 行：首行索引超过 24 会被夹到滚动上限而不真正滚动，所以用 20 -> 18 制造真实的向上滚 2 行。
         $scrollGrid.FirstDisplayedScrollingRowIndex = 20
         [System.Windows.Forms.Application]::DoEvents()
+        [int[]]$displayedBefore = @($scrollGrid.Rows | Where-Object { $_.Displayed } | ForEach-Object { $_.Index })
         $script:paintedTnameRows.Clear()
         $scrollGrid.FirstDisplayedScrollingRowIndex = 18
         if ($scrollGrid.FirstDisplayedScrollingRowIndex -ne 18) { throw '滚动测试没有真正滚动，用例失效' }
@@ -885,26 +893,45 @@ try {
             throw '滚动事件内同步绘制了目标工程量名称列（禁止 Update()/Refresh()），会阻塞连续滚动'
         }
         [System.Windows.Forms.Application]::DoEvents()
-        [int[]]$displayedRows = @($scrollGrid.Rows | Where-Object { $_.Displayed } | ForEach-Object { $_.Index })
-        [int[]]$missedRows = @($displayedRows | Where-Object { -not $script:paintedTnameRows.Contains($_) })
-        if ($displayedRows.Count -eq 0) { throw '滚动测试没有可见行，用例失效' }
-        if ($missedRows.Count -gt 0) {
-            throw ('滚动后仍有可见行未重绘合并工程量名（滚动事件缺少整列失效）：' + ($missedRows -join ','))
+        [int[]]$displayedAfter = @($scrollGrid.Rows | Where-Object { $_.Displayed } | ForEach-Object { $_.Index })
+        [int[]]$newlyExposed = @($displayedAfter | Where-Object { $displayedBefore -notcontains $_ })
+        if ($displayedAfter.Count -eq 0 -or $newlyExposed.Count -eq 0) { throw '滚动测试没有新暴露行，用例失效' }
+        if ($script:paintedTnameRows.Count -gt $newlyExposed.Count + 2) {
+            throw ('滚动触发了合并工程量名整列重绘（绘制结果仍依赖滚动位置，会比其他列晚一拍）：' +
+                ($script:paintedTnameRows -join ','))
         }
-        $scrollGrid.FirstDisplayedScrollingRowIndex = $scrollTargetRows[1].Index
-        [System.Windows.Forms.Application]::DoEvents()
 
-        $mergedBoundsMethod = $panelType.GetMethod('GetVisibleMergedTargetNameBounds', $flags)
-        if ($null -eq $mergedBoundsMethod) { throw '缺少合并工程量名可见区域计算入口' }
-        $anchorBounds = $scrollGrid.GetCellDisplayRectangle(
+        $mergedBoundsMethod = $panelType.GetMethod('GetMergedTargetNameBounds', $flags)
+        if ($null -eq $mergedBoundsMethod) { throw '缺少合并工程量名整组区域计算入口' }
+        # 位置 A：组首、组员都可见。
+        $anchorAtA = $scrollGrid.GetCellDisplayRectangle(
             $scrollGrid.Columns['tname'].Index, $scrollTargetRows[1].Index, $false)
-        $mergedBounds = $mergedBoundsMethod.Invoke($null, @(
+        $boundsAtA = $mergedBoundsMethod.Invoke($null, @(
             $scrollGrid.PSObject.BaseObject, $scrollGrid.Columns['tname'].Index,
             $scrollTargetRows[0].Index, $scrollTargetRows[1].Index,
-            $scrollTargetRows[1].Index, $anchorBounds))
-        if ($mergedBounds.IsEmpty -or $mergedBounds.Top -lt $scrollGrid.ColumnHeadersHeight -or
-            $mergedBounds.Bottom -gt $scrollGrid.ClientSize.Height) {
-            throw '合并工程量名绘制区域越过表头或可见数据区'
+            $scrollTargetRows[1].Index, $anchorAtA))
+        # 位置 B：组员成为首行，组首已滚出表头。
+        $scrollGrid.FirstDisplayedScrollingRowIndex = $scrollTargetRows[1].Index
+        [System.Windows.Forms.Application]::DoEvents()
+        if ($scrollGrid.FirstDisplayedScrollingRowIndex -ne $scrollTargetRows[1].Index) {
+            throw '无法把组员滚成首行，用例失效'
+        }
+        $anchorAtB = $scrollGrid.GetCellDisplayRectangle(
+            $scrollGrid.Columns['tname'].Index, $scrollTargetRows[1].Index, $false)
+        $boundsAtB = $mergedBoundsMethod.Invoke($null, @(
+            $scrollGrid.PSObject.BaseObject, $scrollGrid.Columns['tname'].Index,
+            $scrollTargetRows[0].Index, $scrollTargetRows[1].Index,
+            $scrollTargetRows[1].Index, $anchorAtB))
+        if ($boundsAtA.IsEmpty -or $boundsAtB.IsEmpty) { throw '合并工程量名整组区域为空' }
+        if (($boundsAtA.Top - $anchorAtA.Top) -ne ($boundsAtB.Top - $anchorAtB.Top) -or
+            $boundsAtA.Height -ne $boundsAtB.Height) {
+            throw '合并工程量名矩形相对锚点单元格的偏移随滚动位置变化，位块搬移后会空白/重影'
+        }
+        if ($boundsAtB.Height -ne ($scrollTargetRows[0].Height + $scrollTargetRows[1].Height)) {
+            throw '合并工程量名矩形高度不等于组内行高之和'
+        }
+        if ($boundsAtB.Top -ge $scrollGrid.ColumnHeadersHeight) {
+            throw '组首滚出表头后合并矩形仍被裁到可见区，绘制结果依赖滚动位置'
         }
         $leaderCellBounds = New-Object System.Drawing.Rectangle 10, ($scrollGrid.ColumnHeadersHeight + 8), 140, $scrollTargetRows[0].Height
         $memberCellBounds = New-Object System.Drawing.Rectangle 10, $leaderCellBounds.Bottom, 140, $scrollTargetRows[1].Height
@@ -923,8 +950,8 @@ try {
         if ($null -eq $drawMerged) { throw '缺少合并工程量名逐成员行绘制入口' }
         $panelSource = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $PSScriptRoot) 'TemplateFillPanel.cs'), [System.Text.Encoding]::UTF8)
         $mergedBoundsSource = [regex]::Match($panelSource,
-            'private static Rectangle GetVisibleMergedTargetNameBounds[\s\S]*?\n\s*}\r?\n\r?\n\s*private static void DrawMergedTargetNameTextForCell').Value
-        if ($mergedBoundsSource -match '\.Displayed|GetCellDisplayRectangle' -or
+            'private static Rectangle GetMergedTargetNameBounds[\s\S]*?\n\s*}\r?\n\r?\n\s*private static void DrawMergedTargetNameTextForCell').Value
+        if ($mergedBoundsSource -match '\.Displayed|GetCellDisplayRectangle|ClientRectangle|Intersect' -or
             $mergedBoundsSource -notmatch 'anchorRow' -or
             $mergedBoundsSource -notmatch 'anchorCellBounds') {
             throw '合并工程量名没有从当前绘制成员行反推稳定整组区域'
