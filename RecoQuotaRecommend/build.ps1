@@ -226,7 +226,7 @@ foreach ($sharedSource in @($learningIdentitySource, $credentialStoreSource, $lo
     throw "Missing shared source: $sharedSource"
   }
 }
-$quotaSources = @($quotaSources) + @($learningIdentitySource, $localMappingStoreSource)
+$quotaSources = @($quotaSources) + @($learningIdentitySource, $credentialStoreSource, $localMappingStoreSource)
 $expandSources = @($expandSources) + @($learningIdentitySource, $credentialStoreSource, $localMappingStoreSource)
 $originalQuotaSources = @($quotaSources)
 $originalExpandSources = @($expandSources)
@@ -385,6 +385,13 @@ foreach ($softwareDir in $targets) {
   Copy-Item -LiteralPath $expandOut -Destination $softwareDir -Force
   Copy-Item -LiteralPath $quotaOut -Destination $softwareDir -Force
   Copy-Item -LiteralPath $harmony -Destination $softwareDir -Force
+  # 本机软件目录不放 RecoPluginSql.json：本机插件走 DPAPI 凭据库的 reco（2026-09-03 用户决定）。
+  # RecoPluginSql.json 只由 tools\BuildColleaguePluginRelease.ps1 从 bin 打进同事发布包。若本机目录里残留该文件，一并清掉。
+  $stalePluginSqlConfig = Join-Path $softwareDir "RecoPluginSql.json"
+  if (Test-Path -LiteralPath $stalePluginSqlConfig) {
+    Remove-Item -LiteralPath $stalePluginSqlConfig -Force
+    Write-Host "Removed RecoPluginSql.json from $softwareDir (local plugins use the DPAPI credential store)."
+  }
 
   $iconSource = Join-Path $root "tools\RecoExpandPanel\icons"
   if (Test-Path -LiteralPath $iconSource) {

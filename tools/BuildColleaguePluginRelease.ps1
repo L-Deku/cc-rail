@@ -72,6 +72,26 @@ Copy-RequiredFile -Source (Join-Path $binDir "RecoPluginLoader.dll") -Destinatio
 Copy-RequiredFile -Source (Join-Path $binDir "0Harmony.dll") -Destination (Join-Path $commonDir "0Harmony.dll")
 Copy-RequiredFile -Source (Join-Path $PSScriptRoot "InstallColleaguePlugins.ps1") -Destination (Join-Path $commonDir "InstallPlugins.ps1")
 Copy-RequiredFile -Source (Join-Path $PSScriptRoot "InstallColleaguePlugins.cmd") -Destination (Join-Path $commonDir "安装插件.cmd")
+# 插件 SQL 配置：由 tools\RecoCredential\New-RecoPluginSqlConfig.ps1 生成，只允许最小权限登录名 reco_plugin。
+$credentialSource = Join-Path $repoRoot "tools\RecoCredential"
+. (Join-Path $credentialSource "RecoCredentialStore.ps1")
+. (Join-Path $credentialSource "RecoCredentialTransfer.ps1")
+$pluginSqlConfig = Join-Path $binDir "RecoPluginSql.json"
+if (-not (Test-Path -LiteralPath $pluginSqlConfig)) {
+  throw "Missing plugin SQL config. Generate it first with tools\RecoCredential\New-RecoPluginSqlConfig.ps1: $pluginSqlConfig"
+}
+$pluginSqlEntries = Read-RecoPluginSqlConfig -Path $pluginSqlConfig
+foreach ($entry in @($pluginSqlEntries.Learning, $pluginSqlEntries.Business)) {
+  if ([string]::Equals($entry.User.Trim(), "reco", [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Plugin SQL config must not contain the administrative login reco."
+  }
+}
+$learningHost = ($pluginSqlEntries.Learning.Server -split ',')[0].Trim()
+$businessHost = ($pluginSqlEntries.Business.Server -split ',')[0].Trim()
+if ($learningHost -ne "192.168.2.213" -or $businessHost -ne "192.168.2.13") {
+  throw "Plugin SQL config endpoints are wrong: learning=$learningHost business=$businessHost (expected 192.168.2.213 / 192.168.2.13)."
+}
+Copy-RequiredFile -Source $pluginSqlConfig -Destination (Join-Path $commonDir "RecoPluginSql.json")
 
 Copy-RequiredFile -Source (Join-Path $binDir "RecoExpandPanel.dll") -Destination (Join-Path $expandDir "RecoExpandPanel.dll")
 $iconSource = Join-Path $repoRoot "tools\RecoExpandPanel\icons"
@@ -107,24 +127,27 @@ Copy-RequiredFile -Source (Join-Path $binDir "RecoExpandPanel.dll") -Destination
 Copy-RequiredFile -Source (Join-Path $binDir "RecoQuotaRecommend.dll") -Destination (Join-Path $quotaUpdate "RecoQuotaRecommend.dll")
 Copy-RequiredFile -Source (Join-Path $binDir "RecoPluginLoader.dll") -Destination (Join-Path $commonUpdate "RecoPluginLoader.dll")
 Copy-RequiredFile -Source (Join-Path $binDir "0Harmony.dll") -Destination (Join-Path $commonUpdate "0Harmony.dll")
+Copy-RequiredFile -Source $pluginSqlConfig -Destination (Join-Path $commonUpdate "RecoPluginSql.json")
 
 Write-Utf8BomFile -Path (Join-Path $OutputDir "使用说明.txt") -Lines @(
   "首次安装：",
   "1. 关闭 ReJJGSNet2024 和 RejjNet2020。",
-  "2. 把 00 公共包及所需功能包内的文件合并复制到软件根目录。",
+  "2. 把 00 公共包及所需功能包内的文件合并复制到软件根目录（RecoPluginSql.json 必须和 DLL 放在同一个软件根目录）。",
   "3. 双击安装插件.cmd。脚本只配置 ReJJGSNet2024.exe 和 RejjNet2020.exe。",
   "4. ReJJQDNet2024.exe 不会加载本插件。",
   "",
   "后续更新：",
   "只发送 90-后续更新文件 中对应功能的 DLL，让同事覆盖到软件根目录。",
+  "SQL 学习库改密码或换服务器时，重新生成 RecoPluginSql.json，只发送 90-后续更新文件\公共组件更新\RecoPluginSql.json 让同事覆盖。",
   "不要在普通更新中发送 RecoQuotaData，以免覆盖同事自己的参考池和模板。",
-  "覆盖 DLL 前必须关闭两个目标软件。"
+  "覆盖 DLL 或 RecoPluginSql.json 前必须关闭两个目标软件。"
 )
 
 $forbidden = Get-ChildItem -LiteralPath $OutputDir -Recurse -File | Where-Object {
   $_.Extension -in @(".cs", ".pdb", ".sln", ".csproj") -or
   $_.Name -eq "deepseek-settings.json" -or
   $_.Name -eq "agent-undo.jsonl" -or
+  $_.Name -in @("sql-credentials.dpapi", "reco-credential-private-key.dpapi", "reco-credential-import.enc.json", "reco-credential-code.enc.json") -or
   $_.Name -like "*.log" -or
   $_.Name -like "*.bak*"
 }

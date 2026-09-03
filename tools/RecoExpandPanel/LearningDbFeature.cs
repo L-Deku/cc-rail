@@ -15,7 +15,7 @@ namespace RecoNet
 {
     public partial class FormPanel : Form
     {
-        // 学习库连接只从当前 Windows 用户的 DPAPI 凭据库读取。
+        // 学习库连接凭据由 RecoSqlCredentialStore 提供：优先软件根目录的 RecoPluginSql.json（最小权限 reco_plugin），否则回退当前 Windows 用户的 DPAPI 凭据库。
         private const string LearningDbOutboxFileName = "learning-db-outbox.jsonl";
         private const string LearningDbDeadLetterFileName = "learning-db-outbox.dead-letter.jsonl";
         private const string LearningDbOutboxMutexName = "RecoQuotaData.learning-db-outbox.lock";

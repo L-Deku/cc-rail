@@ -585,10 +585,8 @@ namespace RecoQuotaRecommend
         {
             try
             {
-                string server = ReadServer();
-                if (String.IsNullOrWhiteSpace(server)) server = "127.0.0.1";
                 string databaseName = String.IsNullOrWhiteSpace(materialDatabaseName) ? ResolveDatabaseName() : materialDatabaseName;
-                string connectionString = "Data Source=" + server + ",1433;Initial Catalog=" + databaseName + ";User ID=reco;Password=" + BuildSqlPassword() + ";Connect Timeout=8;Encrypt=False;TrustServerCertificate=True";
+                string connectionString = BuildSourceConnectionString(databaseName);
                 List<IndexMaterial> refreshed;
                 using (System.Data.SqlClient.SqlConnection connection = new System.Data.SqlClient.SqlConnection(connectionString))
                 {
@@ -910,14 +908,8 @@ namespace RecoQuotaRecommend
         private static void ExportQuotaFromSql(string dataDir, string quotaPath, string databaseName)
         {
             Directory.CreateDirectory(dataDir);
-            string server = ReadServer();
-            if (String.IsNullOrWhiteSpace(server))
-            {
-                server = "127.0.0.1";
-            }
-
             QuotaRecommendPanel.Log("Build quota search index from database: " + databaseName);
-            string connectionString = "Data Source=" + server + ",1433;Initial Catalog=" + databaseName + ";User ID=reco;Password=" + BuildSqlPassword() + ";Connect Timeout=8;Encrypt=False;TrustServerCertificate=True";
+            string connectionString = BuildSourceConnectionString(databaseName);
             using (System.Data.SqlClient.SqlConnection connection = new System.Data.SqlClient.SqlConnection(connectionString))
             {
                 connection.Open();
@@ -954,9 +946,15 @@ namespace RecoQuotaRecommend
             }
         }
 
-        private static string BuildSqlPassword()
+        // 服务器取宿主 ServerSetting.xml；账号密码按服务器从插件 SQL 配置（RecoPluginSql.json）或本机 DPAPI 凭据库路由，不再硬编码。
+        private static string BuildSourceConnectionString(string databaseName)
         {
-            return String.Join("_", new string[] { "Des", "Reco", "2006" });
+            string server = ReadServer();
+            if (String.IsNullOrWhiteSpace(server))
+            {
+                throw new InvalidOperationException("ServerSetting.xml does not provide a server address for the quota source database.");
+            }
+            return RecoSqlCredentialStore.BuildConnectionStringForServer(server, databaseName, 1433, 8);
         }
 
         private static string ResolveDatabaseName()

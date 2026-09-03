@@ -14,6 +14,10 @@
 - 本地定额与学习数据缓存放在软件目录下的 `RecoQuotaData/`。
 - 插件构建、工作区运行目录同步和同事发布包更新时，只允许以当前仓库 `main` 的 `RecoQuotaRecommend/bin/` 为插件 DLL 源头；不要从任何运行目录或发布包反向覆盖当前仓库输出。
 - `D:\AI文件\同事模拟目录`（2026-07-20 由 `D:\AI文件\铁路工程云计价系统网络版V1.0` 改名而来）是“同事电脑模拟目录”，必须保持为最近一次实际发给同事的版本；日常构建、工作区部署、发布包刷新和提交均不得自动同步该目录，也不得把它写进 `build.ps1` 的部署目标。
+- 插件（`RecoExpandPanel.dll`、`RecoQuotaRecommend.dll`）的 SQL 凭据由 `RecoShared\RecoSqlCredentialStore.cs` 统一提供，顺序是：软件根目录的 `RecoPluginSql.json` 存在就用它，否则回退当前 Windows 用户的 DPAPI 凭据库。`RecoPluginSql.json` 由 `tools\RecoCredential\New-RecoPluginSqlConfig.ps1` 生成，只允许最小权限登录名 `reco_plugin`（`RecoLearning` 读写、`RecoData2024`/`RecoData2020` 与各项目库只读，无服务器角色），用固定应用口令封装仅防目视、不是保密手段；同事端不再需要 DPAPI、验证码或公钥导入，安装时把该文件与 DLL 一起放进软件根目录即可。换密码只需重新生成并覆盖这一个文件。用户本机（正式目录与 2020 历史目录）不放 `RecoPluginSql.json`，本机插件走 DPAPI 凭据库的 `reco`（2026-09-03 用户决定）；`build.ps1` 部署时不复制该文件并会清掉残留，只有 `BuildColleaguePluginRelease.ps1` 把它从 `bin` 打进发布包。建号脚本在 `tools\RecoCredential\sql\`（两台服务器均为 SQL Server 2008 R2，库角色必须用 `sp_addrolemember`，不能用 `ALTER ROLE … ADD MEMBER`），由用户执行：在 SSMS 里跑，或双击 `tools\RecoCredential\一键建立插件SQL账号.cmd`（用本机 DPAPI 的 `reco`（两台上均为 sysadmin）代跑并顺带生成配置文件）；代理只做只读探测与 `SET PARSEONLY` 语法核对，不得代跑建号。
+- 高权限登录名 `reco` 只留在管理员本机 DPAPI 凭据库供离线工具（`SupplementQuotaSectionFix`、`ChapterQuotaLibrary`、`Migrate2020EstimateTo2024`、`tools\RecoLearning\*.ps1`）使用；`RecoPluginSql.json`、发布包、任何插件源码中都不得出现 `reco` 登录名或其密码（C# 读取端与发布脚本都会拒绝含 `reco` 的配置）。发布包仍不得包含个人 `sql-credentials.dpapi`。不得在回复、日志或脚本中输出明文密码。
+- 当前业务项目库同时分布在 `192.168.2.13` 和 `192.168.2.213`；凭据记录使用 `business.server=.13`、`learning.server=.213,1433` 分别登记两个可核验端点。跨库只读溯源会依次尝试 business/learning 凭据并核对完整端点身份，因此不得把 `business.server` 强制改成当前宿主服务器或把两项都填成 `.213`；当前项目写入仍只借用宿主现有连接。推荐定额索引/材料库刷新按宿主 `ServerSetting.xml` 的服务器地址在两条记录里路由，读不到地址直接报错，不再回退 `127.0.0.1`。
+- 核验真实同事电脑是否能写 `RecoLearning` 时，先用图片中的工程量名称对照 SQL 流水，再核对同事软件根目录存在 `RecoPluginSql.json` 且同事电脑实际 `RecoExpandPanel.log` 无凭据/登录错误；同事端报 `18456` 时先核对 `RecoPluginSql.json` 是否为最新生成、服务器上 `reco_plugin` 是否存在且密码一致，不能把 Windows 用户名或人员姓名当作 SQL 登录名。同一用户下“同事电脑模拟目录”写库成功不能作为真实同事端验收证据。
 - Claude Code 可能在 `.claude/worktrees/` 下并行修改；除非用户明确要求，不要主动把当前主工作区改动合入 Claude worktree，也不要从 Claude worktree 部署覆盖当前软件目录。
 
 ## 构建与验证
@@ -86,10 +90,12 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - PowerShell 接收原生命令输出后需要使用 `.Count` 或 `[0]` 校验时，应写成 `[string[]]$items = @(...)`；单行输出若保留为普通字符串，`[0]` 只会得到首字符，可能造成错误的范围校验失败。
 - Windows PowerShell 5 中通过 `if/else` 表达式返回集合并赋值时，单元素结果也会被自动拆成标量；后续依赖 `.Count` 或乘法计数的变量应先声明为 `[object[]]`，再在分支内用 `@(...)` 赋值。
 - PowerShell 诊断/回归脚本不得把 `$Host`、`$Error` 等自动变量用作普通局部变量（变量名大小写不敏感）；应使用 `$projectHost`、`$commitMessage` 等任务专用名称，避免只读变量覆盖导致伪失败。
+- PowerShell 高级函数参数不得命名为 `Iv`；参数名大小写不敏感且会与公共参数 `InformationVariable` 的别名 `iv` 冲突。AES 初始化向量参数使用 `InitializationVector` 等完整名称。
 - Windows PowerShell 5 把 `System.Collections.Generic.List[object]` 放入哈希表/JSON 对象时，不要用 `@($list)` 包装，可能报 `Argument types do not match`；应显式调用 `$list.ToArray()`，并在 PS5 下运行真实序列化测试。
 - Windows 上用 `git archive` + `tar` 生成干净构建快照时，如果仓库包含大量中文文件名，应把归档范围限制为实际参与构建的源码子树（如 `tools/RecoExpandPanel`），并核对源码文件数量；不要无条件归档整个仓库，避免 `tar` 因中文路径解码失败。
 - 修改已含中文字符串的 C# 源码时，避免用 PowerShell `Set-Content` 默认编码整文件重写；优先用补丁方式，必要时用 `.NET UTF8Encoding(false)` 并把新增中文字符串写成 `\u` 转义，防止产生无关编码差异。
 - 新增或修复绑定学习字段时，必须按“数据源 -> 预览对象 -> `ExcelQuotaLink` XML -> `mapping-boxes.jsonl` -> `BindingLog`/聚合表 -> 推荐读取”逐段核对；Excel 工程量单位与定额目标单位要分别做回归，不能因预览对象已有字段就认定持久化链已传递。
+- 排查数量列附近单位丢失时，必须分别核对工作簿实际隐藏列和单位单元格的真实合并区域：六个可见列扫描本来会跳过已保存的隐藏列；合并区域非锚点行为空时应只回读该区域锚点，不得因此放宽六列边界或连带修改 SmartFill 公式优先级。历史其他工作簿的超界结论必须对当前工作簿重新验证。
 - 推荐定额/模板铺量的名字驱动组件“确认写入”即为接受推荐，必须回流 `source='plugin:apply-accept'`；只有整个 `TargetRow` 组件组全部写入成功才学习，残缺组不得产生 accepted，学习库写入失败不得阻断实际写入结果。
 - 推荐定额写入只保留两层：有完整源行时走 L1 原行复制；没有完整源行时，不分正式定额、正式材料或辅助码，统一用当前项目 `定额输入` 结构模板构造完整业务行。正式编号构造行的名称、单位和数量取当前预览，单价固定写 0，待宿主“计算”补齐价格；辅助码仍可使用经过限制的学习单价。marker 与全部业务行必须在同一个项目事务中插入，任何一行失败都整体回滚，失败批次不得回流 accepted。
 - 推荐定额写入路径必须保留 `Smart fill apply` 结构化日志：begin / plan / ok / blocked / failed / rejected 覆盖界面早退、整组阻断、事务失败与成功；事务失败只记一条 `failed`，界面异常也归入 `failed`，`blocked` 必须带 `elapsedMs`。日志只记单元、条目、层级、序号与计数，不记工程量名、公式和价格。清理或重构写入链时不得连带删除这些日志。
