@@ -816,105 +816,6 @@ namespace RecoNet
             return 0;
         }
 
-        private sealed class BoxCandidate
-        {
-            public string BoxId;
-            public int Score;
-            public List<MatchTextFeatures> SampleFeatures = new List<MatchTextFeatures>();
-            public List<BoxCandidateTarget> Targets = new List<BoxCandidateTarget>();
-        }
-
-        private sealed class BoxCandidateTarget
-        {
-            public string Kind;
-            public string QuotaCode;
-            public string QuotaName;
-            public string QuotaUnit;
-        }
-
-        // 读 mapping-boxes.jsonl 全量行；一次性读入供本次预览多次查询，避免逐行重复打开文件。
-        private static List<Dictionary<string, string>> LoadMappingBoxRows()
-        {
-            List<Dictionary<string, string>> rows = new List<Dictionary<string, string>>();
-            try
-            {
-                string path = System.IO.Path.Combine(FindRecoQuotaDataDir(), "mapping-boxes.jsonl");
-                if (!System.IO.File.Exists(path)) return rows;
-                foreach (string line in System.IO.File.ReadAllLines(path, Encoding.UTF8))
-                {
-                    Dictionary<string, string> row = ParseFlatJson(line);
-                    if (row.Count > 0) rows.Add(row);
-                }
-            }
-            catch (Exception ex) { Log("LoadMappingBoxRows failed: " + ex.Message); }
-            return rows;
-        }
-
-        // 预先按 box_id 还原组件框并归一化样本，避免每个目标工程量重复分组和归一化。
-        private static List<BoxCandidate> BuildMappingBoxIndex(List<Dictionary<string, string>> boxRows)
-        {
-            List<BoxCandidate> result = new List<BoxCandidate>();
-            string softwarePartition = ResolveLearningSoftwarePartition();
-            if (!IsValidLearningSoftwarePartition(softwarePartition)) return result;
-            foreach (IGrouping<string, Dictionary<string, string>> boxGroup in (boxRows ?? new List<Dictionary<string, string>>())
-                .Where(row => String.Equals(GetFlat(row, "record_type"), "mapping_box", StringComparison.OrdinalIgnoreCase) &&
-                    String.Equals(GetFlat(row, "software_partition").Trim(), softwarePartition, StringComparison.OrdinalIgnoreCase) &&
-                    !String.IsNullOrWhiteSpace(GetFlat(row, "box_id")) &&
-                    ReadFlatInt(row, "weight", 1) > 0)
-                .GroupBy(row => GetFlat(row, "box_id"), StringComparer.OrdinalIgnoreCase))
-            {
-                BoxCandidate candidate = new BoxCandidate { BoxId = boxGroup.Key };
-                candidate.SampleFeatures = boxGroup
-                    .Select(row => GetFlat(row, "quantity_name"))
-                    .Where(name => !String.IsNullOrWhiteSpace(name))
-                    .Select(NormalizeMatchText)
-                    .Where(name => name.Length > 0)
-                    .Distinct(StringComparer.Ordinal)
-                    .Select(BuildMatchTextFeatures)
-                    .ToList();
-                candidate.Targets = boxGroup
-                    .Where(row => !String.IsNullOrWhiteSpace(GetFlat(row, "target_code")))
-                    .GroupBy(row => BuildMappingTargetKey(GetFlat(row, "target_kind"), GetFlat(row, "target_code")), StringComparer.OrdinalIgnoreCase)
-                    .Select(g => new BoxCandidateTarget
-                    {
-                        Kind = GetFlat(g.First(), "target_kind"),
-                        QuotaCode = GetFlat(g.First(), "target_code"),
-                        QuotaName = GetFlat(g.First(), "target_name"),
-                        QuotaUnit = GetFlat(g.First(), "target_unit")
-                    })
-                    .OrderBy(target => TemplateTargetRank(target.QuotaCode))
-                    .ThenBy(target => target.QuotaCode, StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-                if (candidate.SampleFeatures.Count > 0 && candidate.Targets.Count > 0) result.Add(candidate);
-            }
-            return result;
-        }
-
-        // 为一个工程量主名称返回对应框候选；返回完整目标组，不拆散组件框。
-        private static List<BoxCandidate> LookupMappingBox(string queryFullName, List<BoxCandidate> boxIndex)
-        {
-            List<BoxCandidate> result = new List<BoxCandidate>();
-            string norm = NormalizeMatchText(queryFullName);
-            if (norm.Length == 0 || boxIndex == null) return result;
-            MatchTextFeatures queryFeatures = BuildMatchTextFeatures(norm);
-            foreach (BoxCandidate indexed in boxIndex)
-            {
-                int bestScore = indexed.SampleFeatures.Select(sample => MatchNameScore(queryFeatures, sample)).DefaultIfEmpty(0).Max();
-                if (bestScore < NameMatchMinScore) continue;
-                result.Add(new BoxCandidate
-                {
-                    BoxId = indexed.BoxId,
-                    Score = bestScore,
-                    SampleFeatures = indexed.SampleFeatures,
-                    Targets = indexed.Targets
-                });
-            }
-            return result
-                .OrderByDescending(c => c.Score)
-                .ThenBy(c => c.BoxId, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-
         // 多操作数表达式(如 E4+E5)：把每个操作数按其工程量名在目标表定位,以其数量代入原表达式。
         // 全部命中才返回 true；exprText=代入后的数字表达式(软件工程数量输入格式)；
         // operandTargetIdx=各操作数命中的目标行下标(供主循环标注“已并入”)。
@@ -1567,20 +1468,16 @@ namespace RecoNet
                 .ToList();
             if (replacements.Count == 0) return false;
             bool hasRisk = replacements.Any(item => !String.IsNullOrWhiteSpace(item.Status));
-            for (int i = 0; i < replacements.Count; i++)
+            if (!hasRisk)
             {
-                FillPreviewItem item = replacements[i];
-                item.Selected = !hasRisk;
-                item.NeedExactNameConfirmation = hasRisk;
-                if (!hasRisk)
+                ConfirmExactNameGroupInPlace(replacements, "人工选择同名绑定");
+            }
+            else
+            {
+                foreach (FillPreviewItem item in replacements)
                 {
-                    item.Status = "";
-                    item.AlignNote = i == 0
-                        ? "人工选择同名绑定"
-                        : "组件框第 " + (i + 1).ToString(CultureInfo.InvariantCulture) + " 条（人工选择同名绑定）";
-                }
-                else
-                {
+                    item.Selected = false;
+                    item.NeedExactNameConfirmation = true;
                     item.AlignNote = AppendPreviewNote(item.AlignNote, "人工选择候选，仍需处理组件风险");
                 }
             }

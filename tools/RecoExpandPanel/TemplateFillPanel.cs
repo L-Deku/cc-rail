@@ -2281,6 +2281,14 @@ namespace RecoNet
                 }
             }
 
+            // 软件选中行整组重绑后的 AlignNote：组首显示绑定编号与组条数，组员显示序号。
+            private static string BuildSoftwareSelectedRowNote(int order, string quotaCode, int groupCount)
+            {
+                return order == 0
+                    ? ("已绑定 " + (quotaCode ?? "") + (groupCount > 1 ? "（组 " + groupCount.ToString(CultureInfo.InvariantCulture) + " 条）" : "（软件选中行，含条目）"))
+                    : ("组件框第 " + (order + 1).ToString(CultureInfo.InvariantCulture) + " 条（软件选中行）");
+            }
+
             private void OnBindSelectedQuotaToRow()
             {
                 try
@@ -2394,9 +2402,7 @@ namespace RecoNet
                         target.NeedManualQuota = false;
                         target.Selected = true;
                         target.Status = "";
-                        target.AlignNote = order == 0
-                            ? ("已绑定 " + (link.QuotaCode ?? "") + (rows.Count > 1 ? "（组 " + rows.Count.ToString() + " 条）" : "（软件选中行，含条目）"))
-                            : ("组件框第 " + (order + 1).ToString(CultureInfo.InvariantCulture) + " 条（软件选中行）");
+                        target.AlignNote = BuildSoftwareSelectedRowNote(order, link.QuotaCode, rows.Count);
                         replacements.Add(target);
                     }
 
@@ -2446,10 +2452,7 @@ namespace RecoNet
                         {
                             replacements[i].GroupOrder = i;
                             replacements[i].TargetName = i == 0 ? groupLeader.TargetName : "";
-                            replacements[i].AlignNote = i == 0
-                                ? ("已绑定 " + (replacements[i].QuotaCode ?? "") +
-                                    (replacements.Count > 1 ? "（组 " + replacements.Count.ToString(CultureInfo.InvariantCulture) + " 条）" : "（软件选中行，含条目）"))
-                                : ("组件框第 " + (i + 1).ToString(CultureInfo.InvariantCulture) + " 条（软件选中行）");
+                            replacements[i].AlignNote = BuildSoftwareSelectedRowNote(i, replacements[i].QuotaCode, replacements.Count);
                         }
                     }
 

@@ -1298,25 +1298,16 @@ $upsert.Invoke($null, [object[]]@($rows.PSObject.BaseObject, $group))
 if ($rows.Count -ne 3) { throw '同名不同单位不应拆成两套组件关系' }
 if (@($rows | Where-Object { $_['accepted_count'] -ne '3' -or $_['quantity_unit'] -ne '10m3' }).Count -ne 0) { throw '名称级关系没有合并单位观察值' }
 Write-Host "PASS 组件框整组回写"
-
-$buildBoxIndex = $type.GetMethod('BuildMappingBoxIndex', $flags)
-$buildIndexArgs = New-Object 'object[]' 1
-$buildIndexArgs[0] = $rows.PSObject.BaseObject
-$boxIndex = $buildBoxIndex.Invoke($null, $buildIndexArgs)
-$lookupBox = $type.GetMethod('LookupMappingBox', $flags)
-$lookupArgs = New-Object 'object[]' 2
-$lookupArgs[0] = [string]'土方外运'
-$lookupArgs[1] = $boxIndex.PSObject.BaseObject
-$boxMatches = $lookupBox.Invoke($null, $lookupArgs)
-if ($boxMatches.Count -ne 1) { throw "组件框回读应返回1个整框，实际 $($boxMatches.Count)" }
-$boxCandidateType = $type.GetNestedType('BoxCandidate', $flags)
-$targetsField = $boxCandidateType.GetField('Targets', $flags)
-$readTargets = $targetsField.GetValue($boxMatches[0])
-if ($readTargets.Count -ne 3) { throw "组件框回读应保留3个目标，实际 $($readTargets.Count)" }
-Write-Host "PASS 组件框整组回读"
 } else {
-    Write-Host 'SKIP SQL-only模式不再执行本地mapping-boxes整组回写/回读旧测试'
+    Write-Host 'SKIP SQL-only模式不再执行本地mapping-boxes整组回写旧测试'
 }
+
+# 本地 mapping-boxes.jsonl 回读链（LoadMappingBoxRows/BuildMappingBoxIndex/LookupMappingBox）已按数据存储规则删除，不得恢复。
+$nameMatchSource = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $PSScriptRoot) 'TemplateFillNameMatch.cs'), [System.Text.Encoding]::UTF8)
+foreach ($removedReader in @('LoadMappingBoxRows(', 'BuildMappingBoxIndex(', 'LookupMappingBox(', 'mapping-boxes.jsonl')) {
+    if ($nameMatchSource.Contains($removedReader)) { throw "本地mapping-boxes回读入口不应恢复: $removedReader" }
+}
+Write-Host "PASS 本地mapping-boxes回读入口已删除"
 
 $fixturePath = Join-Path $env:TEMP 'reco-template-chapter-test.xlsx'
 $targetFixturePath = Join-Path $env:TEMP 'reco-template-target-test.xlsx'

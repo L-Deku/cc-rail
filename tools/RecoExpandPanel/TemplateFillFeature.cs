@@ -745,26 +745,6 @@ namespace RecoNet
             return fragments.OrderBy(fragment => fragment.Column).ToList();
         }
 
-        // 收集数量列左侧全部可见非数字片段；取舍由调用方决定。
-        private static List<RowNameFragment> CollectRowNameFragments(string workbook, string sheet, string expr,
-            Dictionary<string, HashSet<int>> hiddenColumnCache,
-            Dictionary<string, List<ExcelMergedRegion>> mergedRegionCache,
-            ExcelSyncReadContext readContext)
-        {
-            try
-            {
-                CellRef cr;
-                List<ExcelMergedRegion> mergedRegions;
-                if (!TryResolveRowNameAnchor(workbook, sheet, expr, mergedRegionCache, out cr, out mergedRegions))
-                    return new List<RowNameFragment>();
-                return CollectRowNameFragmentsCore(workbook, sheet, cr, hiddenColumnCache, mergedRegions, readContext);
-            }
-            catch
-            {
-                return new List<RowNameFragment>();
-            }
-        }
-
         private static RowNameParts SplitRowNameParts(List<RowNameFragment> fragments, string unit)
         {
             RowNameParts result = new RowNameParts { MainName = "", ContextLabel = "", Unit = "" };
@@ -1956,11 +1936,6 @@ namespace RecoNet
         }
 
         // 插入一行 定额输入(不含 定额序号)，返回新分配的 定额序号。
-        private static long InsertQuotaRowReturnId(SqlConnection conn, Dictionary<string, object> values)
-        {
-            return InsertQuotaRowReturnId(conn, null, values);
-        }
-
         private static long InsertQuotaRowReturnId(SqlConnection conn, SqlTransaction transaction, Dictionary<string, object> values)
         {
             List<string> cols = values.Keys.ToList();
