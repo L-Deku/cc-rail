@@ -330,9 +330,56 @@ namespace RecoQuotaRecommend
                 return false;
             }
 
+            // 先按原文抽纯汉字比较（保持既有行为）。
             string name = ExtractChinesePhrase(quota.QuotaName);
             string work = ExtractChinesePhrase(quota.WorkContent);
-            return name.Contains(chinesePhrase) || work.Contains(chinesePhrase);
+            if (name.Contains(chinesePhrase) || work.Contains(chinesePhrase))
+            {
+                return true;
+            }
+
+            // 定额名/工作内容里常夹带括号补充说明，原文抽纯汉字会把括号内容拼进连续串，
+            // 使查询短语不再是连续子串而被硬过滤误剔。样例：PY-738「警示（示踪）带铺设」
+            // 原抽取得「警示示踪带铺设」，不含「警示带」；去掉括号及其内容后得「警示带铺设」才能命中。
+            // 两种抽取结果任一包含查询短语即通过；每个候选仍只经过一次本方法，只多一次线性扫描。
+            string nameWithoutBrackets = ExtractChinesePhrase(StripBracketedText(quota.QuotaName));
+            string workWithoutBrackets = ExtractChinesePhrase(StripBracketedText(quota.WorkContent));
+            return nameWithoutBrackets.Contains(chinesePhrase) || workWithoutBrackets.Contains(chinesePhrase);
+        }
+
+        // 去掉半角/全角圆括号及其内部内容（支持嵌套）；未配对的右括号按普通字符略过。
+        private static string StripBracketedText(string text)
+        {
+            if (String.IsNullOrEmpty(text))
+            {
+                return "";
+            }
+
+            StringBuilder builder = new StringBuilder(text.Length);
+            int depth = 0;
+            foreach (char ch in text)
+            {
+                if (ch == '(' || ch == '（')
+                {
+                    depth++;
+                    continue;
+                }
+
+                if (ch == ')' || ch == '）')
+                {
+                    if (depth > 0)
+                    {
+                        depth--;
+                    }
+                    continue;
+                }
+
+                if (depth == 0)
+                {
+                    builder.Append(ch);
+                }
+            }
+            return builder.ToString();
         }
 
         private static string ExtractChinesePhrase(string text)
