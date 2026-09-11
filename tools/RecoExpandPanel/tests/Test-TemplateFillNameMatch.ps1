@@ -25,13 +25,34 @@ if ((S "500m长轨铺设" "25m长轨铺设") -ge 55) { throw "数字不符应<55
 Write-Host "PASS 数字不符不误配"
 if ((S "土方开挖" "钢筋制作安装") -ge 40) { throw "无关应低分" }
 Write-Host "PASS 无关低分"
+# 审查 §2.5：括号单位里的数字不得击穿数字规格惩罚（2026-09-08 实测旧值 57 / 90）。
+if ((S "C30混凝土(m3)" "C25混凝土(m3)") -ge 55) { throw "括号单位不得击穿数字惩罚, 实际 $(S 'C30混凝土(m3)' 'C25混凝土(m3)')" }
+if ((S "DN100PE管(100m)" "DN150PE管(100m)") -ge 55) { throw "括号单位不得击穿数字惩罚, 实际 $(S 'DN100PE管(100m)' 'DN150PE管(100m)')" }
+$quantityNorm = $type.GetMethod('NormalizeQuantityMatchName', $flags)
+if ($quantityNorm.Invoke($null, @('C30混凝土(m3)')) -ne 'c30混凝土') { throw "工程量名称应剥掉尾部括号单位, 实际 $($quantityNorm.Invoke($null, @('C30混凝土(m3)')))" }
+if ($quantityNorm.Invoke($null, @('DN100PE管（100m）')) -ne 'dn100pe管') { throw "工程量名称应剥掉尾部全角括号单位, 实际 $($quantityNorm.Invoke($null, @('DN100PE管（100m）')))" }
+if ($quantityNorm.Invoke($null, @('预制块(小型)')) -ne (N '预制块(小型)')) { throw "括号内不是单位时不得剥掉" }
+Write-Host "PASS 括号单位不击穿数字惩罚"
 
 $chapter = $type.GetMethod('AreMatchChaptersCompatible', $flags)
 if (-not $chapter.Invoke($null, @('第一章 路基工程', '路基工程'))) { throw '同章节标题应兼容' }
 if ($chapter.Invoke($null, @('第一章 路基工程', '第二章 站场工程'))) { throw '跨章节不应兼容' }
 if ($chapter.Invoke($null, @('第一章 路基工程', '第二章 路基工程'))) { throw '章号冲突时标题再相似也不得兼容' }
 if ($chapter.Invoke($null, @('', '路基工程'))) { throw '缺章节不应自动兼容' }
+# 审查 §3.3：序号相等时剥掉序号前缀再比标题；阿拉伯序号章节不得丢失。
+if (-not $chapter.Invoke($null, @('第1章 路基工程', '第一章 路基工程'))) { throw '阿拉伯/汉字序号相同且标题相同应兼容' }
+if (-not $chapter.Invoke($null, @('1、路基工程', '第一章 路基工程'))) { throw '“1、”与“第一章”同序号同标题应兼容' }
+if ($chapter.Invoke($null, @('第1章 路基工程', '第二章 路基工程'))) { throw '序号不同标题相同不得兼容' }
+if ($chapter.Invoke($null, @('第一章 路基工程', '第一章 站场工程'))) { throw '序号相同标题不同不得兼容' }
 Write-Host "PASS 章节兼容守卫"
+$anchor = $type.GetMethod('IsChapterAnchorRaw', $flags)
+foreach ($text in @('第1章 路基工程', '1、路基工程', '第一章 路基工程', '第一章路基工程', '一、路基工程', '(一)路基工程', '（一）路基工程', '第二部分 桥涵工程', '第3节 涵洞')) {
+    if (-not $anchor.Invoke($null, @($text))) { throw "应识别为章节锚点: $text" }
+}
+foreach ($text in @('四节段预制梁', '二分之一预制块', '1.1 土方开挖', '12 混凝土', '一分部工程', '(1)', '铺设无缝线路', '')) {
+    if ($anchor.Invoke($null, @($text))) { throw "不应识别为章节锚点: $text" }
+}
+Write-Host "PASS 章节锚点判定"
 
 $templateType = $type.GetNestedType('FillTemplate', $flags)
 $templateRowType = $type.GetNestedType('FillTemplateRow', $flags)
@@ -183,6 +204,107 @@ function Test-WorkbookReadPerformancePaths {
             throw '名字模板应把同一工作簿和工作表的名称地址聚合到一个上下文'
         }
         Write-Host 'PASS 名字模板批量聚合一个读取上下文'
+
+        # 工作表行范围：xlsx 必须流式读 sheet XML（扫 <row r> 取首末，与 NPOI FirstRowNum/LastRowNum 同口径；
+        # sheetData 无 row 时才退回 <dimension>，因为 NPOI 生成的文件 dimension 会停留在默认 "A1"）；
+        # 只有 .xls 回退 NPOI；失败时通过 out 参数回传原因，不再吞成"未读到工程量行"。
+        $usedRange = $type.GetMethod('TryGetXlsxUsedRowRange', $flags)
+        $usedRangeNpoi = $type.GetMethod('TryGetUsedRowRangeByNpoi', $flags)
+        if ($null -eq $usedRange -or $usedRange.GetParameters().Count -ne 5 -or $null -eq $usedRangeNpoi) {
+            throw '缺少带错误回传的工作表行范围读取入口'
+        }
+        function Invoke-UsedRowRange([System.Reflection.MethodInfo]$method, [string]$path, [string]$sheet) {
+            $rangeArgs = [object[]]::new(5)
+            $rangeArgs[0] = $path.PSObject.BaseObject
+            $rangeArgs[1] = $sheet.PSObject.BaseObject
+            $rangeOk = [bool]$method.Invoke($null, $rangeArgs.PSObject.BaseObject)
+            return [pscustomobject]@{ Ok = $rangeOk; First = [int]$rangeArgs[2]; Last = [int]$rangeArgs[3]; Error = [string]$rangeArgs[4] }
+        }
+        function Set-SheetXmlDimension([string]$sourcePath, [string]$targetPath, [string]$dimensionRef, [switch]$StripRows) {
+            Copy-Item -LiteralPath $sourcePath -Destination $targetPath -Force
+            Add-Type -AssemblyName System.IO.Compression | Out-Null
+            $zipStream = [IO.File]::Open($targetPath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite)
+            try {
+                $zip = New-Object System.IO.Compression.ZipArchive($zipStream, [System.IO.Compression.ZipArchiveMode]::Update)
+                try {
+                    $sheetEntry = @($zip.Entries | Where-Object { $_.FullName -like '*worksheets/sheet1.xml' })[0]
+                    if ($null -eq $sheetEntry) { throw '夹具缺少 sheet1.xml' }
+                    $entryStream = $sheetEntry.Open()
+                    try {
+                        $readerObj = New-Object IO.StreamReader($entryStream, [Text.Encoding]::UTF8, $true, 4096, $true)
+                        $sheetXml = $readerObj.ReadToEnd()
+                        $readerObj.Dispose()
+                        $sheetXml = [regex]::Replace($sheetXml, '<dimension\b[^>]*/>', '')
+                        if ($StripRows) {
+                            $sheetXml = [regex]::Replace($sheetXml, '(?s)<row\b[^>]*/>|<row\b.*?</row>', '')
+                        }
+                        if (-not [String]::IsNullOrEmpty($dimensionRef)) {
+                            $sheetXml = [regex]::Replace($sheetXml, '(<sheetData\b)', ('<dimension ref="' + $dimensionRef + '"/>$1'), 1)
+                        }
+                        $entryStream.SetLength(0)
+                        $bytes = [Text.Encoding]::UTF8.GetBytes($sheetXml)
+                        $entryStream.Write($bytes, 0, $bytes.Length)
+                    }
+                    finally { $entryStream.Dispose() }
+                }
+                finally { $zip.Dispose() }
+            }
+            finally { $zipStream.Dispose() }
+        }
+
+        $rangeFixturePath = Join-Path ([IO.Path]::GetTempPath()) ("reco-template-fill-range-" + [Guid]::NewGuid().ToString('N') + '.xlsx')
+        $rangeNoDimPath = Join-Path ([IO.Path]::GetTempPath()) ("reco-template-fill-nodim-" + [Guid]::NewGuid().ToString('N') + '.xlsx')
+        $rangeDimPath = Join-Path ([IO.Path]::GetTempPath()) ("reco-template-fill-dim-" + [Guid]::NewGuid().ToString('N') + '.xlsx')
+        $rangeBook = $null
+        try {
+            $rangeBook = New-Object NPOI.XSSF.UserModel.XSSFWorkbook
+            $rangeSheet = $rangeBook.CreateSheet('范围表')
+            $rangeSheet.CreateRow(2).CreateCell(0).SetCellValue('第三行工程量')
+            $rangeSheet.CreateRow(7).CreateCell(1).SetCellValue([double]8)
+            $expectedFirst = [int]$rangeSheet.FirstRowNum + 1
+            $expectedLast = [int]$rangeSheet.LastRowNum + 1
+            $rangeStream = [IO.File]::Create($rangeFixturePath)
+            try { $rangeBook.Write($rangeStream) } finally { $rangeStream.Dispose() }
+
+            $streamed = Invoke-UsedRowRange $usedRange $rangeFixturePath '范围表'
+            $viaNpoi = Invoke-UsedRowRange $usedRangeNpoi $rangeFixturePath '范围表'
+            if (-not $streamed.Ok -or -not $viaNpoi.Ok -or $streamed.First -ne $viaNpoi.First -or $streamed.Last -ne $viaNpoi.Last -or
+                $streamed.First -ne $expectedFirst -or $streamed.Last -ne $expectedLast) {
+                throw "xlsx 流式行范围与 NPOI 不一致: 流式 $($streamed.First)-$($streamed.Last) '$($streamed.Error)' / NPOI $($viaNpoi.First)-$($viaNpoi.Last) / 期望 $expectedFirst-$expectedLast"
+            }
+
+            Set-SheetXmlDimension $rangeFixturePath $rangeNoDimPath ''
+            $noDim = Invoke-UsedRowRange $usedRange $rangeNoDimPath '范围表'
+            if (-not $noDim.Ok -or $noDim.First -ne $expectedFirst -or $noDim.Last -ne $expectedLast) {
+                throw "无 dimension 时应扫描 <row r> 取首末行: $($noDim.First)-$($noDim.Last) '$($noDim.Error)'"
+            }
+            Set-SheetXmlDimension $rangeFixturePath $rangeDimPath 'A2:B9'
+            $withDim = Invoke-UsedRowRange $usedRange $rangeDimPath '范围表'
+            if (-not $withDim.Ok -or $withDim.First -ne $expectedFirst -or $withDim.Last -ne $expectedLast) {
+                throw "有 row 时必须以 <row r> 为准而不是 dimension: $($withDim.First)-$($withDim.Last) '$($withDim.Error)'"
+            }
+            Set-SheetXmlDimension $rangeFixturePath $rangeDimPath 'A2:B9' -StripRows
+            $dimOnly = Invoke-UsedRowRange $usedRange $rangeDimPath '范围表'
+            if (-not $dimOnly.Ok -or $dimOnly.First -ne 2 -or $dimOnly.Last -ne 9) {
+                throw "sheetData 无 row 时应退回 dimension 行范围: $($dimOnly.First)-$($dimOnly.Last) '$($dimOnly.Error)'"
+            }
+
+            $missingSheet = Invoke-UsedRowRange $usedRange $rangeFixturePath '不存在的表'
+            if ($missingSheet.Ok -or $missingSheet.Error -notmatch '找不到工作表') {
+                throw "找不到工作表时应回传原因: '$($missingSheet.Error)'"
+            }
+            $xlsRange = Invoke-UsedRowRange $usedRange $xlsFixturePath '测试表'
+            if (-not $xlsRange.Ok -or $xlsRange.First -ne 1 -or $xlsRange.Last -ne 1) {
+                throw "xls 应回退 NPOI 读取行范围: $($xlsRange.First)-$($xlsRange.Last) '$($xlsRange.Error)'"
+            }
+            Write-Host 'PASS xlsx 流式行范围与 NPOI 一致、无 row 退回 dimension、xls 回退 NPOI、失败回传原因'
+        }
+        finally {
+            if ($null -ne $rangeBook) { try { $rangeBook.Close() } catch { } }
+            foreach ($tempPath in @($rangeFixturePath, $rangeNoDimPath, $rangeDimPath)) {
+                if (Test-Path -LiteralPath $tempPath) { Remove-Item -LiteralPath $tempPath -Force }
+            }
+        }
     }
     finally {
         if ($null -ne $fixtureBook) {
@@ -991,11 +1113,149 @@ try {
         $scrollPanel.Close()
         $scrollPanel.Dispose()
     }
+
+    # 推荐定额"勾选选中行"必须走与组首复选框相同的确认链：NeedExactNameConfirmation 清除、黄底退去、
+    # 不安全组保持未勾选并保留红底；滚动视口、其它行的勾选状态和多行选中集合都不能变。
+    $batchPanel = $panelCtor.Invoke([object[]]@($mainForm.PSObject.BaseObject))
+    try {
+        $smartOnlyField = $panelType.GetField('smartOnly', $flags)
+        $setSelectedChecked = $panelType.GetMethod('SetSelectedSmartGroupsChecked', $flags)
+        $confirmGroup = $panelType.GetMethod('ConfirmNameQuotaGroup', $flags)
+        if ($null -eq $smartOnlyField -or $null -eq $setSelectedChecked -or $null -eq $confirmGroup) {
+            throw '缺少"勾选选中行"或整组确认唯一入口'
+        }
+        $smartOnlyField.SetValue($batchPanel, $true)
+        $batchPreview = $panelType.GetField('preview', $flags).GetValue($batchPanel)
+        for ($rowNo = 1; $rowNo -le 60; $rowNo++) {
+            $filler = New-PreviewItem $rowNo 0 "工程量$rowNo"
+            $itemType.GetField('QuotaCode', $flags).SetValue($filler, "Q-$rowNo")
+            $itemType.GetField('Selected', $flags).SetValue($filler, ($rowNo -eq 10))
+            $batchPreview.Add($filler)
+        }
+        $batchLeader = $batchPreview[29]
+        $itemType.GetField('NeedExactNameConfirmation', $flags).SetValue($batchLeader, $true)
+        $itemType.GetField('AlignNote', $flags).SetValue($batchLeader, '模板存在重复工程量名称，需确认')
+        $batchUnsafe = $batchPreview[34]
+        $itemType.GetField('Status', $flags).SetValue($batchUnsafe, '单位不一致')
+
+        $panelType.GetMethod('FillGrid', $flags).Invoke($batchPanel, $null)
+        $batchPanel.Show()
+        [System.Windows.Forms.Application]::DoEvents()
+        $batchGrid = $panelType.GetField('grid', $flags).GetValue($batchPanel)
+        $softColor = [System.Drawing.Color]::FromArgb(255, 246, 196).ToArgb()
+        $mistyRose = [System.Drawing.Color]::MistyRose.ToArgb()
+        if ($batchGrid.Rows[29].DefaultCellStyle.BackColor.ToArgb() -ne $softColor -or
+            $batchGrid.Rows[34].DefaultCellStyle.BackColor.ToArgb() -ne $mistyRose) {
+            throw '批量勾选用例前置状态错误：待确认组应为黄底、不安全组应为红底'
+        }
+        $batchGrid.CurrentCell = $batchGrid.Rows[0].Cells[0]
+        $batchGrid.FirstDisplayedScrollingRowIndex = 15
+        [System.Windows.Forms.Application]::DoEvents()
+        $batchTopBefore = $batchGrid.FirstDisplayedScrollingRowIndex
+        $batchGrid.ClearSelection()
+        foreach ($index in @(29, 31, 34)) { $batchGrid.Rows[$index].Selected = $true }
+        if ($batchGrid.SelectedRows.Count -ne 3) { throw '批量勾选用例没有选中 3 行，用例失效' }
+
+        $setSelectedChecked.Invoke($batchPanel, [object[]]@($true))
+        [System.Windows.Forms.Application]::DoEvents()
+        [int[]]$selectedAfter = @($batchGrid.SelectedRows | ForEach-Object { $_.Index } | Sort-Object)
+        $leaderRow = $batchGrid.Rows[29]
+        if (-not $leaderRow.Tag.Selected -or $leaderRow.Tag.NeedExactNameConfirmation -or
+            -not [bool]$leaderRow.Cells['sel'].Value -or
+            $leaderRow.DefaultCellStyle.BackColor.ToArgb() -eq $softColor -or
+            $leaderRow.DefaultCellStyle.BackColor.ToArgb() -eq $mistyRose) {
+            throw '"勾选选中行"必须走确认链：清除 NeedExactNameConfirmation、整组勾选并退去黄/红底'
+        }
+        if (-not $batchGrid.Rows[31].Tag.Selected -or -not [bool]$batchGrid.Rows[31].Cells['sel'].Value) {
+            throw '"勾选选中行"应勾选普通安全组'
+        }
+        if ($batchGrid.Rows[34].Tag.Selected -or [bool]$batchGrid.Rows[34].Cells['sel'].Value -or
+            $batchGrid.Rows[34].DefaultCellStyle.BackColor.ToArgb() -ne $mistyRose) {
+            throw '不安全组不得被"勾选选中行"绕过确认链勾选，红底必须保留'
+        }
+        if (-not $batchGrid.Rows[9].Tag.Selected -or -not [bool]$batchGrid.Rows[9].Cells['sel'].Value -or
+            $batchGrid.Rows[0].Tag.Selected -or [bool]$batchGrid.Rows[0].Cells['sel'].Value) {
+            throw '"勾选选中行"不得改变未选中行的勾选状态'
+        }
+        if ($batchGrid.FirstDisplayedScrollingRowIndex -ne $batchTopBefore) {
+            throw "批量勾选后滚动视口变化: $batchTopBefore -> $($batchGrid.FirstDisplayedScrollingRowIndex)"
+        }
+        if (($selectedAfter -join ',') -ne '29,31,34') {
+            throw "批量勾选后多行选中集合变化: $($selectedAfter -join ',')"
+        }
+        $writeScopeText = ($panelType.GetField('lblWriteScope', $flags).GetValue($batchPanel)).Text
+        if ($writeScopeText -ne '将写入 2 条（选中 3 组 ∩ 已勾选 3 组）') {
+            throw "批量勾选后写入范围标签错误: '$writeScopeText'"
+        }
+
+        $setSelectedChecked.Invoke($batchPanel, [object[]]@($false))
+        [System.Windows.Forms.Application]::DoEvents()
+        if ($batchGrid.Rows[29].Tag.Selected -or [bool]$batchGrid.Rows[29].Cells['sel'].Value -or
+            $batchGrid.Rows[31].Tag.Selected -or [bool]$batchGrid.Rows[31].Cells['sel'].Value -or
+            -not $batchGrid.Rows[9].Tag.Selected -or
+            $batchGrid.FirstDisplayedScrollingRowIndex -ne $batchTopBefore -or
+            $batchGrid.SelectedRows.Count -ne 3) {
+            throw '"取消勾选"应只取消选中组并保持滚动视口与其它行勾选'
+        }
+        Write-Host 'PASS "勾选选中行"走整组确认链、保持滚动视口与其它行勾选状态'
+    }
+    finally {
+        $batchPanel.Close()
+        $batchPanel.Dispose()
+    }
 }
 finally {
     if ($null -ne $panel) { $panel.Dispose() }
     $mainForm.Dispose()
 }
+
+# ApplyFillToSelectedEntry 与 ApplyFill 口径统一：按组过滤 unsafe 组继续写安全组，跳过说明带工程量名与原因。
+$filterSafeGroups = $type.GetMethod('FilterSafeNameQuotaGroupsForWrite', $flags)
+$skippedSummary = $type.GetMethod('BuildSkippedNameQuotaGroupSummary', $flags)
+if ($null -eq $filterSafeGroups -or $null -eq $skippedSummary) { throw '缺少写入前按组过滤或跳过文案入口' }
+$groupListType = [System.Collections.Generic.List``1].MakeGenericType($itemListType)
+$mixedGroups = [Activator]::CreateInstance($groupListType)
+function New-WritableGroupItem([int]$row, [string]$name, [string]$code, [bool]$selected) {
+    $writable = New-PreviewItem $row 0 $name
+    $itemType.GetField('Selected', $flags).SetValue($writable, $selected)
+    $itemType.GetField('QuotaCode', $flags).SetValue($writable, $code)
+    $itemType.GetField('QuantityText', $flags).SetValue($writable, '12.5')
+    $itemType.GetField('ChosenQuotaSeq', $flags).SetValue($writable, [long]101)
+    $itemType.GetField('ChosenItemSeq', $flags).SetValue($writable, [long]7)
+    return $writable
+}
+$safeGroup = [Activator]::CreateInstance($itemListType)
+$safeGroup.Add((New-WritableGroupItem 12 '安全工程量' 'Q-SAFE' $true))
+$unsafeGroup = [Activator]::CreateInstance($itemListType)
+$unsafeItem = New-WritableGroupItem 15 '阻断工程量' 'Q-BAD' $true
+$itemType.GetField('TargetFullName', $flags).SetValue($unsafeItem, '阻断工程量完整名称')
+$itemType.GetField('Status', $flags).SetValue($unsafeItem, '单位不一致')
+$unsafeGroup.Add($unsafeItem)
+$unselectedGroup = [Activator]::CreateInstance($itemListType)
+$unselectedGroup.Add((New-WritableGroupItem 18 '未勾选工程量' 'Q-UNCHECKED' $false))
+$mixedGroups.Add($safeGroup)
+$mixedGroups.Add($unsafeGroup)
+$mixedGroups.Add($unselectedGroup)
+$filterArgs = [object[]]::new(2)
+$filterArgs[0] = $mixedGroups.PSObject.BaseObject
+$safeGroups = $filterSafeGroups.Invoke($null, $filterArgs.PSObject.BaseObject)
+$skippedNotes = $filterArgs[1]
+if ($safeGroups.Count -ne 1 -or $safeGroups[0][0].QuotaCode -ne 'Q-SAFE' -or $skippedNotes.Count -ne 2 -or
+    $skippedNotes[0] -notmatch '第 15 行' -or $skippedNotes[0] -notmatch '阻断工程量完整名称' -or $skippedNotes[0] -notmatch '单位不一致' -or
+    $skippedNotes[1] -notmatch '第 18 行' -or $skippedNotes[1] -notmatch '未勾选工程量' -or $skippedNotes[1] -notmatch '未勾选') {
+    throw "写入前按组过滤结果错误: safe=$($safeGroups.Count) skipped=$($skippedNotes -join ' | ')"
+}
+$summaryArgs = [object[]]::new(1)
+$summaryArgs[0] = $skippedNotes.PSObject.BaseObject
+$summaryText = [string]$skippedSummary.Invoke($null, $summaryArgs.PSObject.BaseObject)
+if ($summaryText -notmatch '已跳过 2 组' -or $summaryText -notmatch '阻断工程量完整名称' -or $summaryText -notmatch '未勾选工程量') {
+    throw "跳过文案错误: '$summaryText'"
+}
+$emptySummaryArgs = [object[]]::new(1)
+$emptySummaryArgs[0] = (New-Object 'System.Collections.Generic.List[string]').PSObject.BaseObject
+$emptySummary = [string]$skippedSummary.Invoke($null, $emptySummaryArgs.PSObject.BaseObject)
+if ($emptySummary -ne '') { throw '无跳过组时不应附加跳过文案' }
+Write-Host 'PASS 写入前按组过滤 unsafe 组并生成带工程量名与原因的跳过文案'
 
 $allItems.Add((New-PreviewItem 10 0 '工程量A'))
 $allItems.Add((New-PreviewItem 10 1 ''))

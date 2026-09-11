@@ -775,17 +775,21 @@ namespace RecoNet
             if (ordered.Count == 0) return result;
 
             result.Unit = unit ?? "";
-            if (!String.IsNullOrWhiteSpace(unit) &&
-                String.Equals(ordered[ordered.Count - 1].Text.Trim(), unit.Trim(), StringComparison.OrdinalIgnoreCase))
+            string unitText = (unit ?? "").Trim();
+            if (unitText.Length > 0)
             {
-                ordered.RemoveAt(ordered.Count - 1);
+                // 版式 A=名称 B=单位 C=规格 D=数量 时单位不在末位：与单位等值的片段一律不进主名称。
+                ordered = ordered
+                    .Where(fragment => !String.Equals(fragment.Text.Trim(), unitText, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
             }
 
+            // 纵向合并、章节锚点、序号片段都只进 ContextLabel（存但不参与匹配）。
             List<RowNameFragment> context = ordered
-                .Where(fragment => fragment.IsVerticalMerge || IsChapterAnchorRaw(fragment.Text))
+                .Where(fragment => fragment.IsVerticalMerge || IsChapterAnchorRaw(fragment.Text) || IsRowNameOrdinalFragment(fragment.Text))
                 .ToList();
             List<RowNameFragment> main = ordered
-                .Where(fragment => !fragment.IsVerticalMerge && !IsChapterAnchorRaw(fragment.Text))
+                .Where(fragment => !context.Contains(fragment))
                 .ToList();
             if (main.Count == 0 && context.Count > 0)
             {
@@ -799,6 +803,15 @@ namespace RecoNet
             result.ContextLabel = String.Join(" ", context.OrderBy(fragment => fragment.Column)
                 .Select(fragment => fragment.Text.Trim()).ToArray()).Trim();
             return result;
+        }
+
+        // 序号片段：求值失败的“1）/1)/①…⑳/Ⅰ…Ⅹ/一/1.1.2/1．2/A”等，整格完整匹配才算；
+        // 纯数值格已在 ReadRowNameCellText 当数值丢弃。C30/DN100/Φ12 等规格不是序号。
+        private static bool IsRowNameOrdinalFragment(string text)
+        {
+            if (String.IsNullOrWhiteSpace(text)) return false;
+            return System.Text.RegularExpressions.Regex.IsMatch(text.Trim(),
+                "^[(（]?(?:[0-9]+(?:[.．][0-9]+)*|[一二三四五六七八九十]+|[①-⑳]|[Ⅰ-Ⅹⅰ-ⅹ]+|[A-Za-z])[)）、.．]?$");
         }
 
         private static bool TryReadRowNamePartsAt(string workbook, string sheet, string expr,
@@ -1337,8 +1350,17 @@ namespace RecoNet
                 candidates.Count.ToString(CultureInfo.InvariantCulture) + " groups=" +
                 groups.Count.ToString(CultureInfo.InvariantCulture));
             if (groups.Count == 0) return blocked("empty_selection", "没有同时被选中且勾选的定额。");
-            if (groups.Any(group => !IsNameQuotaGroupSafeForWrite(group)))
-                return blocked("unsafe_group", "选中的组件存在数量、单位、公式或 SF 条目阻断，整组未写入。");
+            // 与 ApplyFill 口径一致：按 TargetRow 过滤 unsafe 组后继续写安全组；
+            // 被跳过组的工程量名与原因只进用户可见文案，日志只记计数。
+            List<string> skippedGroupNotes;
+            List<List<FillPreviewItem>> safeGroups = FilterSafeNameQuotaGroupsForWrite(groups, out skippedGroupNotes);
+            if (safeGroups.Count == 0)
+                return blocked("unsafe_group skipped=" + skippedGroupNotes.Count.ToString(CultureInfo.InvariantCulture),
+                    "选中的组件存在数量、单位、公式或 SF 条目阻断，整组未写入：" + skippedGroupNotes[0]);
+            int skippedGroupCount = skippedGroupNotes.Count;
+            groups = safeGroups;
+            candidates = groups.SelectMany(group => group).ToList();
+            string skippedSummary = BuildSkippedNameQuotaGroupSummary(skippedGroupNotes);
 
             SqlConnection conn = GetOpenProjectConnection(mainForm);
             string connectionIdentity = GetProjectConnectionIdentity(conn);
@@ -1401,7 +1423,8 @@ namespace RecoNet
                 .Select(group => group.Key + ":" + group.Count().ToString(CultureInfo.InvariantCulture)).ToArray());
             Log("Smart fill apply plan: L1=" + l1Count.ToString(CultureInfo.InvariantCulture) +
                 " L2=" + l2Count.ToString(CultureInfo.InvariantCulture) +
-                " sf=" + sfCount.ToString(CultureInfo.InvariantCulture) + " entries=" + entryBreakdown);
+                " sf=" + sfCount.ToString(CultureInfo.InvariantCulture) + " entries=" + entryBreakdown +
+                " skippedGroups=" + skippedGroupCount.ToString(CultureInfo.InvariantCulture));
 
             AgentUndoRecord undo = new AgentUndoRecord
             {
@@ -1509,7 +1532,95 @@ namespace RecoNet
             int businessRows = candidates.Count;
             succeeded = true;
             return "已向当前条目写入 " + businessRows.ToString(CultureInfo.InvariantCulture) + " 条定额，标记 " +
-                markerRows.ToString(CultureInfo.InvariantCulture) + " 条。写入完成即已保存；请点击“计算”刷新单价、合价和项目汇总。";
+                markerRows.ToString(CultureInfo.InvariantCulture) + " 条。写入完成即已保存；请点击“计算”刷新单价、合价和项目汇总。" +
+                skippedSummary;
+        }
+
+        // 写入前按组过滤：unsafe 组整组跳过，安全组保留原顺序继续写。
+        // skippedNotes 是给用户看的“第 N 行「工程量名」：原因”，不得写入日志。
+        private static List<List<FillPreviewItem>> FilterSafeNameQuotaGroupsForWrite(
+            List<List<FillPreviewItem>> groups, out List<string> skippedNotes)
+        {
+            skippedNotes = new List<string>();
+            List<List<FillPreviewItem>> safe = new List<List<FillPreviewItem>>();
+            foreach (List<FillPreviewItem> group in groups ?? new List<List<FillPreviewItem>>())
+            {
+                if (group == null || group.Count == 0) continue;
+                if (IsNameQuotaGroupSafeForWrite(group))
+                {
+                    safe.Add(group);
+                    continue;
+                }
+                skippedNotes.Add(DescribeSkippedNameQuotaGroup(group));
+            }
+            return safe;
+        }
+
+        private static string BuildSkippedNameQuotaGroupSummary(List<string> skippedNotes)
+        {
+            if (skippedNotes == null || skippedNotes.Count == 0) return "";
+            return "\r\n已跳过 " + skippedNotes.Count.ToString(CultureInfo.InvariantCulture) +
+                " 组存在阻断的组件，未写入：\r\n" + String.Join("\r\n", skippedNotes.ToArray());
+        }
+
+        private static string DescribeSkippedNameQuotaGroup(List<FillPreviewItem> group)
+        {
+            FillPreviewItem leader = (group ?? new List<FillPreviewItem>())
+                .Where(item => item != null).OrderBy(item => item.GroupOrder).FirstOrDefault();
+            if (leader == null) return "（空组）：未找到组件数据";
+            string name = String.IsNullOrWhiteSpace(leader.TargetFullName) ? (leader.TargetName ?? "") : leader.TargetFullName;
+            return "第 " + leader.TargetRow.ToString(CultureInfo.InvariantCulture) + " 行「" + name + "」：" +
+                GetUnsafeNameQuotaGroupReason(group);
+        }
+
+        // 与 IsNameQuotaGroupSafeForWrite 的各项条件一一对应，给出用户可读的阻断原因。
+        private static string GetUnsafeNameQuotaGroupReason(List<FillPreviewItem> group)
+        {
+            List<FillPreviewItem> members = (group ?? new List<FillPreviewItem>()).Where(item => item != null).ToList();
+            if (members.Count == 0) return "未找到组件数据";
+            List<string> reasons = new List<string>();
+            foreach (FillPreviewItem item in members)
+            {
+                foreach (string part in (item.Status ?? "").Split(new[] { '；' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string trimmed = part.Trim();
+                    if (trimmed.Length > 0 && !reasons.Contains(trimmed)) reasons.Add(trimmed);
+                }
+                if (item.SfEntryBlocked)
+                {
+                    string sfReason = String.IsNullOrWhiteSpace(item.SfEntryBlockReason) ? "SF 条目冲突" : item.SfEntryBlockReason.Trim();
+                    if (!reasons.Contains(sfReason)) reasons.Add(sfReason);
+                }
+            }
+            if (members.Any(item => !item.IsNameDriven) && !reasons.Contains("非名字驱动行")) reasons.Add("非名字驱动行");
+            if (members.Any(item => !item.Selected) && !reasons.Contains("组内有定额未勾选")) reasons.Add("组内有定额未勾选");
+            foreach (FillPreviewItem item in members.Where(item =>
+                String.Equals(item.TemplateName, "推荐定额", StringComparison.Ordinal)))
+            {
+                bool sf = GetLearningBaseTargetCode(item.QuotaCode) == "SF";
+                bool equipmentEntry = (item.ChosenItemName ?? "").IndexOf("设备购置费", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (sf != equipmentEntry)
+                {
+                    string mismatch = sf ? "SF 设备费只能写入设备购置费条目" : "设备购置费条目只能写入 SF 设备费";
+                    if (!reasons.Contains(mismatch)) reasons.Add(mismatch);
+                }
+                if (IsContextSensitiveLearningCode(item.QuotaCode) &&
+                    (String.IsNullOrWhiteSpace(item.SourceName) || String.IsNullOrWhiteSpace(item.Unit)) &&
+                    !reasons.Contains("定额缺少完整名称或单位")) reasons.Add("定额缺少完整名称或单位");
+            }
+            foreach (FillPreviewItem item in members)
+            {
+                decimal quantity;
+                string quantityError;
+                if ((!TryEvaluateDecimal(item.QuantityText, out quantity, out quantityError) || quantity <= 0m) &&
+                    !reasons.Contains("数量无效或不大于 0")) reasons.Add("数量无效或不大于 0");
+                bool hasSource = item.ChosenQuotaSeq > 0 &&
+                    (item.NeighborSourceQuotaSeq > 0 || item.ChosenItemSeq > 0) ||
+                    item.IsLibraryQuota && !String.IsNullOrEmpty(item.QuotaCode) &&
+                    !String.IsNullOrEmpty(item.ChosenItemNo);
+                if (!hasSource && !reasons.Contains("缺少可写入的源定额行或条目")) reasons.Add("缺少可写入的源定额行或条目");
+            }
+            return reasons.Count == 0 ? "未通过写入前校验" : String.Join("；", reasons.ToArray());
         }
 
         // 写入：把选中预览项对应的源定额行，直接复制到【目标单元】的对应条目（条目序号全局共享，原样保留），

@@ -611,23 +611,46 @@ namespace RecoNet
                     item.GroupOrder == 0 && item.Selected).Select(item => item.TargetRow));
             }
 
+            // “勾选选中行/取消勾选”：对每个选中组的组首走与组首复选框完全相同的确认/取消入口，
+            // 这样 NeedExactNameConfirmation、软状态和红/黄底都会同步消退；不安全组保持未勾选并保留提示。
+            // 只按 TargetRow 局部刷新当前组，整个批处理前后恢复滚动视口、当前单元格和多行选中集合。
             private void SetSelectedSmartGroupsChecked(bool value)
             {
                 if (!smartOnly) return;
                 HashSet<int> selectedRows = GetSelectedSmartTargetRows();
-                foreach (FillPreviewItem item in preview.Where(item => item != null && selectedRows.Contains(item.TargetRow)))
+                if (selectedRows.Count == 0) return;
+                // 先快照组首行与选中集合：确认过程会移动 CurrentCell / 重建组内行，不能边改边枚举 SelectedRows。
+                List<DataGridViewRow> leaderRows = grid.Rows.Cast<DataGridViewRow>().Where(row =>
                 {
-                    item.Selected = value;
-                }
+                    FillPreviewItem item = row.Tag as FillPreviewItem;
+                    return item != null && item.IsNameDriven && item.GroupOrder == 0 && selectedRows.Contains(item.TargetRow);
+                }).ToList();
+                HashSet<string> selectedKeys = new HashSet<string>(grid.SelectedRows.Cast<DataGridViewRow>()
+                    .Select(row => row.Tag as FillPreviewItem).Where(item => item != null)
+                    .Select(item => item.TargetRow.ToString(CultureInfo.InvariantCulture) + "|" +
+                        item.GroupOrder.ToString(CultureInfo.InvariantCulture)), StringComparer.Ordinal);
+                TemplateFillGridViewState state = CaptureGridViewState();
+                grid.EndEdit();
                 bool old = updatingNameQuotaCell;
-                updatingNameQuotaCell = true;
                 try
                 {
+                    foreach (DataGridViewRow leaderRow in leaderRows)
+                    {
+                        updatingNameQuotaCell = old;
+                        if (value) ConfirmNameQuotaGroup(leaderRow);
+                        else UncheckNameQuotaGroup(leaderRow);
+                    }
+                    updatingNameQuotaCell = true;
+                    RestoreGridViewState(state);
+                    // 恢复 CurrentCell 会把该行并入选中集合、定位阻断行也会改选中；这里按快照原样还原多行选中。
                     foreach (DataGridViewRow row in grid.Rows)
                     {
                         FillPreviewItem item = row.Tag as FillPreviewItem;
-                        if (item != null && item.GroupOrder == 0 && selectedRows.Contains(item.TargetRow))
-                            row.Cells["sel"].Value = value;
+                        if (item == null) continue;
+                        string key = item.TargetRow.ToString(CultureInfo.InvariantCulture) + "|" +
+                            item.GroupOrder.ToString(CultureInfo.InvariantCulture);
+                        bool shouldSelect = selectedKeys.Contains(key);
+                        if (row.Selected != shouldSelect) row.Selected = shouldSelect;
                     }
                 }
                 finally { updatingNameQuotaCell = old; }
@@ -1597,11 +1620,21 @@ namespace RecoNet
 
             private void ConfirmExactNameFromCheck(DataGridViewRow row)
             {
-                FillPreviewItem item = row == null ? null : row.Tag as FillPreviewItem;
                 bool value = row != null && Convert.ToBoolean(row.Cells["sel"].Value ?? false);
-                if (item == null || !value) return;
+                if (!value) return;
+                ConfirmNameQuotaGroup(row);
+            }
+
+            // 确认整组的唯一入口：组首复选框勾选与“勾选选中行”都必须走这里。
+            // 先落实软状态（计数单位 1:1），不安全组取消勾选并定位首个阻断行；安全组确认同名候选、
+            // 整组 Selected 并按 TargetRow 局部刷新。返回整组是否已勾选。
+            private bool ConfirmNameQuotaGroup(DataGridViewRow row)
+            {
+                FillPreviewItem item = row == null ? null : row.Tag as FillPreviewItem;
+                if (item == null || !item.IsNameDriven) return false;
                 List<FillPreviewItem> currentGroup = preview.Where(candidate => candidate != null &&
                     candidate.IsNameDriven && candidate.TargetRow == item.TargetRow).ToList();
+                if (currentGroup.Count == 0) return false;
                 foreach (FillPreviewItem candidate in currentGroup) ConfirmPendingCountUnitScale(candidate);
                 if (HasUnsafeNameQuotaCandidate(currentGroup))
                 {
@@ -1624,7 +1657,7 @@ namespace RecoNet
                         }
                     }
                     finally { updatingNameQuotaCell = false; }
-                    return;
+                    return false;
                 }
 
                 updatingNameQuotaCell = true;
@@ -1638,6 +1671,26 @@ namespace RecoNet
                     RefreshTargetGroupInGrid(targetRow);
                 }
                 finally { updatingNameQuotaCell = false; }
+                return currentGroup.All(candidate => candidate.Selected);
+            }
+
+            // 取消整组勾选的唯一入口：组首复选框取消与“取消勾选”共用。
+            private void UncheckNameQuotaGroup(DataGridViewRow row)
+            {
+                FillPreviewItem item = row == null ? null : row.Tag as FillPreviewItem;
+                if (item == null || !item.IsNameDriven) return;
+                foreach (FillPreviewItem member in preview.Where(candidate => candidate != null &&
+                    candidate.IsNameDriven && candidate.TargetRow == item.TargetRow))
+                {
+                    member.Selected = false;
+                }
+                if (Convert.ToBoolean(row.Cells["sel"].Value ?? false))
+                {
+                    bool previousUpdating = updatingNameQuotaCell;
+                    updatingNameQuotaCell = true;
+                    try { row.Cells["sel"].Value = false; }
+                    finally { updatingNameQuotaCell = previousUpdating; }
+                }
             }
 
             private void ApplyNameGroupSelectionFromCheck(DataGridViewRow row)
@@ -1650,11 +1703,7 @@ namespace RecoNet
                     ConfirmExactNameFromCheck(row);
                     return;
                 }
-                foreach (FillPreviewItem member in preview.Where(candidate => candidate != null &&
-                    candidate.IsNameDriven && candidate.TargetRow == item.TargetRow))
-                {
-                    member.Selected = value;
-                }
+                UncheckNameQuotaGroup(row);
             }
 
             private static bool HasUnsafeNameQuotaCandidate(IEnumerable<FillPreviewItem> items)
@@ -2431,6 +2480,8 @@ namespace RecoNet
                         RefreshApplyEnabled();
                     }
                     RefreshTargetGroupInGrid(groupLeader.TargetRow);
+                    // 右键绑定可能改变组内条数和勾选状态，“将写入 N 条”必须同步刷新。
+                    if (smartOnly) UpdateSmartWriteScope();
                 }
                 catch (Exception ex) { MessageBox.Show(this, "绑定失败：" + ex.Message, "模板铺量"); }
             }

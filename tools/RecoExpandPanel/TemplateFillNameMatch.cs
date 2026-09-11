@@ -37,6 +37,20 @@ namespace RecoNet
         private static string NormalizeQuantityMatchName(string text)
         {
             string name = (text ?? "").Trim();
+            // 尾部“（单位）”/“(单位)”：括号内经 LooksLikeExcelLinkUnit 判定为单位才剥，
+            // 否则 C30混凝土(m3) 的 3 会与对方相交、击穿数字规格惩罚。
+            if (name.Length > 0 && (name[name.Length - 1] == ')' || name[name.Length - 1] == '）'))
+            {
+                int open = name.LastIndexOfAny(new[] { '(', '（' });
+                if (open > 0)
+                {
+                    string inner = name.Substring(open + 1, name.Length - open - 2).Trim();
+                    if (LooksLikeExcelLinkUnit(inner))
+                    {
+                        name = name.Substring(0, open).Trim();
+                    }
+                }
+            }
             int separator = name.LastIndexOf(' ');
             if (separator > 0)
             {
@@ -49,6 +63,8 @@ namespace RecoNet
             return NormalizeMatchText(name);
         }
 
+        // 紧贴单位字母的数字不算规格数字：m2/m3 的幂次、串尾 100m/10km 这类“数量+单位”。
+        // 500m长轨 的 500 仍是身份（单位字母后还有正文，不在串尾）。
         internal static List<string> ExtractMatchNumbers(string normText)
         {
             List<string> result = new List<string>();
@@ -60,11 +76,45 @@ namespace RecoNet
                 {
                     int start = i;
                     while (i < normText.Length && (Char.IsDigit(normText[i]) || normText[i] == '.')) i++;
-                    result.Add(normText.Substring(start, i - start).TrimEnd('.'));
+                    string number = normText.Substring(start, i - start).TrimEnd('.');
+                    if (IsMatchUnitExponentDigit(normText, start, number)) continue;
+                    int unitEnd;
+                    if (IsMatchTrailingUnitNumber(normText, start, i, out unitEnd)) { i = unitEnd; continue; }
+                    result.Add(number);
                 }
                 else i++;
             }
             return result;
+        }
+
+        private static bool IsMatchAsciiLetter(char c)
+        {
+            return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+        }
+
+        // m2/m3/km2/cm3 等：数字是长度单位后的幂次。
+        private static bool IsMatchUnitExponentDigit(string text, int digitStart, string number)
+        {
+            if (number != "2" && number != "3") return false;
+            int letterStart = digitStart;
+            while (letterStart > 0 && IsMatchAsciiLetter(text[letterStart - 1])) letterStart--;
+            if (letterStart == digitStart) return false;
+            string letters = text.Substring(letterStart, digitStart - letterStart).ToLowerInvariant();
+            return letters == "m" || letters == "km" || letters == "hm" || letters == "dm" || letters == "cm" || letters == "mm";
+        }
+
+        // 串尾“数字+单位字母(+幂次)”，如 100m、10km、100m2：整体经 LooksLikeExcelLinkUnit 判定为单位才跳过。
+        private static bool IsMatchTrailingUnitNumber(string text, int digitStart, int digitEnd, out int unitEnd)
+        {
+            unitEnd = digitEnd;
+            int j = digitEnd;
+            while (j < text.Length && IsMatchAsciiLetter(text[j])) j++;
+            if (j == digitEnd) return false;
+            if (j < text.Length && (text[j] == '2' || text[j] == '3')) j++;
+            if (j != text.Length) return false;
+            if (!LooksLikeExcelLinkUnit(text.Substring(digitStart, j - digitStart))) return false;
+            unitEnd = j;
+            return true;
         }
 
         private static HashSet<string> BuildMatchBigrams(string text)
@@ -126,27 +176,52 @@ namespace RecoNet
             string r = NormalizeMatchText(right);
             if (l.Length == 0 || r.Length == 0) return false;
             int leftOrdinal, rightOrdinal;
-            if (TryGetChapterOrdinal(left, out leftOrdinal) && TryGetChapterOrdinal(right, out rightOrdinal) &&
-                leftOrdinal != rightOrdinal)
+            string leftTitle, rightTitle;
+            bool leftHasOrdinal = TryGetChapterOrdinal(left, out leftOrdinal, out leftTitle);
+            bool rightHasOrdinal = TryGetChapterOrdinal(right, out rightOrdinal, out rightTitle);
+            if (leftHasOrdinal && rightHasOrdinal)
             {
-                return false;
+                if (leftOrdinal != rightOrdinal) return false;
+                // 序号相等时剥掉序号前缀只比标题：“第1章 路基工程”与“第一章 路基工程”应兼容。
+                string leftTitleNorm = NormalizeMatchText(leftTitle);
+                string rightTitleNorm = NormalizeMatchText(rightTitle);
+                if (leftTitleNorm.Length > 0 && rightTitleNorm.Length > 0)
+                {
+                    l = leftTitleNorm;
+                    r = rightTitleNorm;
+                }
             }
             if (String.Equals(l, r, StringComparison.Ordinal)) return true;
             if (Math.Min(l.Length, r.Length) >= 3 && (l.Contains(r) || r.Contains(l))) return true;
             return MatchNameScore(l, r) >= 70;
         }
 
-        private static bool TryGetChapterOrdinal(string text, out int ordinal)
+        // 章节序号统一规则（IsChapterAnchorRaw 同用）：第?1章/节/部分、1、、第?一章/节/部分、一、、(一)。
+        // 无“第”前缀时，汉字/阿拉伯序号 + 章/节/部分 之后必须是空白、“、”或串尾，
+        // 所以“四节段预制梁”“二分之一预制块”不是章节；“1.1 土方开挖”“12 混凝土”“(1)”也不是。
+        // title 为剥掉序号前缀后的标题。
+        private static bool TryGetChapterOrdinal(string text, out int ordinal, out string title)
         {
             ordinal = 0;
+            title = "";
             if (String.IsNullOrWhiteSpace(text)) return false;
-            System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(text.Trim(),
-                @"^(?:第\s*)?([0-9]+|[一二三四五六七八九十百]+)\s*(?:[、\.．]|章|节|部分)|^[\(（]\s*([0-9]+|[一二三四五六七八九十百]+)\s*[\)）]");
+            string trimmed = text.Trim();
+            System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(trimmed,
+                @"^(?:(?<di>第)\s*)?(?<num>[0-9]+|[一二三四五六七八九十百]+)\s*(?:(?<kind>章|节|部分)|、)|^[\(（]\s*(?<num>[一二三四五六七八九十百]+)\s*[\)）]");
             if (!match.Success) return false;
-            string raw = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
-            if (Int32.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out ordinal)) return ordinal > 0;
-            ordinal = ParseChineseChapterNumber(raw);
-            return ordinal > 0;
+            if (match.Groups["kind"].Success && !match.Groups["di"].Success)
+            {
+                int end = match.Index + match.Length;
+                if (end < trimmed.Length && !Char.IsWhiteSpace(trimmed[end]) && trimmed[end] != '、') return false;
+            }
+            string raw = match.Groups["num"].Value;
+            if (!Int32.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out ordinal))
+            {
+                ordinal = ParseChineseChapterNumber(raw);
+            }
+            if (ordinal <= 0) { ordinal = 0; return false; }
+            title = trimmed.Substring(match.Index + match.Length).Trim().TrimStart('、').Trim();
+            return true;
         }
 
         private static int ParseChineseChapterNumber(string raw)
@@ -454,14 +529,30 @@ namespace RecoNet
         private static List<TargetQtyRow> ReadTargetQtyRowsWithChapters(string workbook, string sheet, int qtyColumn,
             out Dictionary<int, string> chapterByRow)
         {
+            string ignoredError;
+            return ReadTargetQtyRowsWithChaptersDetailed(workbook, sheet, qtyColumn, out chapterByRow, out ignoredError);
+        }
+
+        // readError：读不到任何工程量行时回传首个读取失败原因（行范围失败或首个单元格取值错误），
+        // 供预览 warning 拼接；读到行时为空。（不与上面的同名方法重载：回归脚本按名字反射取唯一方法。）
+        private static List<TargetQtyRow> ReadTargetQtyRowsWithChaptersDetailed(string workbook, string sheet, int qtyColumn,
+            out Dictionary<int, string> chapterByRow, out string readError)
+        {
             List<TargetQtyRow> result = new List<TargetQtyRow>();
             chapterByRow = new Dictionary<int, string>();
+            readError = "";
             Dictionary<string, HashSet<int>> hiddenCache = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
             Dictionary<string, List<ExcelMergedRegion>> mergedCache = new Dictionary<string, List<ExcelMergedRegion>>(StringComparer.OrdinalIgnoreCase);
 
             List<ExcelQuotaLink> readLinks = new List<ExcelQuotaLink>();
             int firstRow, lastRow;
-            if (!TryGetSheetRowRange(workbook, sheet, out firstRow, out lastRow)) return result;
+            string rangeError;
+            if (!TryGetSheetRowRange(workbook, sheet, out firstRow, out lastRow, out rangeError))
+            {
+                readError = String.IsNullOrWhiteSpace(rangeError) ? "无法读取工作表行范围" : rangeError;
+                return result;
+            }
+            string firstCellError = "";
             string qtyColName = ColumnNumberToName(qtyColumn);
             for (int r = firstRow; r <= lastRow; r++)
             {
@@ -476,7 +567,10 @@ namespace RecoNet
             {
                 string qtyAddr = qtyColName + r.ToString(CultureInfo.InvariantCulture);
                 string disp; decimal qty; string err;
-                bool hasQty = TryEvaluateWorkbookExpression(ctx, workbook, sheet, qtyAddr, out disp, out qty, out err, true) && qty != 0m;
+                bool evaluated = TryEvaluateWorkbookExpression(ctx, workbook, sheet, qtyAddr, out disp, out qty, out err, true);
+                if (!evaluated && firstCellError.Length == 0 && !String.IsNullOrWhiteSpace(err))
+                    firstCellError = qtyAddr + " " + err.Trim();
+                bool hasQty = evaluated && qty != 0m;
                 if (!hasQty)
                 {
                     string name = ReadRowNameAt(workbook, sheet, qtyAddr, hiddenCache, mergedCache, ctx, true);
@@ -509,6 +603,9 @@ namespace RecoNet
                 row.Unit = parts.Unit;
                 result.Add(row);
             }
+            if (result.Count == 0 && firstCellError.Length > 0)
+                readError = "行 " + firstRow.ToString(CultureInfo.InvariantCulture) + "-" +
+                    lastRow.ToString(CultureInfo.InvariantCulture) + " 内首个取值错误 " + firstCellError;
             return result;
         }
 
@@ -526,59 +623,179 @@ namespace RecoNet
             return baseQtyText;
         }
 
-        // “一、/(一)/第X章/第X部分” 视为章节锚点。
+        // “一、/(一)/第X章/第X部分/1、/第1章” 视为章节锚点；规则与 TryGetChapterOrdinal 合一。
         private static bool IsChapterAnchorRaw(string raw)
         {
-            if (String.IsNullOrWhiteSpace(raw)) return false;
-            string t = raw.Trim();
-            return System.Text.RegularExpressions.Regex.IsMatch(t,
-                "^(第?[一二三四五六七八九十百]+[、\\.．章节部分]|[(（][一二三四五六七八九十]+[)）])");
+            int ordinal;
+            string title;
+            return TryGetChapterOrdinal(raw, out ordinal, out title);
         }
 
-        // 取 sheet 的 UsedRange 行范围（首末非空行号）。
-        private static bool TryGetSheetRowRange(string workbook, string sheet, out int firstRow, out int lastRow)
+        // 取 sheet 的 UsedRange 行范围（首末非空行号）；失败时 error 说明原因（供预览 warning 展示）。
+        private static bool TryGetSheetRowRange(string workbook, string sheet, out int firstRow, out int lastRow,
+            out string error)
         {
-            firstRow = 0; lastRow = 0;
+            firstRow = 0; lastRow = 0; error = "";
             try
             {
-                if (!TryGetXlsxUsedRowRange(workbook, sheet, out firstRow, out lastRow)) return false;
-                return lastRow >= firstRow && lastRow - firstRow < 20000;
+                if (!TryGetXlsxUsedRowRange(workbook, sheet, out firstRow, out lastRow, out error))
+                {
+                    if (String.IsNullOrWhiteSpace(error)) error = "无法读取工作表行范围";
+                    return false;
+                }
+                if (lastRow < firstRow)
+                {
+                    error = "工作表没有已使用的行";
+                    return false;
+                }
+                if (lastRow - firstRow >= 20000)
+                {
+                    error = "工作表已使用行范围过大（第 " + firstRow.ToString(CultureInfo.InvariantCulture) + "-" +
+                        lastRow.ToString(CultureInfo.InvariantCulture) + " 行，超过 20000 行上限），请先清理表尾空行";
+                    return false;
+                }
+                return true;
             }
-            catch { return false; }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
         }
 
-        // 用 NPOI 打开工作簿(只读共享流)，取该 sheet 的首末非空行号(1基)。
-        // 打不开工作簿或找不到该 sheet 返回 false。参照 ExcelLinkFeature.cs 里
-        // TryReadSheetTargetCellsByNpoi/ReadSheetCellsByNpoi 等既有 NPOI 只读用法。
-        private static bool TryGetXlsxUsedRowRange(string workbook, string sheet, out int firstRow, out int lastRow)
+        // 取该 sheet 的首末已用行号(1基)。xlsx/xlsm 走流式读 sheet XML：扫描 sheetData 内 <row r="N"> 取首末
+        // （与原 NPOI FirstRowNum/LastRowNum 同口径），sheetData 没有任何 row 时才退回 <dimension ref="A1:H500">
+        // ——NPOI 等库生成的文件 dimension 可能停留在默认 "A1"，不能优先信任；只有 .xls 回退 NPOI 整簿加载。
+        // 打不开工作簿或找不到该 sheet 返回 false 并回传 error。
+        private static bool TryGetXlsxUsedRowRange(string workbook, string sheet, out int firstRow, out int lastRow,
+            out string error)
         {
-            firstRow = 0; lastRow = 0;
-            if (String.IsNullOrWhiteSpace(workbook) || String.IsNullOrWhiteSpace(sheet) || !File.Exists(workbook))
+            firstRow = 0; lastRow = 0; error = "";
+            if (String.IsNullOrWhiteSpace(workbook) || String.IsNullOrWhiteSpace(sheet))
             {
+                error = "未指定目标 Excel 或工作表";
+                return false;
+            }
+            if (!File.Exists(workbook))
+            {
+                error = "目标 Excel 不存在：" + workbook;
                 return false;
             }
 
             try
             {
-                using (Stream stream = OpenWorkbookStreamShared(workbook))
-                {
-                    IWorkbook wb = WorkbookFactory.Create(stream);
-                    ISheet sh = wb.GetSheet(sheet);
-                    if (sh == null) return false;
-
-                    int first0 = sh.FirstRowNum;
-                    int last0 = sh.LastRowNum;
-                    if (last0 < first0) return false;
-
-                    firstRow = first0 + 1;
-                    lastRow = last0 + 1;
-                    return true;
-                }
+                if (String.Equals(Path.GetExtension(workbook), ".xls", StringComparison.OrdinalIgnoreCase))
+                    return TryGetUsedRowRangeByNpoi(workbook, sheet, out firstRow, out lastRow, out error);
+                return TryGetXlsxUsedRowRangeStreaming(workbook, sheet, out firstRow, out lastRow, out error);
             }
             catch (Exception ex)
             {
                 Log("TryGetXlsxUsedRowRange 失败: " + ex.Message);
+                error = "读取工作表行范围失败：" + ex.Message;
                 return false;
+            }
+        }
+
+        private static bool TryGetXlsxUsedRowRangeStreaming(string workbook, string sheet, out int firstRow, out int lastRow,
+            out string error)
+        {
+            firstRow = 0; lastRow = 0; error = "";
+            using (System.IO.Compression.ZipArchive archive = OpenZipArchiveShared(workbook))
+            {
+                string sheetPath = ResolveSheetPath(archive, sheet);
+                if (String.IsNullOrEmpty(sheetPath))
+                {
+                    error = "工作簿中找不到工作表「" + sheet + "」";
+                    return false;
+                }
+                System.IO.Compression.ZipArchiveEntry sheetEntry = archive.GetEntry(sheetPath);
+                if (sheetEntry == null)
+                {
+                    error = "工作表数据缺失：" + sheetPath;
+                    return false;
+                }
+
+                int scanFirst = 0, scanLast = 0;
+                int dimensionFirst = 0, dimensionLast = 0;
+                bool hasDimension = false;
+                using (Stream stream = sheetEntry.Open())
+                using (System.Xml.XmlReader reader = System.Xml.XmlReader.Create(stream))
+                {
+                    while (reader.Read())
+                    {
+                        if (reader.NodeType == System.Xml.XmlNodeType.EndElement && reader.LocalName == "sheetData") break;
+                        if (reader.NodeType != System.Xml.XmlNodeType.Element) continue;
+                        if (reader.LocalName == "dimension")
+                        {
+                            hasDimension = TryParseDimensionRowRange(reader.GetAttribute("ref"), out dimensionFirst, out dimensionLast);
+                            continue;
+                        }
+                        if (reader.LocalName != "row") continue;
+                        int rowNumber;
+                        if (!Int32.TryParse(reader.GetAttribute("r"), NumberStyles.Integer, CultureInfo.InvariantCulture,
+                            out rowNumber) || rowNumber <= 0) continue;
+                        if (scanFirst == 0 || rowNumber < scanFirst) scanFirst = rowNumber;
+                        if (rowNumber > scanLast) scanLast = rowNumber;
+                    }
+                }
+                if (scanLast > 0)
+                {
+                    firstRow = scanFirst;
+                    lastRow = scanLast;
+                    return true;
+                }
+                if (hasDimension)
+                {
+                    firstRow = dimensionFirst;
+                    lastRow = dimensionLast;
+                    return true;
+                }
+                error = "工作表「" + sheet + "」没有已使用的行";
+                return false;
+            }
+        }
+
+        // <dimension ref="A1:H500"> 或单格 "A1"；解析失败返回 false（调用方继续扫描 row）。
+        private static bool TryParseDimensionRowRange(string refText, out int firstRow, out int lastRow)
+        {
+            firstRow = 0; lastRow = 0;
+            string[] parts = (refText ?? "").Split(':');
+            if (parts.Length < 1 || parts.Length > 2) return false;
+            CellRef start, end;
+            if (!TryParseCellAddress(parts[0], out start)) return false;
+            if (parts.Length == 1) end = start;
+            else if (!TryParseCellAddress(parts[1], out end)) return false;
+            firstRow = Math.Min(start.Row, end.Row);
+            lastRow = Math.Max(start.Row, end.Row);
+            return true;
+        }
+
+        // .xls 没有可流式读取的 sheet XML，只能用 NPOI 打开工作簿(只读共享流)取首末行号(1基)。
+        private static bool TryGetUsedRowRangeByNpoi(string workbook, string sheet, out int firstRow, out int lastRow,
+            out string error)
+        {
+            firstRow = 0; lastRow = 0; error = "";
+            using (Stream stream = OpenWorkbookStreamShared(workbook))
+            {
+                IWorkbook wb = WorkbookFactory.Create(stream);
+                ISheet sh = wb.GetSheet(sheet);
+                if (sh == null)
+                {
+                    error = "工作簿中找不到工作表「" + sheet + "」";
+                    return false;
+                }
+
+                int first0 = sh.FirstRowNum;
+                int last0 = sh.LastRowNum;
+                if (last0 < first0)
+                {
+                    error = "工作表「" + sheet + "」没有已使用的行";
+                    return false;
+                }
+
+                firstRow = first0 + 1;
+                lastRow = last0 + 1;
+                return true;
             }
         }
 
@@ -1011,10 +1228,14 @@ namespace RecoNet
                 return new List<FillPreviewItem>();
             }
 
-            List<TargetQtyRow> targetRows = ReadTargetQtyRows(workbook, targetSheet, colRef.Column);
+            Dictionary<int, string> ignoredChapters;
+            string targetReadError;
+            List<TargetQtyRow> targetRows = ReadTargetQtyRowsWithChaptersDetailed(workbook, targetSheet, colRef.Column,
+                out ignoredChapters, out targetReadError);
             if (targetRows.Count == 0)
             {
-                warning = "目标 Excel「" + Path.GetFileName(workbook) + "」的目标 sheet 未读到工程量行（检查目标列是否为数量列，Excel 是否已保存）。";
+                warning = "目标 Excel「" + Path.GetFileName(workbook) + "」的目标 sheet 未读到工程量行（检查目标列是否为数量列，Excel 是否已保存）。" +
+                    (String.IsNullOrWhiteSpace(targetReadError) ? "" : "读取详情：" + targetReadError.Trim());
                 return new List<FillPreviewItem>();
             }
 

@@ -64,6 +64,21 @@ $cases = @(
     [pscustomobject]@{ Name='blank-filter'; Unit='kg'; Defs=@([pscustomobject]@{C=1;T='  ';V=$false},[pscustomobject]@{C=2;T='Steel';V=$false},[pscustomobject]@{C=3;T='kg';V=$false}); Main='Steel'; Context=''; ExpectedUnit='kg' },
     [pscustomobject]@{ Name='top-times'; Unit='顶次'; Defs=@([pscustomobject]@{C=1;T='铺设顶进导轨及抱枕';V=$false},[pscustomobject]@{C=2;T='顶次';V=$false}); Main='铺设顶进导轨及抱枕'; Context=''; ExpectedUnit='顶次' },
     [pscustomobject]@{ Name='item-times'; Unit='项次'; Defs=@([pscustomobject]@{C=2;T='铺设顶进导轨及短枕';V=$false},[pscustomobject]@{C=3;T='项次';V=$false}); Main='铺设顶进导轨及短枕'; Context=''; ExpectedUnit='项次' },
+    # 审查 §3.5：单位不在末位（A=名称 B=单位 C=规格 D=数量）也必须剥掉，且所有等值片段都剥。
+    [pscustomobject]@{ Name='unit-mid'; Unit='m3'; Defs=@([pscustomobject]@{C=1;T='Pumping';V=$false},[pscustomobject]@{C=2;T='m3';V=$false},[pscustomobject]@{C=3;T='C30';V=$false}); Main='Pumping C30'; Context=''; ExpectedUnit='m3' },
+    [pscustomobject]@{ Name='unit-twice'; Unit='m3'; Defs=@([pscustomobject]@{C=1;T='M3';V=$false},[pscustomobject]@{C=2;T='Pumping';V=$false},[pscustomobject]@{C=3;T='m3';V=$false}); Main='Pumping'; Context=''; ExpectedUnit='m3' },
+    # 序号片段进 ContextLabel，不进 MainName。
+    [pscustomobject]@{ Name='ordinal-paren'; Unit=''; Defs=@([pscustomobject]@{C=1;T='1）';V=$false},[pscustomobject]@{C=2;T='Pumping';V=$false}); Main='Pumping'; Context='1）'; ExpectedUnit='' },
+    [pscustomobject]@{ Name='ordinal-circled'; Unit=''; Defs=@([pscustomobject]@{C=1;T='①';V=$false},[pscustomobject]@{C=2;T='Pumping';V=$false}); Main='Pumping'; Context='①'; ExpectedUnit='' },
+    [pscustomobject]@{ Name='ordinal-roman'; Unit=''; Defs=@([pscustomobject]@{C=1;T='Ⅰ';V=$false},[pscustomobject]@{C=2;T='Pumping';V=$false}); Main='Pumping'; Context='Ⅰ'; ExpectedUnit='' },
+    [pscustomobject]@{ Name='ordinal-multilevel'; Unit=''; Defs=@([pscustomobject]@{C=1;T='1.1.2';V=$false},[pscustomobject]@{C=2;T='Pumping';V=$false}); Main='Pumping'; Context='1.1.2'; ExpectedUnit='' },
+    [pscustomobject]@{ Name='ordinal-fullwidth-dot'; Unit=''; Defs=@([pscustomobject]@{C=1;T='1．2';V=$false},[pscustomobject]@{C=2;T='Pumping';V=$false}); Main='Pumping'; Context='1．2'; ExpectedUnit='' },
+    [pscustomobject]@{ Name='ordinal-chinese'; Unit=''; Defs=@([pscustomobject]@{C=1;T='一';V=$false},[pscustomobject]@{C=2;T='Pumping';V=$false}); Main='Pumping'; Context='一'; ExpectedUnit='' },
+    [pscustomobject]@{ Name='ordinal-letter'; Unit=''; Defs=@([pscustomobject]@{C=1;T='A';V=$false},[pscustomobject]@{C=2;T='Pumping';V=$false}); Main='Pumping'; Context='A'; ExpectedUnit='' },
+    [pscustomobject]@{ Name='ordinal-with-chapter'; Unit='m3'; Defs=@([pscustomobject]@{C=1;T='第1章 路基工程';V=$true},[pscustomobject]@{C=2;T='1）';V=$false},[pscustomobject]@{C=3;T='Pumping';V=$false},[pscustomobject]@{C=4;T='m3';V=$false}); Main='Pumping'; Context='第1章 路基工程 1）'; ExpectedUnit='m3' },
+    # 规格不是序号；纯序号行沿用“救回最后一列片段”逻辑。
+    [pscustomobject]@{ Name='spec-not-ordinal'; Unit=''; Defs=@([pscustomobject]@{C=1;T='C30';V=$false},[pscustomobject]@{C=2;T='DN100';V=$false},[pscustomobject]@{C=3;T='Concrete';V=$false}); Main='C30 DN100 Concrete'; Context=''; ExpectedUnit='' },
+    [pscustomobject]@{ Name='ordinal-only-rescue'; Unit=''; Defs=@([pscustomobject]@{C=1;T='①';V=$false}); Main='①'; Context=''; ExpectedUnit='' },
     [pscustomobject]@{ Name='empty'; Unit='m'; Defs=@(); Main=''; Context=''; ExpectedUnit='' }
 )
 foreach ($case in $cases) {
