@@ -1390,16 +1390,23 @@ namespace RecoNet
 
                 ExcelLinkStore store = LoadStore(conn);
                 int bound = 0;
+                // 行偏移按所选行序号推进：失败行也占位，后续定额不会上移绑到别人的工程量。
+                int rowOrdinal = 0;
+                List<string> skippedRows = new List<string>();
                 List<ExcelQuotaLink> pendingLinks = new List<ExcelQuotaLink>();
                 foreach (DataGridViewRow row in rows)
                 {
+                    int ordinal = rowOrdinal++;
+                    string address = BuildBatchBindAddress(startRef.Column, startRef.Row, ordinal);
                     ExcelQuotaLink link;
                     if (!TryCreateQuotaLink(mainForm, conn, row, out link, out error))
                     {
+                        // 日志只记序号、地址和错误原因，不记工程量名。
+                        Log("BatchBindSelectedQuotasToExcel skipped row ordinal=" + ordinal.ToString(CultureInfo.InvariantCulture) + " address=" + address + ": " + (error ?? ""));
+                        skippedRows.Add("第 " + (ordinal + 1).ToString(CultureInfo.InvariantCulture) + " 行（" + address + "）：" + (error ?? "未知原因"));
                         continue;
                     }
 
-                    string address = ColumnNumberToName(startRef.Column) + (startRef.Row + bound).ToString(CultureInfo.InvariantCulture);
                     link.ExcelPath = startCell.WorkbookPath;
                     link.WorksheetName = startCell.WorksheetName;
                     link.CellAddress = address;
@@ -1422,13 +1429,26 @@ namespace RecoNet
                 }
 
                 RefreshExcelLinkPanel(mainForm);
-                MessageBox.Show(mainForm, "已批量绑定 " + bound.ToString(CultureInfo.InvariantCulture) + " 条定额，从 " + startCell.WorksheetName + "!" + startCell.CellAddress + " 开始向下对应。", "Excel联动", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                string resultMessage = "已批量绑定 " + bound.ToString(CultureInfo.InvariantCulture) + " 条定额，从 " + startCell.WorksheetName + "!" + startCell.CellAddress + " 开始向下对应。";
+                if (skippedRows.Count > 0)
+                {
+                    resultMessage += Environment.NewLine + "跳过 " + skippedRows.Count.ToString(CultureInfo.InvariantCulture) + " 行（对应单元格已留空，未绑定）：" +
+                        Environment.NewLine + String.Join(Environment.NewLine, skippedRows.ToArray());
+                }
+                MessageBox.Show(mainForm, resultMessage, "Excel联动", MessageBoxButtons.OK,
+                    skippedRows.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
                 Log("BatchBindSelectedQuotasToExcel failed: " + ex);
                 MessageBox.Show(mainForm, "批量绑定失败：" + ex.Message, "Excel联动", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        // 批量绑定的目标地址只由起点和该行在所选行中的序号决定；序号从 0 起，失败行同样占位。
+        internal static string BuildBatchBindAddress(int startColumn, int startRow, int rowOrdinal)
+        {
+            return ColumnNumberToName(startColumn) + (startRow + rowOrdinal).ToString(CultureInfo.InvariantCulture);
         }
 
         private static void ShowExcelLinkPanel(Form mainForm)
@@ -2352,13 +2372,25 @@ namespace RecoNet
         {
             formulaTemplate = NormalizeExpressionOperators(expression);
             if (String.IsNullOrWhiteSpace(formulaTemplate) || addresses == null || addresses.Count == 0) return false;
+            // 占位符 V{i} 本身就是合法地址形式（如地址表含 V1），逐个替换会把已写入的占位符再替换一次；
+            // 这里用地址→序号字典做单次替换，同一地址以首次出现的序号为准。
+            Dictionary<string, int> indexByAddress = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            List<string> escapedAddresses = new List<string>();
             for (int i = 0; i < addresses.Count; i++)
             {
                 string address = NormalizeExpressionOperators(addresses[i]);
-                string pattern = "(?<![A-Z0-9])" + System.Text.RegularExpressions.Regex.Escape(address) + "(?![A-Z0-9])";
-                formulaTemplate = System.Text.RegularExpressions.Regex.Replace(formulaTemplate, pattern, "V" + i.ToString(CultureInfo.InvariantCulture),
-                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (address.Length == 0 || indexByAddress.ContainsKey(address)) continue;
+                indexByAddress[address] = i;
+                escapedAddresses.Add(System.Text.RegularExpressions.Regex.Escape(address));
             }
+            if (escapedAddresses.Count == 0) return false;
+            string pattern = "(?<![A-Z0-9])(?:" + String.Join("|", escapedAddresses.ToArray()) + ")(?![A-Z0-9])";
+            formulaTemplate = System.Text.RegularExpressions.Regex.Replace(formulaTemplate, pattern,
+                delegate(System.Text.RegularExpressions.Match match)
+                {
+                    return "V" + indexByAddress[match.Value].ToString(CultureInfo.InvariantCulture);
+                },
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             // V0/V1 本身也符合 Excel 单元格地址的字面形式，不能再用地址解析器判断残留。
             // 所有原地址已在上面逐一替换；这里用字符白名单并以数值探针验证完整语法。
             if (!System.Text.RegularExpressions.Regex.IsMatch(formulaTemplate, "^[V0-9+\\-*/().\\s]+$")) return false;
@@ -4879,7 +4911,10 @@ namespace RecoNet
                 string anchor = NormalizeMergedCellAddress(address, regions);
                 if (!String.Equals(address, anchor, StringComparison.OrdinalIgnoreCase))
                 {
-                    normalized = normalized.Replace(address, anchor);
+                    // 与 HasRepeatedCellReferenceWithinTerm 同样的地址边界：B2 不得命中 B21 的前缀。
+                    string pattern = "(?<![A-Z0-9])" + System.Text.RegularExpressions.Regex.Escape(address) + "(?![A-Z0-9])";
+                    normalized = System.Text.RegularExpressions.Regex.Replace(normalized, pattern, anchor,
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 }
             }
 
@@ -5777,7 +5812,12 @@ namespace RecoNet
 
         private static ExcelLinkStore LoadStore(SqlConnection conn)
         {
-            string path = GetStorePath(conn);
+            return LoadStoreFromPath(GetStorePath(conn));
+        }
+
+        // 按路径加载：文件损坏时改名备份（不删除）并返回 LoadFailed 的空库，调用方保存时会被拒绝。
+        internal static ExcelLinkStore LoadStoreFromPath(string path)
+        {
             if (!File.Exists(path))
             {
                 return new ExcelLinkStore();
@@ -5795,18 +5835,83 @@ namespace RecoNet
             catch (Exception ex)
             {
                 Log("Load Excel link store failed: " + ex);
-                return new ExcelLinkStore();
+                ExcelLinkStore failed = new ExcelLinkStore();
+                failed.LoadFailed = true;
+                failed.CorruptBackupPath = BackupCorruptStoreFile(path);
+                return failed;
             }
+        }
+
+        // 把损坏的存储文件改名为 <原名>.corrupt-yyyyMMdd-HHmmss.xml；同秒重名时追加序号。返回备份路径，失败返回空串。
+        private static string BackupCorruptStoreFile(string path)
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(path);
+                string stem = Path.GetFileNameWithoutExtension(path) + ".corrupt-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+                string backup = Path.Combine(directory, stem + ".xml");
+                for (int i = 1; File.Exists(backup); i++)
+                {
+                    backup = Path.Combine(directory, stem + "-" + i.ToString(CultureInfo.InvariantCulture) + ".xml");
+                }
+                File.Move(path, backup);
+                Log("Excel link store corrupt file backed up: " + backup);
+                return backup;
+            }
+            catch (Exception ex)
+            {
+                Log("Backup corrupt Excel link store failed: " + ex);
+                return "";
+            }
+        }
+
+        private static string BuildStoreLoadFailedMessage(ExcelLinkStore store, string path)
+        {
+            return String.IsNullOrEmpty(store.CorruptBackupPath)
+                ? "绑定存储文件损坏（备份失败，原文件仍保留在 " + path + "），请恢复后重试。"
+                : "绑定存储文件损坏，已备份为 " + store.CorruptBackupPath + "，请恢复后重试。";
         }
 
         private static void SaveStore(SqlConnection conn, ExcelLinkStore store)
         {
-            string path = GetStorePath(conn);
-            Directory.CreateDirectory(Path.GetDirectoryName(path));
-            XmlSerializer serializer = new XmlSerializer(typeof(ExcelLinkStore));
-            using (FileStream stream = File.Create(path))
+            SaveStoreToPath(GetStorePath(conn), store);
+        }
+
+        // 按路径保存：先写同目录临时文件再原子替换；加载失败状态的库拒绝写入，避免覆盖历史绑定。
+        internal static void SaveStoreToPath(string path, ExcelLinkStore store)
+        {
+            if (store == null) throw new ArgumentNullException("store");
+            if (store.LoadFailed)
             {
-                serializer.Serialize(stream, store);
+                string message = BuildStoreLoadFailedMessage(store, path);
+                Log("Save Excel link store refused: " + message);
+                throw new InvalidOperationException(message);
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                XmlSerializer serializer = new XmlSerializer(typeof(ExcelLinkStore));
+                using (FileStream stream = File.Create(temp))
+                {
+                    serializer.Serialize(stream, store);
+                }
+                if (File.Exists(path))
+                {
+                    File.Replace(temp, path, path + ".bak", true);
+                }
+                else
+                {
+                    File.Move(temp, path);
+                }
+            }
+            finally
+            {
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
             }
         }
 
@@ -5932,6 +6037,14 @@ namespace RecoNet
         public sealed class ExcelLinkStore
         {
             public List<ExcelQuotaLink> Links { get; set; }
+
+            // 存储文件存在但反序列化失败时为 true；此状态下禁止保存，避免用空库覆盖历史绑定。
+            [XmlIgnore]
+            public bool LoadFailed { get; set; }
+
+            // 损坏文件的备份路径（改名保留，不删除）；备份失败时为空。
+            [XmlIgnore]
+            public string CorruptBackupPath { get; set; }
 
             public ExcelLinkStore()
             {
@@ -7490,6 +7603,11 @@ namespace RecoNet
                 }
 
                 status.Text = "数量表：" + (names.Count).ToString(CultureInfo.InvariantCulture) + " 个；本组绑定：" + shown.ToString(CultureInfo.InvariantCulture) + " / 共 " + store.Links.Count.ToString(CultureInfo.InvariantCulture) + " 条。";
+                if (store.LoadFailed)
+                {
+                    // 加载失败的库不会被回写；在面板上直接提示用户恢复备份。
+                    status.Text = BuildStoreLoadFailedMessage(store, GetStorePath(conn));
+                }
             }
 
             // 把当前所选分类下的全部绑定改名为新名字。
@@ -7521,7 +7639,17 @@ namespace RecoNet
                         n++;
                     }
                 }
-                SaveStore(conn, store);
+                try
+                {
+                    SaveStore(conn, store);
+                }
+                catch (Exception ex)
+                {
+                    Log("Rename Excel link table failed: " + ex);
+                    status.Text = "重命名失败：" + ex.Message;
+                    MessageBox.Show(mainForm, "重命名数量表失败：" + ex.Message, "Excel联动", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
                 if (ExcelLinkRuntimes.ContainsKey(mainForm)) ExcelLinkRuntimes[mainForm].Reload();
                 // 让 Reload 选回新名字：把下拉当前项设为新名（Reload 以它作为 keep）。
                 loading = true;
@@ -7585,7 +7713,17 @@ namespace RecoNet
                 ExcelLinkStore store = LoadStore(conn);
                 int before = store.Links.Count;
                 store.Links.RemoveAll(l => ids.Contains(l.QuotaSequence));
-                SaveStore(conn, store);
+                try
+                {
+                    SaveStore(conn, store);
+                }
+                catch (Exception ex)
+                {
+                    Log("Delete Excel links failed: " + ex);
+                    status.Text = "删除失败：" + ex.Message;
+                    MessageBox.Show(mainForm, "删除绑定失败：" + ex.Message, "Excel联动", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
                 if (ExcelLinkRuntimes.ContainsKey(mainForm))
                 {
                     ExcelLinkRuntimes[mainForm].Reload();
