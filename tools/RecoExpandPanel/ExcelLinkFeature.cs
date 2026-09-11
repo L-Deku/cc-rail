@@ -3076,30 +3076,6 @@ namespace RecoNet
             }
         }
 
-        private static readonly object LocalMappingWarningLock = new object();
-        private static readonly HashSet<string> LocalMappingWarningFingerprints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        private static void ReportLocalMappingSaveResult(LocalMappingSaveResult result, string caller)
-        {
-            if (result == null || result.Succeeded) return;
-            string detail = (caller ?? "") + " local mapping save: " + result.Status + "; " + result.ErrorMessage;
-            Log(detail);
-            if (result.Status != LocalMappingSaveStatus.DuplicateContextIdentity &&
-                result.Status != LocalMappingSaveStatus.AmbiguousBoxUnknownFields) return;
-            string fingerprint = (result.FilePath ?? "") + "\n" + (result.FileSha256 ?? "") + "\n" + (result.ConflictIdentity ?? "");
-            lock (LocalMappingWarningLock)
-            {
-                if (!LocalMappingWarningFingerprints.Add(fingerprint)) return;
-            }
-            string lines = result.LineNumbers.Count == 0 ? "" : String.Join(",", result.LineNumbers.Select(value => value.ToString(CultureInfo.InvariantCulture)).ToArray());
-            string message = "\u672c\u5730\u5b66\u4e60\u5df2\u6682\u505c\uff0c\u5f53\u524d\u6587\u4ef6\u672a\u4fee\u6539\u3002\r\n" +
-                "\u51b2\u7a81\u8eab\u4efd\u952e\uff1a" + result.ConflictIdentity.Replace("\n", " / ") + "\r\n" +
-                "\u547d\u4e2d\u884c\u53f7\uff1a" + lines + "\r\n" +
-                "\u6765\u6e90\u64cd\u4f5c\uff1a" + result.SourceOperation + "\r\n" +
-                "\u4fee\u590d\u62a5\u544a\uff1a" + (String.IsNullOrWhiteSpace(result.DiagnosticReportPath) ? "(write failed; see log)" : result.DiagnosticReportPath);
-            MessageBox.Show(message, "\u672c\u5730\u5b66\u4e60\u51b2\u7a81", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
-
         private static string BuildMappingTargetKey(string kind, string code)
         {
             string rawCode = (code ?? "").Trim();
@@ -3257,31 +3233,6 @@ namespace RecoNet
             }
 
             return null;
-        }
-
-        private static void WriteAllLinesAtomic(string filePath, string[] lines, Encoding encoding)
-        {
-            string temp = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                File.WriteAllLines(temp, lines, encoding);
-                if (File.Exists(filePath))
-                {
-                    string backup = filePath + ".bak";
-                    File.Replace(temp, filePath, backup, true);
-                }
-                else
-                {
-                    File.Move(temp, filePath);
-                }
-            }
-            finally
-            {
-                if (File.Exists(temp))
-                {
-                    File.Delete(temp);
-                }
-            }
         }
 
         private static Dictionary<string, object> ReadJsonObject(Dictionary<string, object> values, string key)

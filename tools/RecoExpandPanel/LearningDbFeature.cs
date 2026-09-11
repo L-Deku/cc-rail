@@ -16,9 +16,6 @@ namespace RecoNet
     public partial class FormPanel : Form
     {
         // 学习库连接凭据由 RecoSqlCredentialStore 提供：优先软件根目录的 RecoPluginSql.json（最小权限 reco_plugin），否则回退当前 Windows 用户的 DPAPI 凭据库。
-        private const string LearningDbOutboxFileName = "learning-db-outbox.jsonl";
-        private const string LearningDbDeadLetterFileName = "learning-db-outbox.dead-letter.jsonl";
-        private const string LearningDbOutboxMutexName = "RecoQuotaData.learning-db-outbox.lock";
         private const long LearningDbCircuitWindowTicks = TimeSpan.TicksPerSecond * 60;
 
         private static string learningDbConnectionString;
@@ -85,6 +82,8 @@ namespace RecoNet
 
         // RecoLearning 是唯一学习存储：流水与推荐核心聚合在同一事务提交。
         // SQL 失败只返回未持久化状态，不写本机学习文件、outbox 或 dead-letter。
+        // 下方 LearningDbOutboxBatch / CreateLearningDbOutboxBatch 的 “Outbox” 是历史命名：批次只在内存中
+        // 传给 TryWriteLearningDbBatch，不再落盘、不重放；旧 outbox/dead-letter/replay 代码已按审查 §3.8 删除。
         private static bool RecordBindingEventsToLearningDb(string source, List<MappingFeedbackGroup> groups)
         {
             RememberLearningDbDurableResult(source, groups, false);
@@ -560,6 +559,8 @@ namespace RecoNet
             }
         }
 
+        // 名称沿用旧 outbox 时代，实际只构造一次性内存写入批次（BatchId 用于 BindingLog group_key 幂等）。
+        // tests/Test-LearningDbGroupFilter.ps1 通过反射按此名取方法，不得改名。
         private static LearningDbOutboxBatch CreateLearningDbOutboxBatch(string source, List<MappingFeedbackGroup> groups)
         {
             string processName;
@@ -702,137 +703,6 @@ namespace RecoNet
             return true;
         }
 
-        private static bool TryAppendLearningDbOutbox(LearningDbOutboxBatch batch)
-        {
-            if (batch == null || String.IsNullOrWhiteSpace(batch.BatchId) || batch.Groups == null || batch.Groups.Count == 0) return false;
-            string unsupportedReason;
-            if (HasUnsupportedLearningDbMethod(batch, out unsupportedReason))
-            {
-                Log("Learning DB batch " + (batch.BatchId ?? "") + " was not queued because " + unsupportedReason +
-                    "; local mapping remains available.");
-                return false;
-            }
-            try
-            {
-                bool durable = false;
-                bool locked = TryWithLearningDbOutboxLock(delegate
-                {
-                    string path = GetLearningDbOutboxPath();
-                    Directory.CreateDirectory(Path.GetDirectoryName(path));
-                    List<string> lines = File.Exists(path)
-                        ? File.ReadAllLines(path, Encoding.UTF8).ToList()
-                        : new List<string>();
-                    bool exists = lines.Any(line => String.Equals(GetFlat(ParseFlatJson(line), "batch_id"), batch.BatchId,
-                        StringComparison.OrdinalIgnoreCase));
-                    if (!exists)
-                    {
-                        lines.Add(ToFlatJson(SerializeLearningDbOutboxBatch(batch)));
-                        WriteAllLinesAtomic(path, lines.ToArray(), Encoding.UTF8);
-                    }
-                    durable = true;
-                }, 5000);
-                if (!locked) Log("Learning DB outbox lock timeout; pending SQL event was not persisted.");
-                return locked && durable;
-            }
-            catch (Exception ex)
-            {
-                Log("Learning DB outbox append failed: " + ex.Message);
-                return false;
-            }
-        }
-
-        private static bool TryAppendLearningDbDeadLetter(LearningDbOutboxBatch batch, string reason)
-        {
-            if (batch == null || String.IsNullOrWhiteSpace(batch.BatchId)) return false;
-            try
-            {
-                bool saved = false;
-                bool locked = TryWithLearningDbOutboxLock(delegate
-                {
-                    string path = GetLearningDbDeadLetterPath();
-                    Directory.CreateDirectory(Path.GetDirectoryName(path));
-                    List<string> lines = File.Exists(path)
-                        ? File.ReadAllLines(path, Encoding.UTF8).ToList()
-                        : new List<string>();
-                    bool exists = lines.Any(line => String.Equals(GetFlat(ParseFlatJson(line), "batch_id"), batch.BatchId,
-                        StringComparison.OrdinalIgnoreCase));
-                    if (!exists)
-                    {
-                        Dictionary<string, string> row = SerializeLearningDbOutboxBatch(batch);
-                        row["dead_letter_reason"] = NormalizeLearningDbDeadLetterReason(reason);
-                        row["dead_letter_at"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
-                        lines.Add(ToFlatJson(row));
-                        WriteAllLinesAtomic(path, lines.ToArray(), Encoding.UTF8);
-                    }
-                    saved = true;
-                }, 5000);
-                if (!locked) Log("Learning DB dead-letter lock timeout; rejected batch was not persisted.");
-                return locked && saved;
-            }
-            catch (Exception ex)
-            {
-                Log("Learning DB dead-letter append failed (" + ex.GetType().Name + ").");
-                return false;
-            }
-        }
-
-        private static bool TryMoveLearningDbOutboxBatchToDeadLetter(string batchId, string reason)
-        {
-            if (String.IsNullOrWhiteSpace(batchId)) return false;
-            try
-            {
-                bool moved = false;
-                bool locked = TryWithLearningDbOutboxLock(delegate
-                {
-                    string activePath = GetLearningDbOutboxPath();
-                    if (!File.Exists(activePath))
-                    {
-                        moved = true;
-                        return;
-                    }
-
-                    List<string> activeLines = File.ReadAllLines(activePath, Encoding.UTF8).ToList();
-                    List<string> rejectedLines = activeLines
-                        .Where(line => String.Equals(GetFlat(ParseFlatJson(line), "batch_id"), batchId, StringComparison.OrdinalIgnoreCase))
-                        .ToList();
-                    if (rejectedLines.Count == 0)
-                    {
-                        moved = true;
-                        return;
-                    }
-
-                    string deadLetterPath = GetLearningDbDeadLetterPath();
-                    Directory.CreateDirectory(Path.GetDirectoryName(deadLetterPath));
-                    List<string> deadLetterLines = File.Exists(deadLetterPath)
-                        ? File.ReadAllLines(deadLetterPath, Encoding.UTF8).ToList()
-                        : new List<string>();
-                    bool alreadySaved = deadLetterLines.Any(line => String.Equals(GetFlat(ParseFlatJson(line), "batch_id"), batchId,
-                        StringComparison.OrdinalIgnoreCase));
-                    if (!alreadySaved)
-                    {
-                        Dictionary<string, string> row = ParseFlatJson(rejectedLines[0]);
-                        row["dead_letter_reason"] = NormalizeLearningDbDeadLetterReason(reason);
-                        row["dead_letter_at"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
-                        deadLetterLines.Add(ToFlatJson(row));
-                        WriteAllLinesAtomic(deadLetterPath, deadLetterLines.ToArray(), Encoding.UTF8);
-                    }
-
-                    List<string> remaining = activeLines
-                        .Where(line => !String.Equals(GetFlat(ParseFlatJson(line), "batch_id"), batchId, StringComparison.OrdinalIgnoreCase))
-                        .ToList();
-                    WriteAllLinesAtomic(activePath, remaining.ToArray(), Encoding.UTF8);
-                    moved = true;
-                }, 5000);
-                if (!locked) Log("Learning DB outbox dead-letter move lock timeout; rejected batch remains active.");
-                return locked && moved;
-            }
-            catch (Exception ex)
-            {
-                Log("Learning DB outbox dead-letter move failed (" + ex.GetType().Name + "); rejected batch remains active.");
-                return false;
-            }
-        }
-
         private static string NormalizeLearningDbDeadLetterReason(string reason)
         {
             string value = (reason ?? "unknown").Trim();
@@ -844,74 +714,6 @@ namespace RecoNet
             }
             if (safe.Length == 0) return "unknown";
             return safe.Length <= 200 ? safe.ToString() : safe.ToString(0, 200);
-        }
-
-        private static Dictionary<string, string> SerializeLearningDbOutboxBatch(LearningDbOutboxBatch batch)
-        {
-            Dictionary<string, string> row = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            row["record_type"] = "learning_db_outbox";
-            row["batch_id"] = batch.BatchId ?? "";
-            row["source"] = batch.Source ?? "";
-            row["software_partition"] = batch.SoftwarePartition ?? "";
-            row["process_name"] = batch.ProcessName ?? "";
-            row["module_file_name"] = batch.ModuleFileName ?? "";
-            row["group_count"] = batch.Groups.Count.ToString(CultureInfo.InvariantCulture);
-            for (int groupIndex = 0; groupIndex < batch.Groups.Count; groupIndex++)
-            {
-                MappingFeedbackGroup group = batch.Groups[groupIndex] ?? new MappingFeedbackGroup();
-                string prefix = "g" + groupIndex.ToString(CultureInfo.InvariantCulture) + "_";
-                row[prefix + "quantity_name"] = group.QuantityName ?? "";
-                row[prefix + "quantity_unit"] = group.QuantityUnit ?? "";
-                row[prefix + "quantity_context"] = group.QuantityContext ?? "";
-                row[prefix + "method"] = NormalizeLearningDbMethod(group.Method);
-                row[prefix + "software_partition"] = group.SoftwarePartition ?? "";
-                row[prefix + "method_no"] = group.MethodNo ?? "";
-                row[prefix + "project_id"] = group.ProjectId ?? "";
-                row[prefix + "entry_code"] = group.EntryCode ?? "";
-                row[prefix + "entry_name"] = group.EntryName ?? "";
-                row[prefix + "workbook"] = group.Workbook ?? "";
-                row[prefix + "worksheet"] = group.Worksheet ?? "";
-                row[prefix + "excel_row"] = group.ExcelRow.ToString(CultureInfo.InvariantCulture);
-                row[prefix + "box_id"] = group.BoxId ?? "";
-                row[prefix + "expression"] = group.Expression ?? "";
-                row[prefix + "source_cell"] = group.SourceCell ?? "";
-                row[prefix + "accepted_count"] = group.AcceptedCount.ToString(CultureInfo.InvariantCulture);
-                row[prefix + "corrected_count"] = group.CorrectedCount.ToString(CultureInfo.InvariantCulture);
-                row[prefix + "rejected_count"] = group.RejectedCount.ToString(CultureInfo.InvariantCulture);
-                row[prefix + "user_action"] = group.UserAction ?? "";
-                row[prefix + "target_count"] = (group.Targets == null ? 0 : group.Targets.Count).ToString(CultureInfo.InvariantCulture);
-                for (int targetIndex = 0; targetIndex < (group.Targets == null ? 0 : group.Targets.Count); targetIndex++)
-                {
-                    MappingFeedbackTarget target = group.Targets[targetIndex] ?? new MappingFeedbackTarget();
-                    string targetPrefix = prefix + "t" + targetIndex.ToString(CultureInfo.InvariantCulture) + "_";
-                    row[targetPrefix + "kind"] = target.Kind ?? "";
-                    row[targetPrefix + "code"] = target.Code ?? "";
-                    row[targetPrefix + "name"] = target.Name ?? "";
-                    row[targetPrefix + "unit"] = target.Unit ?? "";
-                    row[targetPrefix + "entry_code"] = target.EntryCode ?? "";
-                    row[targetPrefix + "entry_name"] = target.EntryName ?? "";
-                    row[targetPrefix + "formula"] = target.FormulaTemplate ?? "";
-                    row[targetPrefix + "manual_formula_override"] = target.ManualFormulaOverride ? "1" : "0";
-                    row[targetPrefix + "quota_sequence"] = target.QuotaSequence.ToString(CultureInfo.InvariantCulture);
-                    row[targetPrefix + "source_endpoint_identity"] = target.SourceEndpointIdentity ?? "";
-                    if (IsContextSensitiveLearningCode(target.Code))
-                    {
-                        row[targetPrefix + "unit_price"] = FilterLearningTargetUnitPrice(target.Code, target.UnitPrice)
-                            .ToString(CultureInfo.InvariantCulture);
-                    }
-                    row[targetPrefix + "entry_source"] = target.EntrySource ?? "";
-                }
-                row[prefix + "operand_count"] = (group.FormulaOperands == null ? 0 : group.FormulaOperands.Count).ToString(CultureInfo.InvariantCulture);
-                for (int operandIndex = 0; operandIndex < (group.FormulaOperands == null ? 0 : group.FormulaOperands.Count); operandIndex++)
-                {
-                    QuantityFormulaOperandInfo operand = group.FormulaOperands[operandIndex] ?? new QuantityFormulaOperandInfo();
-                    string operandPrefix = prefix + "o" + operandIndex.ToString(CultureInfo.InvariantCulture) + "_";
-                    row[operandPrefix + "name"] = operand.Name ?? "";
-                    row[operandPrefix + "unit"] = operand.Unit ?? "";
-                    row[operandPrefix + "signature"] = operand.Signature ?? "";
-                }
-            }
-            return row;
         }
 
         private static long ReadFlatLong(Dictionary<string, string> values, string key, long fallback)
@@ -926,209 +728,6 @@ namespace RecoNet
             decimal parsed;
             return Decimal.TryParse(GetFlat(values, key), NumberStyles.Float, CultureInfo.InvariantCulture, out parsed)
                 ? parsed : fallback;
-        }
-
-        private static LearningDbOutboxBatch ParseLearningDbOutboxBatch(string line)
-        {
-            Dictionary<string, string> row = ParseFlatJson(line);
-            string batchId = GetFlat(row, "batch_id").Trim();
-            int groupCount = ReadFlatInt(row, "group_count", 0);
-            if (batchId.Length != 32 || !batchId.All(Uri.IsHexDigit) || groupCount <= 0 || groupCount > 10000) return null;
-            LearningDbOutboxBatch batch = new LearningDbOutboxBatch
-            {
-                BatchId = batchId,
-                Source = GetFlat(row, "source"),
-                SoftwarePartition = GetFlat(row, "software_partition").Trim(),
-                ProcessName = GetFlat(row, "process_name"),
-                ModuleFileName = GetFlat(row, "module_file_name")
-            };
-            for (int groupIndex = 0; groupIndex < groupCount; groupIndex++)
-            {
-                string prefix = "g" + groupIndex.ToString(CultureInfo.InvariantCulture) + "_";
-                MappingFeedbackGroup group = new MappingFeedbackGroup
-                {
-                    QuantityName = GetFlat(row, prefix + "quantity_name"),
-                    QuantityUnit = GetFlat(row, prefix + "quantity_unit"),
-                    QuantityContext = GetFlat(row, prefix + "quantity_context"),
-                    Method = NormalizeLearningDbMethod(GetFlat(row, prefix + "method")),
-                    SoftwarePartition = GetFlat(row, prefix + "software_partition").Trim(),
-                    MethodNo = NormalizeLearningMethodNo(GetFlat(row, prefix + "method_no")),
-                    ProjectId = GetFlat(row, prefix + "project_id"),
-                    EntryCode = GetFlat(row, prefix + "entry_code"),
-                    EntryName = GetFlat(row, prefix + "entry_name"),
-                    Workbook = GetFlat(row, prefix + "workbook"),
-                    Worksheet = GetFlat(row, prefix + "worksheet"),
-                    ExcelRow = ReadFlatInt(row, prefix + "excel_row", 0),
-                    BoxId = GetFlat(row, prefix + "box_id"),
-                    Expression = GetFlat(row, prefix + "expression"),
-                    SourceCell = GetFlat(row, prefix + "source_cell"),
-                    AcceptedCount = ReadFlatInt(row, prefix + "accepted_count", 1),
-                    CorrectedCount = ReadFlatInt(row, prefix + "corrected_count", 0),
-                    RejectedCount = ReadFlatInt(row, prefix + "rejected_count", 0),
-                    UserAction = GetFlat(row, prefix + "user_action")
-                };
-                int targetCount = ReadFlatInt(row, prefix + "target_count", 0);
-                int operandCount = ReadFlatInt(row, prefix + "operand_count", 0);
-                if (targetCount < 0 || targetCount > 10000 || operandCount < 0 || operandCount > 10000) return null;
-                for (int targetIndex = 0; targetIndex < targetCount; targetIndex++)
-                {
-                    string targetPrefix = prefix + "t" + targetIndex.ToString(CultureInfo.InvariantCulture) + "_";
-                    group.Targets.Add(new MappingFeedbackTarget
-                    {
-                        Kind = GetFlat(row, targetPrefix + "kind"),
-                        Code = GetFlat(row, targetPrefix + "code"),
-                        Name = GetFlat(row, targetPrefix + "name"),
-                        Unit = GetFlat(row, targetPrefix + "unit"),
-                        EntryCode = GetFlat(row, targetPrefix + "entry_code"),
-                        EntryName = GetFlat(row, targetPrefix + "entry_name"),
-                        FormulaTemplate = GetFlat(row, targetPrefix + "formula"),
-                        ManualFormulaOverride = ReadFlatInt(row, targetPrefix + "manual_formula_override", 0) == 1,
-                        QuotaSequence = ReadFlatLong(row, targetPrefix + "quota_sequence", 0),
-                        SourceEndpointIdentity = GetFlat(row, targetPrefix + "source_endpoint_identity"),
-                        UnitPrice = ReadFlatDecimal(row, targetPrefix + "unit_price", 0m),
-                        EntrySource = GetFlat(row, targetPrefix + "entry_source")
-                    });
-                }
-                for (int operandIndex = 0; operandIndex < operandCount; operandIndex++)
-                {
-                    string operandPrefix = prefix + "o" + operandIndex.ToString(CultureInfo.InvariantCulture) + "_";
-                    group.FormulaOperands.Add(new QuantityFormulaOperandInfo
-                    {
-                        Name = GetFlat(row, operandPrefix + "name"),
-                        Unit = GetFlat(row, operandPrefix + "unit"),
-                        Signature = GetFlat(row, operandPrefix + "signature")
-                    });
-                }
-                batch.Groups.Add(group);
-            }
-            return batch;
-        }
-
-        private static bool TryReplayPendingLearningDbEvents()
-        {
-            if (IsLearningDbCircuitOpen()) return false;
-            List<LearningDbOutboxBatch> batches = LoadLearningDbOutboxBatches();
-            foreach (LearningDbOutboxBatch batch in batches.Take(20))
-            {
-                string failureReason;
-                LearningDbWriteResult writeResult = TryWriteLearningDbBatch(batch, out failureReason);
-                if (writeResult == LearningDbWriteResult.Succeeded)
-                {
-                    RemoveLearningDbOutboxBatch(batch.BatchId);
-                    continue;
-                }
-                if (writeResult == LearningDbWriteResult.PermanentFailure)
-                {
-                    Log("Learning DB outbox batch " + (batch.BatchId ?? "") +
-                        " is permanently invalid and will be isolated; subsequent batches will continue.");
-                    if (!TryMoveLearningDbOutboxBatchToDeadLetter(batch.BatchId, failureReason)) return false;
-                    continue;
-                }
-                return false;
-            }
-            return true;
-        }
-
-        // 推荐预览读取 SQL 前调用，确保此前离线绑定优先补传到共享学习库。
-        private static void ReplayPendingLearningDbEvents()
-        {
-            TryReplayPendingLearningDbEvents();
-        }
-
-        // 返回“名称级签名\n组件框”键，供推荐层只叠加尚未确认写入 SQL 的本机关系。
-        private static HashSet<string> LoadPendingLearningMappingKeys()
-        {
-            HashSet<string> keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (LearningDbOutboxBatch batch in LoadLearningDbOutboxBatches())
-            {
-                foreach (MappingFeedbackGroup group in batch.Groups)
-                {
-                    if (group == null || String.IsNullOrWhiteSpace(group.QuantityName) || String.IsNullOrWhiteSpace(group.BoxId)) continue;
-                    if (String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method))) continue;
-                    if (Math.Max(0, group.AcceptedCount) + Math.Max(0, group.CorrectedCount) <= 0) continue;
-                    string signature = NormalizeForSignature(group.QuantityName) + "|";
-                    if (signature.Length > 450) signature = signature.Substring(0, 450);
-                    keys.Add(signature + "\n" + group.BoxId);
-                }
-            }
-            return keys;
-        }
-
-        private static List<LearningDbOutboxBatch> LoadLearningDbOutboxBatches()
-        {
-            List<LearningDbOutboxBatch> batches = new List<LearningDbOutboxBatch>();
-            try
-            {
-                TryWithLearningDbOutboxLock(delegate
-                {
-                    string path = GetLearningDbOutboxPath();
-                    if (!File.Exists(path)) return;
-                    HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (string line in File.ReadAllLines(path, Encoding.UTF8))
-                    {
-                        LearningDbOutboxBatch batch = ParseLearningDbOutboxBatch(line);
-                        if (batch != null && seen.Add(batch.BatchId)) batches.Add(batch);
-                    }
-                }, 1000);
-            }
-            catch (Exception ex)
-            {
-                Log("Learning DB outbox load failed: " + ex.Message);
-            }
-            return batches;
-        }
-
-        private static void RemoveLearningDbOutboxBatch(string batchId)
-        {
-            if (String.IsNullOrWhiteSpace(batchId)) return;
-            try
-            {
-                if (!TryWithLearningDbOutboxLock(delegate
-                {
-                    string path = GetLearningDbOutboxPath();
-                    if (!File.Exists(path)) return;
-                    List<string> remaining = File.ReadAllLines(path, Encoding.UTF8)
-                        .Where(line => !String.Equals(GetFlat(ParseFlatJson(line), "batch_id"), batchId, StringComparison.OrdinalIgnoreCase))
-                        .ToList();
-                    WriteAllLinesAtomic(path, remaining.ToArray(), Encoding.UTF8);
-                }, 5000))
-                {
-                    Log("Learning DB outbox cleanup lock timeout; committed event remains for idempotent replay.");
-                }
-            }
-            catch (Exception ex)
-            {
-                Log("Learning DB outbox cleanup failed; committed event remains for idempotent replay: " + ex.Message);
-            }
-        }
-
-        private static bool TryWithLearningDbOutboxLock(Action action, int timeoutMilliseconds)
-        {
-            Mutex mutex = new Mutex(false, LearningDbOutboxMutexName);
-            bool acquired = false;
-            try
-            {
-                try { acquired = mutex.WaitOne(timeoutMilliseconds); }
-                catch (AbandonedMutexException) { acquired = true; }
-                if (!acquired) return false;
-                action();
-                return true;
-            }
-            finally
-            {
-                if (acquired) mutex.ReleaseMutex();
-                mutex.Dispose();
-            }
-        }
-
-        private static string GetLearningDbOutboxPath()
-        {
-            return Path.Combine(FindRecoQuotaDataDir(), LearningDbOutboxFileName);
-        }
-
-        private static string GetLearningDbDeadLetterPath()
-        {
-            return Path.Combine(FindRecoQuotaDataDir(), LearningDbDeadLetterFileName);
         }
 
         private static void RememberLearningDbDurableResult(string source, List<MappingFeedbackGroup> groups, bool durable)
