@@ -370,6 +370,13 @@ namespace RecoNet
             return signature.Length <= 450 ? signature : signature.Substring(0, 450);
         }
 
+        // 审查 §2.4 读侧口径：SQL 快照经 QuantityAlias 桥接后统一用 BuildSmartQuantitySignature 剥掉名称尾部的“ 单位”，
+        // 预览行键与公式操作数键也按同一函数取值；无尾缀名称是恒等变换。写侧流水仍写未剥离签名，由 SQL 侧桥接，不在此处改动。
+        private static string BuildSmartRowQuantitySignature(TargetQtyRow row)
+        {
+            return BuildSmartQuantitySignature(row == null ? "" : row.RawName, row == null ? "" : row.Unit);
+        }
+
         // 兼容旧流水 quantity_unit 为空、单位仍留在 raw_name 尾部的情况。
         // 只在“空白边界 + 已知单位”时剥离，不能把设备线夹等名称尾字误当单位。
         private static string StripTrailingKnownSmartQuantityUnit(string quantityName)
@@ -1425,17 +1432,18 @@ namespace RecoNet
             if (!TryBuildExcelLinkUnitScaleSuffix(rule.TargetUnit, currentTargetUnit, out outputSuffix)) return false;
 
             string expression = NormalizeSmartFormulaScaleDisplay(rule.Template);
+            // 审查 §2.4：操作数键与快照 operand.Signature 同为剥单位后的名称级签名。
             foreach (SmartFormulaOperand operand in rule.Operands.OrderByDescending(item => item.Index))
             {
                 TargetQtyRow row = null;
-                if (operand.Index == 0 && String.Equals(NormalizeForSignature(anchorRow.RawName) + "|", operand.Signature, StringComparison.OrdinalIgnoreCase))
+                if (operand.Index == 0 && String.Equals(BuildSmartRowQuantitySignature(anchorRow), operand.Signature, StringComparison.OrdinalIgnoreCase))
                 {
                     row = anchorRow;
                 }
                 else
                 {
                     List<TargetQtyRow> candidates = targetRows.Where(item =>
-                        String.Equals(NormalizeForSignature(item.RawName) + "|", operand.Signature, StringComparison.OrdinalIgnoreCase) &&
+                        String.Equals(BuildSmartRowQuantitySignature(item), operand.Signature, StringComparison.OrdinalIgnoreCase) &&
                         String.Equals(item.Chapter ?? "", anchorRow.Chapter ?? "", StringComparison.OrdinalIgnoreCase) &&
                         Math.Abs(item.Row - anchorRow.Row) <= 20).ToList();
                     if (candidates.Count != 1) return false;
@@ -1934,12 +1942,12 @@ namespace RecoNet
             int hitExact = 0, hitNameOnly = 0, fuzzyRows = 0, manualRows = 0;
             foreach (TargetQtyRow row in targetRows)
             {
-                string nameSig = NormalizeForSignature(row.RawName);
+                // 审查 §2.4：行键改用与 SQL 侧同口径的剥单位签名，名称自带“ m3”等尾缀时精确层仍可命中。
+                string nameLevelSig = BuildSmartRowQuantitySignature(row);
+                string nameSig = SmartNameSegment(nameLevelSig);
                 string unitSig = NormalizeForSignature(row.Unit);
                 string fullSig = nameSig + "|" + unitSig;
                 if (fullSig.Length > 450) fullSig = fullSig.Substring(0, 450);
-                string nameLevelSig = nameSig + "|";
-                if (nameLevelSig.Length > 450) nameLevelSig = nameLevelSig.Substring(0, 450);
 
                 List<SmartMapEntry> exactHits;
                 snapshot.BySignature.TryGetValue(nameLevelSig, out exactHits);

@@ -103,14 +103,16 @@ namespace RecoNet
                 Log("Learning was rejected before SQL write because the current software partition is unknown. groups=" +
                     unknownPartitionGroups.Count.ToString(CultureInfo.InvariantCulture));
             }
-            List<MappingFeedbackGroup> validGroups = groups
-                .Where(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
-                    IsValidLearningSoftwarePartition(group.SoftwarePartition) &&
-                    !String.IsNullOrEmpty(group.MethodNo) &&
-                    !String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)) &&
-                    group.Targets != null && group.Targets.Any(target => target != null &&
-                        !String.IsNullOrWhiteSpace(target.Code)))
-                .ToList();
+            // 审查 §2.3：结构合规但证据不可推荐的组在入批前单独剔除，避免一组拖垮整批。
+            List<MappingFeedbackGroup> validGroups = groups.Where(IsLearningDbWritableGroup).ToList();
+            List<string> unrecommendableIndexes = new List<string>();
+            for (int groupIndex = 0; groupIndex < groups.Count; groupIndex++)
+            {
+                if (IsLearningDbStructurallyValidGroup(groups[groupIndex]) && !IsLearningDbWritableGroup(groups[groupIndex]))
+                {
+                    unrecommendableIndexes.Add(groupIndex.ToString(CultureInfo.InvariantCulture));
+                }
+            }
             int unsupportedMethodCount = groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
                 IsValidLearningSoftwarePartition(group.SoftwarePartition) &&
                 (String.IsNullOrEmpty(group.MethodNo) || String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method))));
@@ -126,6 +128,14 @@ namespace RecoNet
                 Log("Learning DB binding was not queued because " + unsupportedCount.ToString(CultureInfo.InvariantCulture) +
                     " learning group(s) have an unsupported partition/method or no auditable target.");
             }
+            if (unrecommendableIndexes.Count > 0)
+            {
+                // 只记批内序号与计数，不记工程量名。
+                Log("Learning DB skipped " + unrecommendableIndexes.Count.ToString(CultureInfo.InvariantCulture) +
+                    " non-recommendable learning group(s) before SQL write; " +
+                    validGroups.Count.ToString(CultureInfo.InvariantCulture) + " group(s) continue. groupIndexes=" +
+                    String.Join(",", unrecommendableIndexes.ToArray()));
+            }
             if (validGroups.Count == 0)
             {
                 return false;
@@ -140,7 +150,7 @@ namespace RecoNet
                 Log("Learning DB binding was not persisted; local learning is disabled. result=" +
                     writeResult.ToString() + " reason=" + NormalizeLearningDbDeadLetterReason(failureReason));
             }
-            bool fullyWritten = durable && unsupportedCount == 0;
+            bool fullyWritten = durable && unsupportedCount == 0 && unrecommendableIndexes.Count == 0;
             RememberLearningDbDurableResult(source, groups, fullyWritten);
             return fullyWritten;
         }
@@ -578,6 +588,24 @@ namespace RecoNet
                 String.Equals(value, "2024", StringComparison.OrdinalIgnoreCase);
         }
 
+        // 分区、办法与可审计目标齐全的组才允许进入学习库批次。
+        private static bool IsLearningDbStructurallyValidGroup(MappingFeedbackGroup group)
+        {
+            return group != null && !String.IsNullOrWhiteSpace(group.QuantityName) &&
+                IsValidLearningSoftwarePartition(group.SoftwarePartition) &&
+                !String.IsNullOrEmpty(group.MethodNo) &&
+                !String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)) &&
+                group.Targets != null && group.Targets.Any(target => target != null &&
+                    !String.IsNullOrWhiteSpace(target.Code));
+        }
+
+        // 审查 §2.3：SF 绑在非“设备购置费”条目、辅助码缺名称/单位等不可推荐组不进入写入集合，
+        // 由 RecordBindingEventsToLearningDb 单独记日志，不再让同批其余合规组一起永久失败。
+        private static bool IsLearningDbWritableGroup(MappingFeedbackGroup group)
+        {
+            return IsLearningDbStructurallyValidGroup(group) && IsLearningFeedbackGroupRecommendable(group);
+        }
+
         private static void ReadLearningProcessIdentity(out string processName, out string moduleFileName)
         {
             processName = "";
@@ -663,7 +691,10 @@ namespace RecoNet
                 IsValidLearningSoftwarePartition(group.SoftwarePartition) &&
                 !String.IsNullOrEmpty(group.MethodNo) &&
                 !String.IsNullOrEmpty(NormalizeLearningDbMethod(group.Method)) && !IsLearningFeedbackGroupRecommendable(group));
-            if (invalidPartitionCount == 0 && partitionMismatchCount == 0 && invalidMethodCount == 0 && invalidEvidenceCount == 0) return false;
+            // 审查 §2.3：证据不可推荐只在整批全部不可推荐时才判永久失败；部分不可推荐已在入批前剔除。
+            int auditableGroupCount = batch.Groups.Count(group => group != null && !String.IsNullOrWhiteSpace(group.QuantityName));
+            bool allEvidenceInvalid = auditableGroupCount > 0 && invalidEvidenceCount >= auditableGroupCount;
+            if (invalidPartitionCount == 0 && partitionMismatchCount == 0 && invalidMethodCount == 0 && !allEvidenceInvalid) return false;
             reason = "unsupported_learning_group_partition_" + invalidPartitionCount.ToString(CultureInfo.InvariantCulture) +
                 "_mismatch_" + partitionMismatchCount.ToString(CultureInfo.InvariantCulture) +
                 "_method_" + invalidMethodCount.ToString(CultureInfo.InvariantCulture) +
