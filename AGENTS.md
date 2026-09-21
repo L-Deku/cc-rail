@@ -192,6 +192,7 @@ powershell.exe -ExecutionPolicy Bypass -File "D:\AI文件\自动预算\tools\Dep
 - 排查模板铺量匹配异常时，必须按界面当前选择的模板名调用 `LoadFillTemplate` 并核对实际模板 JSON；不得用名称相近的其他模板代替复现后推断匹配分支。
 - 推荐定额主链固定按 L1 完整源行复制、L2 结构模板构造两层选路，并在一次 Apply 的项目业务事务内写入 marker 和全部业务行；不得恢复 L3 正式定额/正式材料原生输入。宿主原生写入仍可用于推荐定额以外已经实机验证的独立功能，但不得与推荐定额事务混用。
 - 其他功能触发定额输入表原生补齐时，应在当前行“定额编号”单元格进入编辑后模拟键盘输入/粘贴编号并回车；直接设置单元格值或编辑控件 Text 可能不会触发软件填充单重、编制人、修改日期等派生字段。
+- 补充材料（`RecoNet.补充单价.FormBcCl`）与补充设备（`RecoNet.补充单价.FormBcSb`）窗口的“批量删除”按钮是独立插件 `RecoSupplementBulkDelete.dll`（源码 `RecoSupplementBulkDelete/`，日志 `RecoSupplementBulkDelete.log`），由 `RecoPluginLoader` 按文件名加载、`RecoQuotaRecommend/build.ps1` 一并编译部署，不得再并入 `RecoExpandPanel.dll`（2026-09-20 用户要求恢复原样）。它用 500ms 定时器只枚举 `Application.OpenForms`，不扫描控件树。删除只用窗体自身 `m_cnn`，目标表从 `m_sql` 的 `from` 后解析（项目库 `材料单价库`/设备表），按电算代号+名称列执行；补充材料代号必须在 4 开头 9 位号段（状态栏 `m_start/m_end` 只是当前设计单位子区间，不能作守卫）。引用守卫：查一次 `information_schema` 找同库所有带 `电算代号`/`定额编号` 列的基表并缓存，每表每批一条 `in(...)` 查询，任一表引用即跳过并在结果里点名（项目库没有 `定额库消耗`，早期只查它的版本实测无效）；窗口只读或“添加”按钮不可用时拒绝。宿主方法体受运行时保护，2024 版虽有 `Btn_BulkDelete_Click` 方法但无对应按钮，不得盲调。删除后先从已绑定 DataTable 本地移除，失败才回退宿主 `comboBox_SelectedIndexChanged` 重查。
 
 ## 代码编辑规则
 

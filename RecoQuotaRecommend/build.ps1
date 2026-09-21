@@ -195,6 +195,7 @@ $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $quotaOut = Join-Path $outDir "RecoQuotaRecommend.dll"
 $loaderOut = Join-Path $outDir "RecoPluginLoader.dll"
 $expandOut = Join-Path $outDir "RecoExpandPanel.dll"
+$bulkDeleteOut = Join-Path $outDir "RecoSupplementBulkDelete.dll"
 
 $npoi = Join-Path $referenceDir "NPOI.dll"
 $npoiOoxml = Join-Path $referenceDir "NPOI.OOXML.dll"
@@ -269,6 +270,15 @@ if (-not $BuildOnly) {
   & $csc /nologo /target:library /out:$loaderOut `
     (Join-Path $root "RecoPluginLoader\AutoLoadDomainManager.cs")
   Assert-NativeSuccess "Build RecoPluginLoader"
+
+  # 补充材料/补充设备批量删除：独立插件，源码 RecoSupplementBulkDelete/，由 RecoPluginLoader 按文件名加载。
+  & $csc /nologo /target:library /out:$bulkDeleteOut `
+    /reference:System.Windows.Forms.dll `
+    /reference:System.Drawing.dll `
+    /reference:System.Data.dll `
+    (Join-Path $root "RecoSupplementBulkDelete\SupplementBulkDeletePlugin.cs")
+  Assert-NativeSuccess "Build RecoSupplementBulkDelete"
+  Assert-DllContainsText -Path $bulkDeleteOut -FeatureName "Supplement bulk delete" -Markers @("SupplementBulkDeletePlugin")
 }
 
 & $csc /nologo /target:library /out:$expandOut `
@@ -384,6 +394,7 @@ foreach ($softwareDir in $targets) {
   Copy-Item -LiteralPath $loaderOut -Destination $softwareDir -Force
   Copy-Item -LiteralPath $expandOut -Destination $softwareDir -Force
   Copy-Item -LiteralPath $quotaOut -Destination $softwareDir -Force
+  Copy-Item -LiteralPath $bulkDeleteOut -Destination $softwareDir -Force
   Copy-Item -LiteralPath $harmony -Destination $softwareDir -Force
   # 本机软件目录不放 RecoPluginSql.json：本机插件走 DPAPI 凭据库的 reco（2026-09-03 用户决定）。
   # RecoPluginSql.json 只由 tools\BuildColleaguePluginRelease.ps1 从 bin 打进同事发布包。若本机目录里残留该文件，一并清掉。
@@ -431,3 +442,4 @@ Write-Host "Built $importerOut"
 Write-Host "Built $quotaOut"
 Write-Host "Built $loaderOut"
 Write-Host "Built $expandOut"
+Write-Host "Built $bulkDeleteOut"

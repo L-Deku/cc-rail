@@ -62,8 +62,9 @@ if (Test-Path -LiteralPath $OutputDir) {
 $commonDir = Join-Path $OutputDir "00-首次安装公共包"
 $expandDir = Join-Path $OutputDir "01-综合扩展功能包"
 $quotaDir = Join-Path $OutputDir "02-推荐定额功能包-首次安装"
+$bulkDeleteDir = Join-Path $OutputDir "03-补充材料设备批量删除功能包"
 $updateDir = Join-Path $OutputDir "90-后续更新文件"
-foreach ($dir in @($commonDir, $expandDir, $quotaDir, $updateDir)) {
+foreach ($dir in @($commonDir, $expandDir, $quotaDir, $bulkDeleteDir, $updateDir)) {
   New-Item -ItemType Directory -Path $dir -Force | Out-Null
 }
 
@@ -117,14 +118,19 @@ foreach ($name in @("excel-link-units.txt", "fill-templates")) {
   }
 }
 
+# 补充材料/补充设备批量删除：独立 DLL，由 RecoPluginLoader 按文件名加载，首次启用需同时更新公共包里的 RecoPluginLoader.dll。
+Copy-RequiredFile -Source (Join-Path $binDir "RecoSupplementBulkDelete.dll") -Destination (Join-Path $bulkDeleteDir "RecoSupplementBulkDelete.dll")
+
 $expandUpdate = Join-Path $updateDir "综合扩展更新"
 $quotaUpdate = Join-Path $updateDir "推荐定额更新"
+$bulkDeleteUpdate = Join-Path $updateDir "补充批量删除更新"
 $commonUpdate = Join-Path $updateDir "公共组件更新"
-foreach ($dir in @($expandUpdate, $quotaUpdate, $commonUpdate)) {
+foreach ($dir in @($expandUpdate, $quotaUpdate, $bulkDeleteUpdate, $commonUpdate)) {
   New-Item -ItemType Directory -Path $dir -Force | Out-Null
 }
 Copy-RequiredFile -Source (Join-Path $binDir "RecoExpandPanel.dll") -Destination (Join-Path $expandUpdate "RecoExpandPanel.dll")
 Copy-RequiredFile -Source (Join-Path $binDir "RecoQuotaRecommend.dll") -Destination (Join-Path $quotaUpdate "RecoQuotaRecommend.dll")
+Copy-RequiredFile -Source (Join-Path $binDir "RecoSupplementBulkDelete.dll") -Destination (Join-Path $bulkDeleteUpdate "RecoSupplementBulkDelete.dll")
 Copy-RequiredFile -Source (Join-Path $binDir "RecoPluginLoader.dll") -Destination (Join-Path $commonUpdate "RecoPluginLoader.dll")
 Copy-RequiredFile -Source (Join-Path $binDir "0Harmony.dll") -Destination (Join-Path $commonUpdate "0Harmony.dll")
 Copy-RequiredFile -Source $pluginSqlConfig -Destination (Join-Path $commonUpdate "RecoPluginSql.json")
@@ -138,6 +144,7 @@ Write-Utf8BomFile -Path (Join-Path $OutputDir "使用说明.txt") -Lines @(
   "",
   "后续更新：",
   "只发送 90-后续更新文件 中对应功能的 DLL，让同事覆盖到软件根目录。",
+  "补充材料/补充设备批量删除是独立的 RecoSupplementBulkDelete.dll；同事第一次启用时要连同 90-后续更新文件\公共组件更新\RecoPluginLoader.dll 一起覆盖，之后更新只发 补充批量删除更新\RecoSupplementBulkDelete.dll。",
   "SQL 学习库改密码或换服务器时，重新生成 RecoPluginSql.json，只发送 90-后续更新文件\公共组件更新\RecoPluginSql.json 让同事覆盖。",
   "不要在普通更新中发送 RecoQuotaData，以免覆盖同事自己的参考池和模板。",
   "覆盖 DLL 或 RecoPluginSql.json 前必须关闭两个目标软件。"

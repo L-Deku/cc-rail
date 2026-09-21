@@ -12,6 +12,8 @@ namespace RecoPluginLoader
             base.InitializeNewDomain(appDomainInfo);
             LoadPlugin("RecoExpandPanel.dll", "RecoNet.FormPanel", "InstallOnIdle");
             LoadPlugin("RecoQuotaRecommend.dll", "RecoQuotaRecommend.QuotaRecommendPanel", "InstallOnIdle");
+            // 补充材料/补充设备批量删除（独立插件，源码 RecoSupplementBulkDelete/）。文件不存在时只记日志。
+            LoadPlugin("RecoSupplementBulkDelete.dll", "RecoSupplementBulkDelete.SupplementBulkDeletePlugin", "InstallOnIdle");
         }
 
         private static void LoadPlugin(string assemblyFileName, string typeName, string methodName)

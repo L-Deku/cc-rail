@@ -78,6 +78,7 @@ function Assert-SourceDlls {
   $required = @(
     "RecoQuotaRecommend.dll",
     "RecoExpandPanel.dll",
+    "RecoSupplementBulkDelete.dll",
     "RecoPluginLoader.dll",
     "0Harmony.dll"
   )
@@ -331,6 +332,7 @@ Assert-SourceDlls -BinDir $binDir
 $pluginFiles = @(
   "RecoQuotaRecommend.dll",
   "RecoExpandPanel.dll",
+  "RecoSupplementBulkDelete.dll",
   "RecoPluginLoader.dll",
   "0Harmony.dll"
 )
