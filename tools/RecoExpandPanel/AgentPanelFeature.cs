@@ -454,6 +454,9 @@ namespace RecoNet
             private readonly List<string> selectedItemNos = new List<string>();
             private readonly List<AgentTargetEntry> targetEntries = new List<AgentTargetEntry>();
             private int crossSourceRowCount;
+            // 点"重新读取选中行"那一刻锁定的源行。生成预览时用它，而不是现读主程序表格——
+            // 用户读完源之后还要去树上点目标条目，一切树节点主程序表格就换了内容。
+            private readonly List<QuotaKey> crossSourceKeys = new List<QuotaKey>();
 
             private bool busy;
             private bool suppressSentence;
@@ -932,7 +935,7 @@ namespace RecoNet
                 {
                     if (tabs.SelectedTab != null && tabs.SelectedTab.Text == TabCross)
                     {
-                        RefreshCrossSourceList();
+                        EnsureCrossSourceLoaded();
                     }
 
                     RefreshScopeAvailability();
@@ -1056,7 +1059,7 @@ namespace RecoNet
                     AddItemFromTree(true);
                 }
 
-                RefreshCrossSourceList();
+                EnsureCrossSourceLoaded();
                 RefreshUndoRedoButtons();
                 UpdateSentence();
             }
@@ -1556,11 +1559,14 @@ namespace RecoNet
                 return names;
             }
 
-            // 跨条目复制的"源"就是主程序定额表里选中的那几行，这里只读回显。
+            // 跨条目复制的"源"：把主程序定额表当前选中的行读进来并锁定。
+            // 之后切树节点、添加条目都不会改变它，直到再点一次"重新读取选中行"。
             private void RefreshCrossSourceList()
             {
                 crossSourceList.Items.Clear();
+                crossSourceKeys.Clear();
                 crossSourceRowCount = 0;
+                int unreadable = 0;
                 try
                 {
                     DataGridView host = GetField<DataGridView>(mainForm, "dataGridViewDE");
@@ -1568,6 +1574,14 @@ namespace RecoNet
                     {
                         foreach (DataGridViewRow row in GetSelectedQuotaRows(host))
                         {
+                            QuotaKey key;
+                            if (!TryGetQuotaKey(row, out key))
+                            {
+                                unreadable++;
+                                continue;
+                            }
+
+                            crossSourceKeys.Add(key);
                             crossSourceRowCount++;
                             string code = (GetRowValue(row, "定额编号DE", "定额编号") ?? "").Trim();
                             string name = (GetRowValue(row, "工程或费用项目名称", "名称", "项目名称") ?? "").Trim();
@@ -1580,16 +1594,31 @@ namespace RecoNet
                     Log("Agent panel read cross source failed: " + ex.Message);
                 }
 
+                UpdateCrossSourceLabel(unreadable);
+            }
+
+            private void UpdateCrossSourceLabel(int unreadable)
+            {
                 if (crossSourceRowCount > 0)
                 {
                     crossSourceLabel.ForeColor = AgentPanelOkFore;
-                    crossSourceLabel.Text = "源：主程序定额表里选中的 " +
-                        crossSourceRowCount.ToString(CultureInfo.InvariantCulture) + " 行";
+                    crossSourceLabel.Text = "源：已锁定 " + crossSourceRowCount.ToString(CultureInfo.InvariantCulture) +
+                        " 行（之后切树、添加条目都不影响；要换源请重新读取）" +
+                        (unreadable > 0 ? "，另有 " + unreadable.ToString(CultureInfo.InvariantCulture) + " 行读不到定位信息已忽略" : "");
                 }
                 else
                 {
                     crossSourceLabel.ForeColor = AgentPanelErrorFore;
-                    crossSourceLabel.Text = "源：主程序定额表里还没有选中行";
+                    crossSourceLabel.Text = "源：还没读取。先在来源条目的定额表里选中要复制/移动的行，再点「重新读取选中行」。";
+                }
+            }
+
+            // 自动读取只在还没锁定源的时候做一次，免得覆盖用户已经读好的源。
+            private void EnsureCrossSourceLoaded()
+            {
+                if (crossSourceKeys.Count == 0)
+                {
+                    RefreshCrossSourceList();
                 }
             }
 
@@ -2038,7 +2067,7 @@ namespace RecoNet
 
             private AgentCommand BuildCrossCommand()
             {
-                if (crossSourceRowCount == 0)
+                if (crossSourceKeys.Count == 0)
                 {
                     throw new AgentPlanException("请先在主程序定额表里选中要复制/移动的行（按住 Ctrl 或 Shift 可多选），再点「重新读取选中行」。");
                 }
@@ -2272,6 +2301,12 @@ namespace RecoNet
                 }
 
                 AgentSelectionSnapshot snapshot = CaptureAgentSelectionForPanel();
+                if (preParsed != null && tabs.SelectedTab != null && tabs.SelectedTab.Text == TabCross)
+                {
+                    // 跨条目复制的源以面板里锁定的为准，和列表显示的完全一致。
+                    snapshot.QuotaKeys = new List<QuotaKey>(crossSourceKeys);
+                }
+
                 busy = true;
                 previewButton.Enabled = false;
                 textSendButton.Enabled = false;
@@ -2533,6 +2568,24 @@ namespace RecoNet
                 }
             }
 
+            private static bool PlanMovesLockedSource(AgentPlan plan)
+            {
+                if (plan == null || plan.Commands == null)
+                {
+                    return false;
+                }
+
+                foreach (AgentCommand command in plan.Commands)
+                {
+                    if (command.Type == "move_quotas" && command.SourceItem == AgentSelectedToken)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
             private void ExecutePlanNow(AgentPlan plan)
             {
                 Enabled = false;
@@ -2540,6 +2593,13 @@ namespace RecoNet
                 {
                     string message = ExecuteAgentPlan(mainForm, plan, delegate(string line) { });
                     SetStatus(message.Replace("\r\n", "　").Replace("\n", "　"), false);
+                    if (PlanMovesLockedSource(plan))
+                    {
+                        crossSourceList.Items.Clear();
+                        crossSourceKeys.Clear();
+                        crossSourceRowCount = 0;
+                        UpdateCrossSourceLabel(0);
+                    }
                 }
                 catch (AgentPlanException ex)
                 {
