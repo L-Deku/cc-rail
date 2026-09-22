@@ -624,7 +624,7 @@ namespace RecoNet
                     }
 
                     command.Type = "remove_text";
-                    command.RemoveText = opToken;
+                    command.RemoveText = NormalizeAgentOperatorFragment(opToken);   // ×6→*6、*1.0→*1，与乘系数写入的后缀一致
                     result.Commands.Add(command);
                     return true;
                 }
@@ -678,7 +678,7 @@ namespace RecoNet
                     return true;
                 }
 
-                command.Factor = factor.ToString(CultureInfo.InvariantCulture);
+                command.Factor = NormalizeAgentFactorText(factor);
                 result.Commands.Add(command);
                 return true;
             }
@@ -847,6 +847,12 @@ namespace RecoNet
                     command.RemoveText = tokens[0];
                     command.Items = tokens.Count < 2 ? AgentSelectedItems() : SplitAgentList(tokens[1]);
                 }
+
+                if (command.Target != "adjustment")
+                {
+                    command.RemoveText = NormalizeAgentOperatorFragment(command.RemoveText);   // 数量/编号的 ÷100、*1.0 统一成 /100、*1
+                }
+
                 result.Commands.Add(command);
                 return true;
             }

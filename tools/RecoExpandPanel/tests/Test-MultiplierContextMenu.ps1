@@ -240,7 +240,9 @@ try {
 }
 if (-not $unitGuarded) { throw 'Tree command did not reject a missing current unit.' }
 
-$unwrapped = [string](Invoke-PrivateStatic 'RemoveAgentQuantityFragment' @('(100)*0.9', '*0.9'))
+$removeArgs = @('(100)*0.9', '*0.9', $null)
+if (-not [bool](Invoke-PrivateStatic 'TryRemoveAgentQuantityFragment' $removeArgs)) { throw 'Quantity suffix was not removed.' }
+$unwrapped = [string]$removeArgs[2]
 if ($unwrapped -ne '100') { throw "Quantity parentheses were not removed: $unwrapped" }
 
 $nativeMenu = [NativeMenuTestApi]::CreatePopupMenu()

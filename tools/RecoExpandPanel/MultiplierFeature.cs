@@ -1101,7 +1101,7 @@ namespace RecoNet
 
             factor = new FactorInfo();
             factor.Operator = op;
-            factor.Factor = parsed.ToString(CultureInfo.InvariantCulture);
+            factor.Factor = NormalizeAgentFactorText(parsed);
             return true;
         }
 

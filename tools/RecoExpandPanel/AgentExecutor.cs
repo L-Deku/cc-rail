@@ -1231,13 +1231,13 @@ namespace RecoNet
                 else if (command.Target == "quota_code")
                 {
                     string oldCode = row.QuotaCode;
-                    if (String.IsNullOrEmpty(oldCode) || oldCode.IndexOf(fragment, StringComparison.Ordinal) < 0)
+                    string newCode;
+                    if (String.IsNullOrEmpty(oldCode) || !TryRemoveAgentFragment(oldCode, fragment, out newCode))
                     {
                         skipped++;
                         continue;
                     }
 
-                    string newCode = oldCode.Replace(fragment, "");
                     if (String.IsNullOrEmpty(newCode))
                     {
                         emptyCode++;
@@ -1260,11 +1260,11 @@ namespace RecoNet
                     }
 
                     string newExpr;
-                    if (oldExpr.IndexOf(fragment, StringComparison.Ordinal) >= 0)
+                    if (TryRemoveAgentQuantityFragment(oldExpr, fragment, out newExpr))
                     {
-                        newExpr = RemoveAgentQuantityFragment(oldExpr, fragment);
                     }
-                    else if (IsAgentQuantityOperatorFragment(fragment) && TryUnwrapAgentQuantityExpression(oldExpr, out newExpr))
+                    else if (oldExpr.IndexOf(fragment, StringComparison.Ordinal) < 0 &&
+                        IsAgentQuantityOperatorFragment(fragment) && TryUnwrapAgentQuantityExpression(oldExpr, out newExpr))
                     {
                     }
                     else
@@ -1305,7 +1305,7 @@ namespace RecoNet
 
             if (skipped > 0)
             {
-                plan.Warnings.Add("有 " + skipped.ToString(CultureInfo.InvariantCulture) + " 行不含\"" + fragment + "\"或去掉后无法计算，已跳过。");
+                plan.Warnings.Add("有 " + skipped.ToString(CultureInfo.InvariantCulture) + " 行不含\"" + fragment + "\"（只出现在数字中间的不算，如 *0 之于 *0.05）或去掉后无法计算，已跳过。");
             }
         }
 
@@ -1403,11 +1403,185 @@ namespace RecoNet
             return ResolveAgentScopeRows(conn, selection, command, command.Items, command.IncludeChildren, command.QuotaFilter, unitIds);
         }
 
-        private static string RemoveAgentQuantityFragment(string oldExpr, string fragment)
+        // 删系数/去掉字段：只去掉最靠后、且不会截断数字的那一处片段，不做全文 Replace。
+        // 乘系数每次把 "*系数" 追加在末尾，删系数就按这个位置反着去掉一次；
+        // "*0" 不能命中 "*0.05" 里的 "*0"，"*1" 不能命中 "*10"，否则会算不出来（跳过）或悄悄写错数。
+        // 找不到安全位置就返回 false，由上层计入跳过并提示。
+        private static bool TryRemoveAgentFragment(string text, string fragment, out string result)
         {
-            string newExpr = oldExpr.Replace(fragment, "");
-            string unwrapped;
-            return TryUnwrapAgentQuantityExpression(newExpr, out unwrapped) ? unwrapped : newExpr;
+            result = text;
+            if (String.IsNullOrEmpty(text) || String.IsNullOrEmpty(fragment))
+            {
+                return false;
+            }
+
+            bool guardHead = IsAgentNumberChar(fragment[0]);
+            bool guardTail = IsAgentNumberChar(fragment[fragment.Length - 1]);
+            int searchEnd = text.Length - 1;
+            while (searchEnd >= 0)
+            {
+                int index = text.LastIndexOf(fragment, searchEnd, StringComparison.Ordinal);
+                if (index < 0)
+                {
+                    return false;
+                }
+
+                int after = index + fragment.Length;
+                bool headOk = !guardHead || index == 0 || !IsAgentNumberChar(text[index - 1]);
+                bool tailOk = !guardTail || after >= text.Length || !IsAgentNumberChar(text[after]);
+                if (headOk && tailOk)
+                {
+                    result = text.Substring(0, index) + text.Substring(after);
+                    return true;
+                }
+
+                searchEnd = index - 1;
+            }
+
+            return false;
+        }
+
+        private static bool IsAgentNumberChar(char c)
+        {
+            return Char.IsDigit(c) || c == '.';
+        }
+
+        // 工程数量输入的删系数：只认"乘系数产生的那一层"。乘系数每次写成 (原式)*系数，所以可删的片段只有两种位置：
+        //   1) 整串末尾 —— 最外层那一次乘系数（也覆盖 Ctrl+Q "删除数量 /100" 去掉手写在末尾的换算）；
+        //   2) 紧跟在 ")" 之后、且后面紧接着 ")" —— 被后来的乘系数又包了一层的中间层，如 ((x)*0)*2 里的 *0。
+        // 式子中间用户自己写的乘除，如 (5*6*8*2.5*1/10)*8 里的 *6，不是乘系数加的，一律不动。
+        // 去掉后把那一层的括号也撤掉：末尾层脱最外一对括号；中间层把 ((x))*2 合成 (x)*2。
+        private static bool TryRemoveAgentQuantityFragment(string oldExpr, string fragment, out string newExpr)
+        {
+            newExpr = oldExpr;
+            if (String.IsNullOrEmpty(oldExpr) || String.IsNullOrEmpty(fragment))
+            {
+                return false;
+            }
+
+            bool guardHead = IsAgentNumberChar(fragment[0]);
+            bool guardTail = IsAgentNumberChar(fragment[fragment.Length - 1]);
+            int searchEnd = oldExpr.Length - 1;
+            while (searchEnd >= 0)
+            {
+                int index = oldExpr.LastIndexOf(fragment, searchEnd, StringComparison.Ordinal);
+                if (index < 0)
+                {
+                    return false;
+                }
+
+                int after = index + fragment.Length;
+                bool headOk = !guardHead || index == 0 || !IsAgentNumberChar(oldExpr[index - 1]);
+                bool tailOk = !guardTail || after >= oldExpr.Length || !IsAgentNumberChar(oldExpr[after]);
+                bool outerLayer = after == oldExpr.Length;
+                bool innerLayer = index > 0 && oldExpr[index - 1] == ')' && after < oldExpr.Length && oldExpr[after] == ')';
+                if (headOk && tailOk && outerLayer)
+                {
+                    string removed = oldExpr.Substring(0, index);
+                    string unwrapped;
+                    newExpr = TryUnwrapAgentQuantityExpression(removed, out unwrapped) ? unwrapped : removed;
+                    return true;
+                }
+
+                if (headOk && tailOk && innerLayer)
+                {
+                    newExpr = CollapseAgentLayerParentheses(oldExpr.Substring(0, index) + oldExpr.Substring(after), index);
+                    return true;
+                }
+
+                searchEnd = index - 1;
+            }
+
+            return false;
+        }
+
+        // 去掉中间层片段后 closeIndex 处是连着的 "))"：若这两个 ")" 对应的 "(" 也紧挨着（即 ((x)) 这一层就是乘系数包的），
+        // 撤掉外面那一对；括号不配对或不是紧贴的双层就原样返回。
+        private static string CollapseAgentLayerParentheses(string text, int closeIndex)
+        {
+            if (closeIndex <= 0 || closeIndex >= text.Length || text[closeIndex] != ')' || text[closeIndex - 1] != ')')
+            {
+                return text;
+            }
+
+            int[] match = new int[text.Length];
+            Stack<int> open = new Stack<int>();
+            for (int i = 0; i < text.Length; i++)
+            {
+                match[i] = -1;
+                if (text[i] == '(')
+                {
+                    open.Push(i);
+                }
+                else if (text[i] == ')')
+                {
+                    if (open.Count == 0)
+                    {
+                        return text;
+                    }
+
+                    int start = open.Pop();
+                    match[start] = i;
+                    match[i] = start;
+                }
+            }
+
+            if (open.Count != 0)
+            {
+                return text;
+            }
+
+            int outerOpen = match[closeIndex];
+            int innerOpen = match[closeIndex - 1];
+            if (outerOpen < 0 || innerOpen != outerOpen + 1)
+            {
+                return text;
+            }
+
+            return text.Remove(closeIndex, 1).Remove(outerOpen, 1);
+        }
+
+        // 系数文本统一写法：去掉小数末尾多余的 0（1.0→1、0.50→0.5），右键和 Ctrl+Q 乘上去的后缀才能和删的时候输入的对上。
+        private static string NormalizeAgentFactorText(decimal factor)
+        {
+            string text = factor.ToString(CultureInfo.InvariantCulture);
+            if (text.IndexOf('.') >= 0)
+            {
+                text = text.TrimEnd('0').TrimEnd('.');
+            }
+
+            if (text.Length == 0 || text == "-0")
+            {
+                text = "0";
+            }
+
+            return text;
+        }
+
+        // 片段是 "*系数" / "/系数"（含 ×÷ 全角写法）时，规范成与乘系数一致的后缀；不是就原样返回（如定额调整的 /XG1）。
+        private static string NormalizeAgentOperatorFragment(string fragment)
+        {
+            string text = fragment == null ? "" : fragment.Trim();
+            if (text.Length < 2)
+            {
+                return text;
+            }
+
+            char first = text[0];
+            string op = (first == '*' || first == '×' || first == '＊') ? "*"
+                : ((first == '/' || first == '÷' || first == '／') ? "/" : null);
+            if (op == null)
+            {
+                return text;
+            }
+
+            decimal factor;
+            if (!Decimal.TryParse(text.Substring(1).Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out factor))
+            {
+                return text;
+            }
+
+            return op + NormalizeAgentFactorText(factor);
         }
 
         private static bool IsAgentQuantityOperatorFragment(string fragment)
