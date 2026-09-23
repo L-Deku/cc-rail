@@ -2219,18 +2219,27 @@ namespace RecoNet
             }
 
             private SmartSfBindingChoice PromptSmartSfBindingChoice(int existingCount, int selectedCount,
-                string replaceWarning, string appendWarning)
+                string replaceWarning, string appendWarning, string appendHint)
             {
                 using (Form dialog = new Form())
                 {
                     bool hasWarning = !String.IsNullOrWhiteSpace(replaceWarning) || !String.IsNullOrWhiteSpace(appendWarning);
+                    bool hasHint = !String.IsNullOrWhiteSpace(appendHint);
+                    int buttonsTop = 88;
+                    if (hasWarning || hasHint)
+                    {
+                        buttonsTop = 74;
+                        if (hasWarning) buttonsTop += 76;
+                        if (hasHint) buttonsTop += 44;
+                        buttonsTop += 6;
+                    }
                     dialog.Text = "SF 设备费绑定方式";
                     dialog.StartPosition = FormStartPosition.CenterParent;
                     dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
                     dialog.MinimizeBox = false;
                     dialog.MaximizeBox = false;
                     dialog.ShowInTaskbar = false;
-                    dialog.ClientSize = new Size(460, hasWarning ? 205 : 135);
+                    dialog.ClientSize = new Size(460, buttonsTop + 47);
 
                     Label message = new Label();
                     message.SetBounds(18, 14, 424, 58);
@@ -2240,7 +2249,7 @@ namespace RecoNet
                     message.TextAlign = ContentAlignment.MiddleLeft;
 
                     Label warning = new Label();
-                    warning.SetBounds(18, 74, 424, 68);
+                    warning.SetBounds(18, 74, 424, 72);
                     warning.ForeColor = Color.DarkRed;
                     warning.Text = String.Join("\n", new[]
                     {
@@ -2249,25 +2258,33 @@ namespace RecoNet
                     }.Where(text => text.Length > 0).ToArray());
                     warning.Visible = hasWarning;
 
+                    // 补充按参照条目预检通过时的写入指引：普通字号绿色，不算阻断。
+                    Label hint = new Label();
+                    hint.SetBounds(18, hasWarning ? 150 : 74, 424, 40);
+                    hint.ForeColor = Color.DarkGreen;
+                    hint.Text = appendHint ?? "";
+                    hint.Visible = hasHint;
+
                     Button replace = new Button();
                     replace.Text = "替换";
-                    replace.SetBounds(150, hasWarning ? 160 : 88, 90, 30);
+                    replace.SetBounds(150, buttonsTop, 90, 30);
                     replace.DialogResult = DialogResult.Yes;
                     replace.Enabled = String.IsNullOrWhiteSpace(replaceWarning);
 
                     Button append = new Button();
                     append.Text = "补充";
-                    append.SetBounds(250, hasWarning ? 160 : 88, 90, 30);
+                    append.SetBounds(250, buttonsTop, 90, 30);
                     append.DialogResult = DialogResult.No;
                     append.Enabled = String.IsNullOrWhiteSpace(appendWarning);
 
                     Button cancel = new Button();
                     cancel.Text = "取消";
-                    cancel.SetBounds(350, hasWarning ? 160 : 88, 90, 30);
+                    cancel.SetBounds(350, buttonsTop, 90, 30);
                     cancel.DialogResult = DialogResult.Cancel;
 
                     dialog.Controls.Add(message);
                     dialog.Controls.Add(warning);
+                    dialog.Controls.Add(hint);
                     dialog.Controls.Add(replace);
                     dialog.Controls.Add(append);
                     dialog.Controls.Add(cancel);
@@ -2413,12 +2430,15 @@ namespace RecoNet
                     }
                     if (replacements.Count == 0) return;
                     bool appendToExisting = false;
+                    string appendReferenceCode = "";
                     if (smartOnly && oldGroup.Any(target => target != null && !String.IsNullOrWhiteSpace(target.QuotaCode)) &&
                         replacements.Any(target => String.Equals((target.QuotaCode ?? "").Trim(), "SF", StringComparison.OrdinalIgnoreCase)))
                     {
                         List<FillPreviewItem> appendCandidates = MergePreviewTargetGroup(oldGroup, replacements);
                         string replaceWarning = "";
                         string appendWarning = "";
+                        string appendHint = "";
+                        string referenceCode = "";
                         if (currentEntryWritable && currentSmartEntry != null)
                         {
                             long sfSequence;
@@ -2432,15 +2452,28 @@ namespace RecoNet
                             if (!ValidateSmartSfEntryConstraint(conn, currentSmartEntry, appendCandidates,
                                 out sfSequence, out sfCode, out sfName, out appendWarning))
                             {
-                                Log("Smart fill sf append blocked: entry=" + (currentSmartEntry.EntryCode ?? "") + " " + appendWarning);
+                                // 站在设备购置费条目上补 SF 时，当前条目本就不接受普通定额，而 SF 行只在该条目的表格里选得到；
+                                // 因此改用旧组件普通定额自带的条目证据作参照条目预检，写入时用户须站回该条目，SF 再自动改道回来。
+                                if (TryPrecheckSmartSfAppendByReferenceEntry(conn, currentSmartEntry, oldGroup, replacements,
+                                    appendCandidates, out referenceCode, ref appendWarning))
+                                {
+                                    appendHint = "补充后请站在 " + referenceCode + " 条目写入，SF 将自动改道到当前设备购置费条目。";
+                                    Log("Smart fill sf append precheck: entry=" + (currentSmartEntry.EntryCode ?? "") +
+                                        " reference=" + referenceCode + " ok");
+                                }
+                                else
+                                {
+                                    Log("Smart fill sf append blocked: entry=" + (currentSmartEntry.EntryCode ?? "") + " " + appendWarning);
+                                }
                             }
                         }
                         SmartSfBindingChoice choice = PromptSmartSfBindingChoice(
                             oldGroup.Count(target => target != null && !String.IsNullOrWhiteSpace(target.QuotaCode)), replacements.Count,
-                            replaceWarning, appendWarning);
+                            replaceWarning, appendWarning, appendHint);
                         if (choice == SmartSfBindingChoice.Cancel) return;
                         appendToExisting = choice == SmartSfBindingChoice.Append;
                         if (appendToExisting) replacements = appendCandidates;
+                        if (appendToExisting && appendHint.Length > 0) appendReferenceCode = referenceCode;
                     }
                     if (smartOnly)
                     {
@@ -2468,7 +2501,8 @@ namespace RecoNet
                                 target.SqlFeedbackDurable = false;
                             }
                             replacements[0].AlignNote = "已补充 SF 设备费（组 " +
-                                replacements.Count.ToString(CultureInfo.InvariantCulture) + " 条）";
+                                replacements.Count.ToString(CultureInfo.InvariantCulture) + " 条）" +
+                                (appendReferenceCode.Length > 0 ? "，写入请站在 " + appendReferenceCode : "");
                         }
                         FeedbackNameMatches(groupLeader.TemplateName, replacements,
                             System.IO.Path.GetFileName(GetSelectedTargetWorkbookPath() ?? ""), cmbTargetSheet.Text.Trim(), conn, oldGroup);
@@ -2571,6 +2605,152 @@ namespace RecoNet
                     return false;
                 }
                 return true;
+            }
+
+            private static bool IsSmartSfCode(string quotaCode)
+            {
+                return String.Equals((quotaCode ?? "").Trim(), "SF", StringComparison.OrdinalIgnoreCase);
+            }
+
+            // 站在设备购置费条目上右键补 SF 时的参照条目：本次所选行必须全是 SF；旧组件必须含普通定额，
+            // 且这些普通定额自带的条目证据（右键绑定或写入时记下的 ChosenItemSeq/ChosenItemNo）唯一。
+            // 缺证据、证据不唯一或本次夹带普通定额时返回 false 并给出原因，界面维持禁用“补充”。
+            internal static bool TryResolveSmartSfAppendReferenceEntry(string currentEntryName,
+                IEnumerable<FillPreviewItem> existing, IEnumerable<FillPreviewItem> additions,
+                out long referenceSequence, out string referenceCode, out string error)
+            {
+                referenceSequence = 0;
+                referenceCode = "";
+                error = "";
+                if ((currentEntryName ?? "").IndexOf("设备购置费", StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    error = "当前条目不是设备购置费条目";
+                    return false;
+                }
+                List<FillPreviewItem> added = (additions ?? Enumerable.Empty<FillPreviewItem>())
+                    .Where(item => item != null && !String.IsNullOrWhiteSpace(item.QuotaCode)).ToList();
+                if (added.Count == 0 || added.Any(item => !IsSmartSfCode(item.QuotaCode)))
+                {
+                    error = "本次所选行不全是 SF，设备购置费条目只接受 SF";
+                    return false;
+                }
+                List<FillPreviewItem> ordinary = (existing ?? Enumerable.Empty<FillPreviewItem>())
+                    .Where(item => item != null && !String.IsNullOrWhiteSpace(item.QuotaCode) && !IsSmartSfCode(item.QuotaCode))
+                    .ToList();
+                if (ordinary.Count == 0)
+                {
+                    error = "当前组件没有普通定额可作参照条目";
+                    return false;
+                }
+                if (ordinary.Any(item => item.ChosenItemSeq <= 0 || String.IsNullOrWhiteSpace(item.ChosenItemNo)))
+                {
+                    error = "当前组件的普通定额缺少条目证据，请先站在安装条目右键绑定普通定额";
+                    return false;
+                }
+                int distinctReferences = ordinary
+                    .Select(item => item.ChosenItemSeq.ToString(CultureInfo.InvariantCulture) + "|" + item.ChosenItemNo.Trim().ToUpperInvariant())
+                    .Distinct(StringComparer.Ordinal)
+                    .Count();
+                if (distinctReferences != 1)
+                {
+                    error = "当前组件普通定额的条目证据不唯一";
+                    return false;
+                }
+                referenceSequence = ordinary[0].ChosenItemSeq;
+                referenceCode = ordinary[0].ChosenItemNo.Trim();
+                return true;
+            }
+
+            // 按条目序号从当前项目章节表回读参照条目，并核对编号与证据一致；连接、单元身份沿用当前条目。
+            private static bool TryLoadSmartEntryBySequence(SqlConnection conn, CurrentSmartEntry template, long sequence,
+                string expectedCode, out CurrentSmartEntry entry, out string error)
+            {
+                entry = null;
+                error = "";
+                string code = "";
+                string name = "";
+                using (SqlCommand cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "select top 1 条目编号,工程或费用项目名称 from 章节表 where 条目序号=@seq";
+                    cmd.Parameters.AddWithValue("@seq", sequence);
+                    using (SqlDataReader reader = cmd.ExecuteReader())
+                    {
+                        if (!reader.Read())
+                        {
+                            error = "未在当前项目章节表中找到";
+                            return false;
+                        }
+                        code = reader.IsDBNull(0) ? "" : Convert.ToString(reader.GetValue(0)).Trim();
+                        name = reader.IsDBNull(1) ? "" : Convert.ToString(reader.GetValue(1)).Trim();
+                    }
+                }
+                if (code.Length == 0 || !String.Equals(code, (expectedCode ?? "").Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    error = "条目证据与当前项目章节表不一致";
+                    return false;
+                }
+                entry = new CurrentSmartEntry
+                {
+                    ProjectConnection = template.ProjectConnection,
+                    ProjectConnectionIdentity = template.ProjectConnectionIdentity,
+                    UnitId = template.UnitId,
+                    UnitCode = template.UnitCode,
+                    EntrySequence = sequence,
+                    EntryCode = code,
+                    EntryName = name,
+                    Node = null
+                };
+                return true;
+            }
+
+            // 当前条目预检“补充结果”失败后的第二次预检：以旧组件普通定额的条目为参照，用同一个
+            // ValidateSmartSfEntryConstraint 判定合并结果，并要求 SF 改道结果正是当前设备购置费条目。
+            // 通过时清空 appendWarning；失败时把原因接在原阻断文案之后。
+            private static bool TryPrecheckSmartSfAppendByReferenceEntry(SqlConnection conn, CurrentSmartEntry current,
+                List<FillPreviewItem> existing, List<FillPreviewItem> additions, List<FillPreviewItem> appendCandidates,
+                out string referenceCode, ref string appendWarning)
+            {
+                referenceCode = "";
+                string baseWarning = appendWarning ?? "";
+                try
+                {
+                    long referenceSequence;
+                    string error;
+                    if (!TryResolveSmartSfAppendReferenceEntry(current.EntryName, existing, additions,
+                        out referenceSequence, out referenceCode, out error))
+                    {
+                        appendWarning = baseWarning + "；" + error;
+                        return false;
+                    }
+                    CurrentSmartEntry reference;
+                    if (!TryLoadSmartEntryBySequence(conn, current, referenceSequence, referenceCode, out reference, out error))
+                    {
+                        appendWarning = baseWarning + "；参照条目 " + referenceCode + " " + error;
+                        return false;
+                    }
+                    long sfSequence;
+                    string sfCode;
+                    string sfName;
+                    if (!ValidateSmartSfEntryConstraint(conn, reference, appendCandidates,
+                        out sfSequence, out sfCode, out sfName, out error))
+                    {
+                        appendWarning = baseWarning + "；参照条目 " + referenceCode + "：" + error;
+                        return false;
+                    }
+                    if (sfSequence != current.EntrySequence)
+                    {
+                        appendWarning = baseWarning + "；从参照条目 " + referenceCode + " 写入时 SF 会改道到 " + (sfCode ?? "") + "，不是当前条目";
+                        return false;
+                    }
+                    appendWarning = "";
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    Log("Smart fill sf append reference precheck failed: " + ex.Message);
+                    appendWarning = baseWarning + "；参照条目预检失败：" + ex.Message;
+                    return false;
+                }
             }
 
             private bool StampSelectedSmartEntries(List<FillPreviewItem> selectedItems, CurrentSmartEntry entry, out string error)

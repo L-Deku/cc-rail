@@ -18,16 +18,17 @@ namespace RecoSupplementBulkDelete
     //  1. 只用窗体自身的 m_cnn 连接、只删 m_sql 里 from 后面的那张表；
     //  2. 删前扫描同一个库里所有带“电算代号/定额编号”列的表，任何一张表引用了该代号就跳过；
     //  3. 表清单查一次系统视图后缓存，每张表每批只发一条查询，耗时写进日志。
+    // 窗口检测不用定时器：2026-09-23 用户反馈装插件后打开料费方案变卡，500ms 定时器是本插件唯一的
+    // 常驻动作（每次唤醒消息循环都会连带触发进程里所有 Idle 处理器），改为挂 Application.Idle，
+    // 只按索引遍历 Application.OpenForms（不分配、不扫控件树），程序真正空闲时零唤醒。
     public static class SupplementBulkDeletePlugin
     {
-        private const int WatchIntervalMs = 500;
         private const int ReferenceChunkSize = 200;
         private const long MaxLogBytes = 5L * 1024L * 1024L;
         private const string ButtonName = "RecoSupplementBulkDelete";
         private const string ButtonText = "批量删除";
         private static readonly object LogLock = new object();
         private static bool idleHooked;
-        private static Timer watchTimer;
         private static readonly HashSet<Form> InstalledForms = new HashSet<Form>();
         private static readonly Dictionary<string, List<ReferenceColumn>> ReferenceColumnCache =
             new Dictionary<string, List<ReferenceColumn>>(StringComparer.OrdinalIgnoreCase);
@@ -85,7 +86,8 @@ namespace RecoSupplementBulkDelete
             public string NameColumn;
         }
 
-        // 由 RecoPluginLoader 在 AppDomain 初始化时调用；此时还没有消息循环，等第一次 Idle 再建定时器。
+        // 由 RecoPluginLoader 在 AppDomain 初始化时调用（主线程、消息循环尚未启动）；
+        // 与 RecoExpandPanel 一样直接挂 Application.Idle，不建任何定时器。
         public static void InstallOnIdle()
         {
             if (idleHooked)
@@ -94,56 +96,41 @@ namespace RecoSupplementBulkDelete
             }
 
             idleHooked = true;
-            Application.Idle += FirstIdle;
-            Log("InstallOnIdle registered.");
+            Application.Idle += OnIdle;
+            Log("InstallOnIdle registered (Application.Idle, no timer).");
         }
 
-        private static void FirstIdle(object sender, EventArgs e)
-        {
-            Application.Idle -= FirstIdle;
-            try
-            {
-                if (watchTimer != null)
-                {
-                    return;
-                }
-
-                watchTimer = new Timer();
-                watchTimer.Interval = WatchIntervalMs;
-                watchTimer.Tick += delegate { ScanOpenForms(); };
-                watchTimer.Start();
-                Log("Watcher started. interval=" + WatchIntervalMs.ToString(CultureInfo.InvariantCulture) + "ms");
-            }
-            catch (Exception ex)
-            {
-                Log("Watcher start failed: " + ex);
-            }
-        }
-
-        // 只枚举 Application.OpenForms（通常不到 10 个窗体），不扫描控件树。
-        private static void ScanOpenForms()
+        // 每次消息循环空闲时跑一遍：按索引读 Application.OpenForms（通常不到 10 个窗体），
+        // 不分配数组、不枚举控件树；只有遇到目标窗体第一次出现时才做安装。
+        private static void OnIdle(object sender, EventArgs e)
         {
             try
             {
-                Form[] forms = new Form[Application.OpenForms.Count];
-                ((System.Collections.ICollection)Application.OpenForms).CopyTo(forms, 0);
-                foreach (Form form in forms)
-                {
-                    if (form == null || form.IsDisposed || InstalledForms.Contains(form))
-                    {
-                        continue;
-                    }
-
-                    FormTarget target = FindTarget(form.GetType().FullName);
-                    if (target != null)
-                    {
-                        Install(form, target);
-                    }
-                }
+                ScanOpenForms();
             }
             catch (Exception ex)
             {
                 Log("Scan failed: " + ex.Message);
+            }
+        }
+
+        private static void ScanOpenForms()
+        {
+            FormCollection openForms = Application.OpenForms;
+            int count = openForms.Count;
+            for (int i = 0; i < count && i < openForms.Count; i++)
+            {
+                Form form = openForms[i];
+                if (form == null || form.IsDisposed || InstalledForms.Contains(form))
+                {
+                    continue;
+                }
+
+                FormTarget target = FindTarget(form.GetType().FullName);
+                if (target != null)
+                {
+                    Install(form, target);
+                }
             }
         }
 
@@ -259,6 +246,7 @@ namespace RecoSupplementBulkDelete
                 DataGridView grid = context.Grid;
                 StringBuilder sb = new StringBuilder();
                 sb.Append(context.Target.Label).Append(" form: text=").Append(form.Text);
+                sb.Append(" modal=").Append(form.Modal);
                 sb.Append(" read=").Append(Convert.ToString(GetFieldObject(form, "m_bRead"), CultureInfo.InvariantCulture));
                 sb.Append(" isXm=").Append(Convert.ToString(GetFieldObject(form, "m_bIsXm"), CultureInfo.InvariantCulture));
                 sb.Append(" single=").Append(Convert.ToString(GetFieldObject(form, "m_IsSingle"), CultureInfo.InvariantCulture));

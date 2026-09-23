@@ -172,6 +172,9 @@ foreach ($sfBindingMarker in @('PromptSmartSfBindingChoice', 'SmartSfBindingChoi
     'append.Enabled = String.IsNullOrWhiteSpace(appendWarning)',
     'ValidateSmartSfEntryConstraint(conn, currentSmartEntry, replacements',
     'ValidateSmartSfEntryConstraint(conn, currentSmartEntry, appendCandidates',
+    'TryPrecheckSmartSfAppendByReferenceEntry(conn, currentSmartEntry, oldGroup, replacements',
+    'TryResolveSmartSfAppendReferenceEntry', 'TryLoadSmartEntryBySequence',
+    'Smart fill sf append precheck', 'appendHint', 'sfSequence != current.EntrySequence',
     'RefreshSmartSfEntryState();', 'target.LearningFeedbackAttempted = false')) {
     if (-not $panel.Contains($sfBindingMarker)) {
         throw "SF 右键绑定缺少替换/补充行为：$sfBindingMarker"
@@ -500,5 +503,49 @@ if ($equipmentConflict -ne '设备购置费条目只接受 SF，所选组件整�
     throw 'SF 双向约束纯判定与既有阻断文案不一致'
 }
 Write-Host 'PASS SF 替换与补充候选可共用双向约束纯判定'
+
+# 站在设备购置费条目上补 SF：参照条目取旧组件普通定额自带的唯一条目证据。
+$resolveAppendReference = $panelType.GetMethod('TryResolveSmartSfAppendReferenceEntry', $flags)
+if ($null -eq $resolveAppendReference) { throw '缺少 SF 补充参照条目的可测试入口' }
+function Invoke-AppendReference([string]$EntryName, [object[]]$Existing, [object[]]$Additions) {
+    $existingList = [Activator]::CreateInstance($existingType).PSObject.BaseObject
+    $additionList = [Activator]::CreateInstance($additionType).PSObject.BaseObject
+    foreach ($item in $Existing) { [void]$existingList.Add($item) }
+    foreach ($item in $Additions) { [void]$additionList.Add($item) }
+    $callArgs = New-Object 'object[]' 6
+    $callArgs[0] = $EntryName
+    $callArgs[1] = $existingList
+    $callArgs[2] = $additionList
+    $callArgs[3] = [long]0
+    $callArgs[4] = ''
+    $callArgs[5] = ''
+    $ok = [bool]$resolveAppendReference.Invoke($null, $callArgs)
+    return @{ Ok = $ok; Seq = [long]$callArgs[3]; Code = [string]$callArgs[4]; Error = [string]$callArgs[5] }
+}
+$installQuota = New-Item 'TY-646' '安装监视器 壁装' '套' '4'
+$itemType.GetField('ChosenItemSeq', $flags).SetValue($installQuota, [long]2102)
+$itemType.GetField('ChosenItemNo', $flags).SetValue($installQuota, '0821-01-04-05-02')
+$equipmentSf = New-Item 'SF' '监视器' '套' '4'
+$itemType.GetField('ChosenItemSeq', $flags).SetValue($equipmentSf, [long]2103)
+$itemType.GetField('ChosenItemNo', $flags).SetValue($equipmentSf, '0821-01-04-05-03')
+$ok = Invoke-AppendReference 'Ⅲ.设备购置费' @($installQuota) @($equipmentSf)
+if (-not $ok.Ok -or $ok.Seq -ne 2102 -or $ok.Code -ne '0821-01-04-05-02' -or $ok.Error -ne '') {
+    throw "设备购置费条目上补 SF 未取旧组件普通定额的条目作参照：$($ok.Error)"
+}
+$notEquipment = Invoke-AppendReference 'Ⅱ.安装工程' @($installQuota) @($equipmentSf)
+if ($notEquipment.Ok) { throw '非设备购置费条目不应走参照条目预检' }
+$mixedAdditions = Invoke-AppendReference 'Ⅲ.设备购置费' @($installQuota) @($equipmentSf, $installQuota)
+if ($mixedAdditions.Ok -or -not $mixedAdditions.Error.Contains('不全是 SF')) { throw '本次夹带普通定额时仍走了参照条目预检' }
+$noEvidence = New-Item 'TY-636' '安装光交换机' '套' '1'
+$missingEvidence = Invoke-AppendReference 'Ⅲ.设备购置费' @($noEvidence) @($equipmentSf)
+if ($missingEvidence.Ok -or -not $missingEvidence.Error.Contains('缺少条目证据')) { throw '旧组件缺条目证据时未维持禁用' }
+$otherInstall = New-Item 'TY-640' '安装数字硬盘录像机' '台' '1'
+$itemType.GetField('ChosenItemSeq', $flags).SetValue($otherInstall, [long]2101)
+$itemType.GetField('ChosenItemNo', $flags).SetValue($otherInstall, '0821-01-04-05-01')
+$ambiguous = Invoke-AppendReference 'Ⅲ.设备购置费' @($installQuota, $otherInstall) @($equipmentSf)
+if ($ambiguous.Ok -or -not $ambiguous.Error.Contains('不唯一')) { throw '旧组件条目证据不唯一时未维持禁用' }
+$sfOnlyExisting = Invoke-AppendReference 'Ⅲ.设备购置费' @($equipmentSf) @($equipmentSf)
+if ($sfOnlyExisting.Ok -or -not $sfOnlyExisting.Error.Contains('没有普通定额')) { throw '旧组件只有 SF 时不应有参照条目' }
+Write-Host 'PASS 设备购置费条目上补 SF 以旧组件普通定额条目作参照，缺证据/不唯一/夹带普通定额维持禁用'
 
 Write-Host 'PASS SmartFill constructed-row write safety contract'
